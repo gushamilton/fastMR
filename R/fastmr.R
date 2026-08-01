@@ -40,10 +40,17 @@ fast_mr <- function(data,
   for (i in seq_along(groups)) {
     index <- which(keys == groups[[i]] & keep)
     representative <- which(keys == groups[[i]])[[1L]]
-    native <- fastmr_run_native(
-      prepared$beta.exposure[index], prepared$beta.outcome[index],
-      prepared$se.exposure[index], prepared$se.outcome[index],
-      methods, controls$nboot, controls$seed, controls$threads, phi
+    native <- fastmr_native_call(
+      fastmr_run_native,
+      list(
+        exposure_beta = prepared[["beta.exposure"]][index],
+        outcome_beta = prepared[["beta.outcome"]][index],
+        exposure_se = prepared[["se.exposure"]][index],
+        outcome_se = prepared[["se.outcome"]][index],
+        methods = methods, nboot = controls[["nboot"]], seed = NULL,
+        threads = controls[["threads"]], phi = phi
+      ),
+      controls[["seed"]]
     )
     label.exp <- if ("exposure" %in% names(data)) as.character(data$exposure[representative]) else id.exp[representative]
     label.out <- if ("outcome" %in% names(data)) as.character(data$outcome[representative]) else id.out[representative]
@@ -91,9 +98,17 @@ fast_mr_grid <- function(exposure_beta, outcome_beta, exposure_se, outcome_se,
       any(arrays$exposure_se <= 0) || any(arrays$outcome_se <= 0)) {
     stop("grid inputs must be non-empty with finite beta values and positive standard errors", call. = FALSE)
   }
-  native <- fastmr_grid_native(
-    arrays$exposure_beta, arrays$outcome_beta, arrays$exposure_se, arrays$outcome_se,
-    methods, controls$nboot, controls$seed, controls$threads, phi
+  native <- fastmr_native_call(
+    fastmr_grid_native,
+    list(
+      exposure_beta = arrays[["exposure_beta"]],
+      outcome_beta = arrays[["outcome_beta"]],
+      exposure_se = arrays[["exposure_se"]],
+      outcome_se = arrays[["outcome_se"]],
+      methods = methods, nboot = controls[["nboot"]], seed = NULL,
+      threads = controls[["threads"]], phi = phi
+    ),
+    controls[["seed"]]
   )
   exp.labels <- rownames(arrays$exposure_beta)
   out.labels <- rownames(arrays$outcome_beta)

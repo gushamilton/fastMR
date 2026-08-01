@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <atomic>
 #include <cmath>
+#include <complex>
 #include <cstdint>
 #include <limits>
 #include <numeric>
@@ -116,92 +117,6 @@ double weighted_median_point(const std::vector<double>& values,
          (0.5 - left) / gap;
 }
 
-double mode_point(const std::vector<double>& values,
-                  const std::vector<double>& weights,
-                  double phi = 1.0) {
-  if (values.empty() || values.size() != weights.size()) return NA_VALUE;
-  for (double value : values) if (!std::isfinite(value)) return NA_VALUE;
-  const double raw_bandwidth = 0.9 * std::min(sample_std(values), mad(values)) /
-                               std::pow(static_cast<double>(values.size()), 0.2);
-  double bandwidth = std::isfinite(raw_bandwidth) ? std::max(1e-8, raw_bandwidth) : 1e-8;
-  bandwidth *= phi;
-  auto limits = std::minmax_element(values.begin(), values.end());
-  const double lo = *limits.first - 3.0 * bandwidth;
-  const double hi = *limits.second + 3.0 * bandwidth;
-  if (!(hi > lo)) return values.front();
-
-  int best_index = 0;
-  double best_density = -std::numeric_limits<double>::infinity();
-  for (int grid_index = 0; grid_index < MODE_GRID_SIZE; ++grid_index) {
-    const double grid = grid_index == MODE_GRID_SIZE - 1
-      ? hi
-      : lo + (hi - lo) * static_cast<double>(grid_index) /
-        static_cast<double>(MODE_GRID_SIZE - 1);
-    double density = 0.0;
-    for (std::size_t j = 0; j < values.size(); ++j) {
-      const double scaled = (grid - values[j]) / bandwidth;
-      density += std::exp(-0.5 * scaled * scaled) * weights[j];
-    }
-    if (density > best_density) {
-      best_density = density;
-      best_index = grid_index;
-    }
-  }
-  return best_index == MODE_GRID_SIZE - 1
-    ? hi
-    : lo + (hi - lo) * static_cast<double>(best_index) /
-      static_cast<double>(MODE_GRID_SIZE - 1);
-}
-
-// The prototype's validated exact path searches a sparse set of the same
-// 512 baseline grid coordinates, probes every data-centred coordinate, and
-// then scans the winning local neighbourhood. It returns a baseline grid
-// coordinate (not a continuous approximation), while removing most repeated
-// Gaussian-kernel evaluations from bootstrap mode work.
-double mode_point_fast(const std::vector<double>& values,
-                       const std::vector<double>& weights,
-                       double phi = 1.0) {
-  if (values.empty() || values.size() != weights.size()) return NA_VALUE;
-  for (double value : values) if (!std::isfinite(value)) return NA_VALUE;
-  const double raw_bandwidth = 0.9 * std::min(sample_std(values), mad(values)) /
-                               std::pow(static_cast<double>(values.size()), 0.2);
-  double bandwidth = std::isfinite(raw_bandwidth) ? std::max(1e-8, raw_bandwidth) : 1e-8;
-  bandwidth *= phi;
-  auto limits = std::minmax_element(values.begin(), values.end());
-  const double lo = *limits.first - 3.0 * bandwidth;
-  const double hi = *limits.second + 3.0 * bandwidth;
-  if (!(hi > lo)) return values.front();
-  const double span = hi - lo;
-  int best = 0;
-  double best_density = -std::numeric_limits<double>::infinity();
-  auto scan = [&](int first, int last, int step) {
-    for (int index = first; index <= last; index += step) {
-      const double grid = index == MODE_GRID_SIZE - 1
-        ? hi
-        : lo + span * static_cast<double>(index) / static_cast<double>(MODE_GRID_SIZE - 1);
-      double density = 0.0;
-      for (std::size_t j = 0; j < values.size(); ++j) {
-        const double scaled = (grid - values[j]) / bandwidth;
-        density += std::exp(-0.5 * scaled * scaled) * weights[j];
-      }
-      if (density > best_density) {
-        best_density = density;
-        best = index;
-      }
-    }
-  };
-  scan(0, MODE_GRID_SIZE - 1, 8);
-  for (double value : values) {
-    int index = static_cast<int>(std::floor((value - lo) / span * (MODE_GRID_SIZE - 1) + 0.5));
-    index = std::max(0, std::min(MODE_GRID_SIZE - 1, index));
-    scan(index, index, 1);
-  }
-  scan(std::max(0, best - 8), std::min(MODE_GRID_SIZE - 1, best + 8), 1);
-  return best == MODE_GRID_SIZE - 1
-    ? hi
-    : lo + span * static_cast<double>(best) / static_cast<double>(MODE_GRID_SIZE - 1);
-}
-
 double sample_std_ptr(const double* values, std::size_t count) {
   if (count < 2) return NA_VALUE;
   double mean = 0.0;
@@ -231,47 +146,202 @@ double mad_ptr(const double* values, std::size_t count, std::vector<double>& scr
     : scratch[dmiddle]);
 }
 
-double mode_point_fast_ptr(const double* values, const double* weights,
-                           std::size_t count, double phi,
-                           std::vector<double>& scratch) {
+void fft_inplace(std::vector<std::complex<double>>& values, bool inverse) {
+  const std::size_t n = values.size();
+  for (std::size_t i = 1, j = 0; i < n; ++i) {
+    std::size_t bit = n >> 1;
+    for (; j & bit; bit >>= 1) j ^= bit;
+    j ^= bit;
+    if (i < j) std::swap(values[i], values[j]);
+  }
+  for (std::size_t length = 2; length <= n; length <<= 1) {
+    const double sign = inverse ? 1.0 : -1.0;
+    const double angle = sign * 2.0 * 3.14159265358979323846 / static_cast<double>(length);
+    const std::complex<double> step(std::cos(angle), std::sin(angle));
+    for (std::size_t start = 0; start < n; start += length) {
+      std::complex<double> factor(1.0, 0.0);
+      const std::size_t half = length >> 1;
+      for (std::size_t i = 0; i < half; ++i) {
+        const std::complex<double> even = values[start + i];
+        const std::complex<double> odd = factor * values[start + i + half];
+        values[start + i] = even + odd;
+        values[start + i + half] = even - odd;
+        factor *= step;
+      }
+    }
+  }
+  if (inverse) {
+    const double scale = 1.0 / static_cast<double>(n);
+    for (std::complex<double>& value : values) value *= scale;
+  }
+}
+
+double mode_point_r_density(const double* values, const double* weights,
+                            std::size_t count, double phi) {
   if (count == 0) return NA_VALUE;
-  for (std::size_t i = 0; i < count; ++i) if (!std::isfinite(values[i])) return NA_VALUE;
-  const double raw_bandwidth = 0.9 * std::min(sample_std_ptr(values, count), mad_ptr(values, count, scratch)) /
+  for (std::size_t i = 0; i < count; ++i) {
+    if (!std::isfinite(values[i]) || !std::isfinite(weights[i]) || weights[i] < 0.0) return NA_VALUE;
+  }
+  std::vector<double> scratch;
+  scratch.reserve(count);
+  const double raw_bandwidth = 0.9 * std::min(sample_std_ptr(values, count),
+                                                mad_ptr(values, count, scratch)) /
                                std::pow(static_cast<double>(count), 0.2);
   double bandwidth = std::isfinite(raw_bandwidth) ? std::max(1e-8, raw_bandwidth) : 1e-8;
   bandwidth *= phi;
-  double lo_value = values[0], hi_value = values[0];
+  double minimum = values[0], maximum = values[0];
   for (std::size_t i = 1; i < count; ++i) {
-    lo_value = std::min(lo_value, values[i]);
-    hi_value = std::max(hi_value, values[i]);
+    minimum = std::min(minimum, values[i]);
+    maximum = std::max(maximum, values[i]);
   }
-  const double lo = lo_value - 3.0 * bandwidth;
-  const double hi = hi_value + 3.0 * bandwidth;
-  if (!(hi > lo)) return values[0];
-  const double span = hi - lo;
-  int best = 0;
+  const double from = minimum - 3.0 * bandwidth;
+  const double to = maximum + 3.0 * bandwidth;
+  const int n = MODE_GRID_SIZE;
+  const int length = 2 * n;
+  const double lo = from - 4.0 * bandwidth;
+  const double up = to + 4.0 * bandwidth;
+  const double delta = (up - lo) / static_cast<double>(n - 1);
+  std::vector<std::complex<double>> binned(length, std::complex<double>(0.0, 0.0));
+  for (std::size_t i = 0; i < count; ++i) {
+    const double xpos = (values[i] - lo) / delta;
+    if (!std::isfinite(xpos) || xpos > static_cast<double>(std::numeric_limits<int>::max()) ||
+        xpos < static_cast<double>(std::numeric_limits<int>::min())) continue;
+    const int index = static_cast<int>(std::floor(xpos));
+    const double fraction = xpos - static_cast<double>(index);
+    if (0 <= index && index <= n - 2) {
+      binned[index] += (1.0 - fraction) * weights[i];
+      binned[index + 1] += fraction * weights[i];
+    } else if (index == -1) {
+      binned[0] += fraction * weights[i];
+    } else if (index == n - 1) {
+      binned[index] += (1.0 - fraction) * weights[i];
+    }
+  }
+  std::vector<std::complex<double>> kernel(length);
+  for (int i = 0; i < length; ++i) {
+    const double distance = (i <= n) ? static_cast<double>(i) * delta
+                                     : -static_cast<double>(length - i) * delta;
+    const double z = distance / bandwidth;
+    kernel[i] = std::exp(-0.5 * z * z) / (bandwidth * std::sqrt(2.0 * 3.14159265358979323846));
+  }
+  fft_inplace(binned, false);
+  fft_inplace(kernel, false);
+  for (int i = 0; i < length; ++i) binned[i] *= std::conj(kernel[i]);
+  fft_inplace(binned, true);
+  int best_index = 0;
   double best_density = -std::numeric_limits<double>::infinity();
-  auto scan = [&](int first, int last, int step) {
-    for (int index = first; index <= last; index += step) {
-      const double grid = index == MODE_GRID_SIZE - 1
-        ? hi : lo + span * static_cast<double>(index) / static_cast<double>(MODE_GRID_SIZE - 1);
-      double density = 0.0;
-      for (std::size_t j = 0; j < count; ++j) {
-        const double scaled = (grid - values[j]) / bandwidth;
-        density += std::exp(-0.5 * scaled * scaled) * weights[j];
+  for (int i = 0; i < n; ++i) {
+    const double x = from + (to - from) * static_cast<double>(i) / static_cast<double>(n - 1);
+    const double position = (x - lo) / delta;
+    int left = static_cast<int>(std::floor(position));
+    double density = 0.0;
+    if (left < 0) density = std::max(0.0, binned[0].real());
+    else if (left >= n - 1) density = std::max(0.0, binned[n - 1].real());
+    else {
+      const double fraction = position - static_cast<double>(left);
+      density = (1.0 - fraction) * binned[left].real() + fraction * binned[left + 1].real();
+      density = std::max(0.0, density);
+    }
+    if (density > best_density) {
+      best_density = density;
+      best_index = i;
+    }
+  }
+  return from + (to - from) * static_cast<double>(best_index) / static_cast<double>(n - 1);
+}
+
+
+std::pair<double, double> mode_point_r_density_pair(const double* values,
+                                                      const double* simple_weights,
+                                                      const double* weighted_weights,
+                                                      std::size_t count,
+                                                      double phi) {
+  if (count == 0) return std::make_pair(NA_VALUE, NA_VALUE);
+  for (std::size_t i = 0; i < count; ++i) {
+    if (!std::isfinite(values[i]) || !std::isfinite(simple_weights[i]) ||
+        !std::isfinite(weighted_weights[i]) || simple_weights[i] < 0.0 ||
+        weighted_weights[i] < 0.0) return std::make_pair(NA_VALUE, NA_VALUE);
+  }
+  std::vector<double> scratch;
+  scratch.reserve(count);
+  const double raw_bandwidth = 0.9 * std::min(sample_std_ptr(values, count),
+                                                mad_ptr(values, count, scratch)) /
+                               std::pow(static_cast<double>(count), 0.2);
+  double bandwidth = std::isfinite(raw_bandwidth) ? std::max(1e-8, raw_bandwidth) : 1e-8;
+  bandwidth *= phi;
+  double minimum = values[0], maximum = values[0];
+  for (std::size_t i = 1; i < count; ++i) {
+    minimum = std::min(minimum, values[i]);
+    maximum = std::max(maximum, values[i]);
+  }
+  const double from = minimum - 3.0 * bandwidth;
+  const double to = maximum + 3.0 * bandwidth;
+  const int n = MODE_GRID_SIZE;
+  const int length = 2 * n;
+  const double lo = from - 4.0 * bandwidth;
+  const double up = to + 4.0 * bandwidth;
+  const double delta = (up - lo) / static_cast<double>(n - 1);
+  std::vector<std::complex<double>> simple(length, std::complex<double>(0.0, 0.0));
+  std::vector<std::complex<double>> weighted(length, std::complex<double>(0.0, 0.0));
+  auto bin = [&](std::vector<std::complex<double>>& target, const double* source) {
+    for (std::size_t i = 0; i < count; ++i) {
+      const double xpos = (values[i] - lo) / delta;
+      if (!std::isfinite(xpos) || xpos > static_cast<double>(std::numeric_limits<int>::max()) ||
+          xpos < static_cast<double>(std::numeric_limits<int>::min())) continue;
+      const int index = static_cast<int>(std::floor(xpos));
+      const double fraction = xpos - static_cast<double>(index);
+      if (0 <= index && index <= n - 2) {
+        target[index] += (1.0 - fraction) * source[i];
+        target[index + 1] += fraction * source[i];
+      } else if (index == -1) {
+        target[0] += fraction * source[i];
+      } else if (index == n - 1) {
+        target[index] += (1.0 - fraction) * source[i];
       }
-      if (density > best_density) { best_density = density; best = index; }
     }
   };
-  scan(0, MODE_GRID_SIZE - 1, 8);
-  for (std::size_t j = 0; j < count; ++j) {
-    int index = static_cast<int>(std::floor((values[j] - lo) / span * (MODE_GRID_SIZE - 1) + 0.5));
-    index = std::max(0, std::min(MODE_GRID_SIZE - 1, index));
-    scan(index, index, 1);
+  bin(simple, simple_weights);
+  bin(weighted, weighted_weights);
+  std::vector<std::complex<double>> kernel(length);
+  for (int i = 0; i < length; ++i) {
+    const double distance = (i <= n) ? static_cast<double>(i) * delta
+                                     : -static_cast<double>(length - i) * delta;
+    const double z = distance / bandwidth;
+    kernel[i] = std::exp(-0.5 * z * z) / (bandwidth * std::sqrt(2.0 * 3.14159265358979323846));
   }
-  scan(std::max(0, best - 8), std::min(MODE_GRID_SIZE - 1, best + 8), 1);
-  return best == MODE_GRID_SIZE - 1
-    ? hi : lo + span * static_cast<double>(best) / static_cast<double>(MODE_GRID_SIZE - 1);
+  fft_inplace(simple, false);
+  fft_inplace(weighted, false);
+  fft_inplace(kernel, false);
+  for (int i = 0; i < length; ++i) {
+    simple[i] *= std::conj(kernel[i]);
+    weighted[i] *= std::conj(kernel[i]);
+  }
+  fft_inplace(simple, true);
+  fft_inplace(weighted, true);
+  auto find_max = [&](const std::vector<std::complex<double>>& density_values) {
+    int best_index = 0;
+    double best_density = -std::numeric_limits<double>::infinity();
+    for (int i = 0; i < n; ++i) {
+      const double x = from + (to - from) * static_cast<double>(i) / static_cast<double>(n - 1);
+      const double position = (x - lo) / delta;
+      const int left = static_cast<int>(std::floor(position));
+      double density = 0.0;
+      if (left < 0) density = std::max(0.0, density_values[0].real());
+      else if (left >= n - 1) density = std::max(0.0, density_values[n - 1].real());
+      else {
+        const double fraction = position - static_cast<double>(left);
+        density = (1.0 - fraction) * density_values[left].real() +
+                  fraction * density_values[left + 1].real();
+        density = std::max(0.0, density);
+      }
+      if (density > best_density) {
+        best_density = density;
+        best_index = i;
+      }
+    }
+    return from + (to - from) * static_cast<double>(best_index) / static_cast<double>(n - 1);
+  };
+  return std::make_pair(find_max(simple), find_max(weighted));
 }
 
 struct Result {
@@ -315,6 +385,7 @@ struct Prepared {
   std::vector<double> ratio;
   std::vector<double> ratio_se;
   std::vector<double> bootstrap;
+  std::vector<double> mode_bootstrap;
 };
 
 void prepare_ratios(Prepared& p) {
@@ -473,15 +544,12 @@ Result compute_mode(const Prepared& p, const std::string& method, int nboot, dou
     point_se = p.ratio_se;
     for (int i = 0; i < n; ++i) weights[i] = 1.0 / (p.ratio_se[i] * p.ratio_se[i]);
   }
-  std::vector<double> scratch;
-  scratch.reserve(p.ratio.size());
-  const double beta = mode_point_fast_ptr(p.ratio.data(), weights.data(), p.ratio.size(), phi, scratch);
+  const double beta = mode_point_r_density(p.ratio.data(), weights.data(), p.ratio.size(), phi);
   double se = NA_VALUE;
-  if (nboot > 0 && !p.bootstrap.empty()) {
+  if (nboot > 0 && !p.mode_bootstrap.empty()) {
     std::vector<double> estimates(nboot);
     for (int draw = 0; draw < nboot; ++draw) {
-      estimates[draw] = mode_point_fast_ptr(p.bootstrap.data() + static_cast<std::size_t>(draw) * n,
-                                            weights.data(), p.ratio.size(), phi, scratch);
+      estimates[draw] = mode_point_r_density(p.mode_bootstrap.data() + static_cast<std::size_t>(draw) * n, weights.data(), p.ratio.size(), phi);
     }
     se = mad(estimates);
   }
@@ -507,18 +575,20 @@ void compute_both_modes(const Prepared& p, int nboot, double phi,
   std::vector<double> simple_weights(n, 1.0);
   std::vector<double> weighted_weights(n);
   for (int i = 0; i < n; ++i) weighted_weights[i] = 1.0 / (p.ratio_se[i] * p.ratio_se[i]);
-  const double simple_beta = mode_point_fast(p.ratio, simple_weights, phi);
-  const double weighted_beta = mode_point_fast(p.ratio, weighted_weights, phi);
+  const std::pair<double, double> point_modes = mode_point_r_density_pair(
+    p.ratio.data(), simple_weights.data(), weighted_weights.data(), p.ratio.size(), phi);
+  const double simple_beta = point_modes.first;
+  const double weighted_beta = point_modes.second;
   double simple_se = NA_VALUE;
   double weighted_se = NA_VALUE;
-  if (nboot > 0 && !p.bootstrap.empty()) {
+  if (nboot > 0 && !p.mode_bootstrap.empty()) {
     std::vector<double> simple_estimates(nboot), weighted_estimates(nboot);
-    std::vector<double> scratch;
-    scratch.reserve(p.ratio.size());
     for (int draw = 0; draw < nboot; ++draw) {
-      const double* row = p.bootstrap.data() + static_cast<std::size_t>(draw) * n;
-      simple_estimates[draw] = mode_point_fast_ptr(row, simple_weights.data(), p.ratio.size(), phi, scratch);
-      weighted_estimates[draw] = mode_point_fast_ptr(row, weighted_weights.data(), p.ratio.size(), phi, scratch);
+      const double* row = p.mode_bootstrap.data() + static_cast<std::size_t>(draw) * n;
+      const std::pair<double, double> modes = mode_point_r_density_pair(
+        row, simple_weights.data(), weighted_weights.data(), p.ratio.size(), phi);
+      simple_estimates[draw] = modes.first;
+      weighted_estimates[draw] = modes.second;
     }
     simple_se = mad(simple_estimates);
     weighted_se = mad(weighted_estimates);
@@ -555,24 +625,21 @@ Result compute_wald(const Prepared& p) {
 
 void make_bootstrap(Prepared& p, int nboot, SEXP seed) {
   if (nboot <= 0 || p.ratio.size() < 3) return;
-  const bool seeded = seed != R_NilValue && Rf_length(seed) > 0;
-  std::mt19937_64 generator;
-  std::normal_distribution<double> normal(0.0, 1.0);
-  if (seeded) generator.seed(static_cast<std::uint64_t>(Rcpp::as<double>(seed)));
+  (void) seed;
   const std::size_t n = p.ratio.size();
   p.bootstrap.resize(static_cast<std::size_t>(nboot) * n);
   std::vector<double> exp_z(static_cast<std::size_t>(nboot) * p.x.size());
   std::vector<double> out_z(static_cast<std::size_t>(nboot) * p.x.size());
-  for (int draw = 0; draw < nboot; ++draw) {
-    for (std::size_t snp = 0; snp < p.x.size(); ++snp) {
-      exp_z[static_cast<std::size_t>(draw) * p.x.size() + snp] =
-        seeded ? normal(generator) : R::rnorm(0.0, 1.0);
+  // R fills matrix(rnorm(nboot*n, mean=rep(x, each=nboot)), nrow=nboot)
+  // column by column, so consume the RNG stream in SNP-major order.
+  for (std::size_t snp = 0; snp < p.x.size(); ++snp) {
+    for (int draw = 0; draw < nboot; ++draw) {
+      exp_z[static_cast<std::size_t>(draw) * p.x.size() + snp] = R::rnorm(0.0, 1.0);
     }
   }
-  for (int draw = 0; draw < nboot; ++draw) {
-    for (std::size_t snp = 0; snp < p.x.size(); ++snp) {
-      out_z[static_cast<std::size_t>(draw) * p.x.size() + snp] =
-        seeded ? normal(generator) : R::rnorm(0.0, 1.0);
+  for (std::size_t snp = 0; snp < p.x.size(); ++snp) {
+    for (int draw = 0; draw < nboot; ++draw) {
+      out_z[static_cast<std::size_t>(draw) * p.x.size() + snp] = R::rnorm(0.0, 1.0);
     }
   }
   for (int draw = 0; draw < nboot; ++draw) {
@@ -588,13 +655,35 @@ void make_bootstrap(Prepared& p, int nboot, SEXP seed) {
   }
 }
 
+void make_mode_bootstrap(Prepared& p, int nboot) {
+  if (nboot <= 0 || p.ratio.size() < 3) return;
+  const std::size_t n = p.ratio.size();
+  p.mode_bootstrap.resize(static_cast<std::size_t>(nboot) * n);
+  // TwoSampleMR::mr_mode draws delta-method Wald ratios directly.
+  for (std::size_t snp = 0; snp < n; ++snp) {
+    for (int draw = 0; draw < nboot; ++draw) {
+      p.mode_bootstrap[static_cast<std::size_t>(draw) * n + snp] =
+        p.ratio[snp] + p.ratio_se[snp] * R::rnorm(0.0, 1.0);
+    }
+  }
+}
+
 std::vector<Result> compute_pair(Prepared p,
                                  const std::vector<std::string>& methods,
                                  int nboot, SEXP seed,
                                  bool prepare_bootstrap = true,
                                  double phi = 1.0) {
   prepare_ratios(p);
-  if (prepare_bootstrap) make_bootstrap(p, nboot, seed);
+  if (prepare_bootstrap) {
+    bool needs_median = false;
+    bool needs_mode = false;
+    for (const std::string& method : methods) {
+      needs_median = needs_median || method == "weighted_median";
+      needs_mode = needs_mode || method == "simple_mode" || method == "weighted_mode";
+    }
+    if (needs_median) make_bootstrap(p, nboot, seed);
+    if (needs_mode) make_mode_bootstrap(p, nboot);
+  }
   std::vector<Result> result;
   result.resize(methods.size());
   bool has_simple = false;
@@ -711,7 +800,7 @@ struct GridData {
   int outcome_count = 0;
   int snp_count = 0;
   std::vector<double> exp_beta, out_beta, exp_se, out_se;
-  std::vector<double> exp_inverse, out_draws;
+  std::vector<double> exp_inverse, out_draws, mode_z;
 };
 
 GridData copy_grid(Rcpp::NumericMatrix exp_beta, Rcpp::NumericMatrix out_beta,
@@ -738,28 +827,31 @@ GridData copy_grid(Rcpp::NumericMatrix exp_beta, Rcpp::NumericMatrix out_beta,
 
 void fill_grid_bootstrap_layout(GridData& grid, int nboot, SEXP seed) {
   if (nboot <= 0) return;
-  const bool seeded = seed != R_NilValue && Rf_length(seed) > 0;
-  std::mt19937_64 generator;
-  std::normal_distribution<double> normal(0.0, 1.0);
-  if (seeded) generator.seed(static_cast<std::uint64_t>(Rcpp::as<double>(seed)));
+  (void) seed;
   const std::size_t n = static_cast<std::size_t>(grid.snp_count);
   const std::size_t block = static_cast<std::size_t>(nboot) * n;
   grid.exp_inverse.resize(static_cast<std::size_t>(grid.exposure_count) * block);
   grid.out_draws.resize(static_cast<std::size_t>(grid.outcome_count) * block);
+  grid.mode_z.resize(block);
 
   std::vector<double> ze(static_cast<std::size_t>(nboot) * n);
   std::vector<double> zo(static_cast<std::size_t>(nboot) * n);
-  for (int draw = 0; draw < nboot; ++draw) {
-    for (std::size_t snp = 0; snp < n; ++snp) {
-      ze[static_cast<std::size_t>(draw) * n + snp] =
-        seeded ? normal(generator) : R::rnorm(0.0, 1.0);
+  for (std::size_t snp = 0; snp < n; ++snp) {
+    for (int draw = 0; draw < nboot; ++draw) {
+      ze[static_cast<std::size_t>(draw) * n + snp] = R::rnorm(0.0, 1.0);
+    }
+  }
+  for (std::size_t snp = 0; snp < n; ++snp) {
+    for (int draw = 0; draw < nboot; ++draw) {
+      zo[static_cast<std::size_t>(draw) * n + snp] = R::rnorm(0.0, 1.0);
+    }
+  }
+  for (std::size_t snp = 0; snp < n; ++snp) {
+    for (int draw = 0; draw < nboot; ++draw) {
+      grid.mode_z[static_cast<std::size_t>(draw) * n + snp] = R::rnorm(0.0, 1.0);
     }
   }
   for (int draw = 0; draw < nboot; ++draw) {
-    for (std::size_t snp = 0; snp < n; ++snp) {
-      zo[static_cast<std::size_t>(draw) * n + snp] =
-        seeded ? normal(generator) : R::rnorm(0.0, 1.0);
-    }
     for (int exposure = 0; exposure < grid.exposure_count; ++exposure) {
       const std::size_t source = static_cast<std::size_t>(exposure) * n;
       const std::size_t target = static_cast<std::size_t>(exposure) * block +
@@ -807,6 +899,20 @@ Prepared pair_from_grid(const GridData& grid, int exposure, int outcome,
         if (p.x[snp] == 0.0) continue;
         p.bootstrap[static_cast<std::size_t>(draw) * ratio_count + ratio_index] =
           grid.out_draws[out_raw + snp] * grid.exp_inverse[exp_raw + snp];
+        ++ratio_index;
+      }
+    }
+  }
+  if (nboot > 0 && p.ratio.size() >= 3 && !grid.mode_z.empty()) {
+    const std::size_t ratio_count = p.ratio.size();
+    p.mode_bootstrap.resize(static_cast<std::size_t>(nboot) * ratio_count);
+    for (int draw = 0; draw < nboot; ++draw) {
+      const std::size_t raw = static_cast<std::size_t>(draw) * n;
+      std::size_t ratio_index = 0;
+      for (std::size_t snp = 0; snp < n; ++snp) {
+        if (p.x[snp] == 0.0) continue;
+        p.mode_bootstrap[static_cast<std::size_t>(draw) * ratio_count + ratio_index] =
+          p.ratio[ratio_index] + p.ratio_se[ratio_index] * grid.mode_z[raw + snp];
         ++ratio_index;
       }
     }

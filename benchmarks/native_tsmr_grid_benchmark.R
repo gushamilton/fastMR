@@ -64,7 +64,6 @@ fast_methods <- c("ivw", "egger", "weighted_median", "simple_mode", "weighted_mo
 invisible(fast_mr_grid(g$exposure_beta, g$outcome_beta, g$exposure_se,
                        g$outcome_se, methods = fast_methods, nboot = 0L,
                        seed = seed, threads = 10L))
-invisible(run_tsmr())
 gc()
 
 started <- proc.time()[["elapsed"]]
@@ -77,9 +76,34 @@ started <- proc.time()[["elapsed"]]
 tsmr <- run_tsmr()
 tsmr_elapsed <- proc.time()[["elapsed"]] - started
 
-fast_ivw <- fast[fast$method_code == "ivw", ]
-tsmr_ivw <- tsmr[tsmr$method == "Inverse variance weighted", ]
-correctness <- max(abs(fast_ivw$b - tsmr_ivw$b), na.rm = TRUE)
+fast_ivw <- fast[fast[["method_code"]] == "ivw", ]
+tsmr_ivw <- tsmr[tsmr[["method"]] == "Inverse variance weighted", ]
+correctness <- max(abs(fast_ivw[["b"]] - tsmr_ivw[["b"]]), na.rm = TRUE)
+fast[["pair"]] <- (fast[["exposure_index"]] - 1L) * n + fast[["outcome_index"]]
+tsmr[["pair"]] <- rep(seq_len(pairs), each = length(methods))
+method_map <- c("Inverse variance weighted" = "ivw", "MR Egger" = "egger",
+                "Weighted median" = "weighted_median", "Simple mode" = "simple_mode",
+                "Weighted mode" = "weighted_mode")
+tsmr[["method_code"]] <- unname(method_map[tsmr[["method"]]])
+parity <- merge(fast[, c("pair", "method_code", "b", "se", "pval")],
+                tsmr[, c("pair", "method_code", "b", "se", "pval")],
+                by = c("pair", "method_code"), suffixes = c("_fast", "_tsmr"), sort = TRUE)
+parity[["db"]] <- parity[["b_fast"]] - parity[["b_tsmr"]]
+parity[["dse"]] <- parity[["se_fast"]] - parity[["se_tsmr"]]
+parity[["dp"]] <- parity[["pval_fast"]] - parity[["pval_tsmr"]]
+parity[["relative_se_difference"]] <- abs(parity[["dse"]]) / pmax(abs(parity[["se_tsmr"]]), 1e-15)
+parity_summary <- do.call(rbind, lapply(split(parity, parity[["method_code"]]), function(x) {
+  data.frame(method_code = x[["method_code"]][[1L]], pairs = nrow(x),
+             max_abs_beta_difference = max(abs(x[["db"]]), na.rm = TRUE),
+             max_abs_se_difference = max(abs(x[["dse"]]), na.rm = TRUE),
+             median_abs_se_difference = median(abs(x[["dse"]]), na.rm = TRUE),
+             max_relative_se_difference = max(x[["relative_se_difference"]], na.rm = TRUE),
+             max_abs_pval_difference = max(abs(x[["dp"]]), na.rm = TRUE))
+}))
+print(parity_summary, row.names = FALSE, digits = 6)
+write.csv(parity_summary, file.path(root, "outputs", "native_tsmr_grid_parity.csv"), row.names = FALSE)
+saveRDS(list(fast = fast, TwoSampleMR = tsmr, parity = parity),
+        file.path(root, "outputs", "native_tsmr_grid_results.rds"))
 result <- data.frame(
   workload = "IL6 82-row fixture; 50x50 grid; five methods; nboot=100",
   pairs = pairs,

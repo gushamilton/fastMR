@@ -20,8 +20,10 @@ modified.
   Apple Clang build used the fallback.
 * Exact default methods: IVW, fixed-effects IVW, multiplicative random-effects
   IVW, MR-Egger, weighted median, simple mode, weighted mode, and Wald ratio.
-  The validated native mode scan returns the baseline 512-grid coordinate; no
-  approximate mode estimate is routed through the default API.
+  The mode implementation matches native R `stats::density` semantics with the
+  same weighted binning, extended FFT range, interpolation, and 512-point grid;
+  no approximate mode estimate is routed through the default API. Seeded
+  bootstraps use R RNG draw order and preserve the caller's RNG state.
 * Basic multivariable IVW and optional `arrow::read_parquet()` wrappers. Arrow
   remains in Suggests and has a targeted error when unavailable.
 
@@ -74,15 +76,9 @@ were:
 | Arrow Parquet read | 0.001 | 82,000 rows/s |
 | seeded thread correctness rerun | 5.103 | 490 |
 
-Primary native-R comparison: outputs/native_tsmr_grid_benchmark.csv records 7.946 seconds for fastMR versus 339.105 seconds for the standard TwoSampleMR::mr() workflow on the same 82-row IL6, 2,500-pair, five-method, nboot=100 workload: a 42.676x speedup. The maximum absolute IVW beta difference was 3.253e-18. The earlier Python rows in outputs/optimization_history.* are retained only as prototype provenance, not as the primary comparator.
-Measured speedups: threads 10 versus 1 were 3.29x for the exact bootstrap
-grid; the package grid was 18.67x faster than the existing Python reference
-(95.032 s) at its comparable worker setting. The validated prototype native
-artifact remains faster at 1.663 s / 1,503 pairs/s, so this first Rcpp port is
-3.06x slower than that existing native artifact while keeping the same exact
-kernel design and R-facing workflow. Against installed TwoSampleMR 0.7.9,
-the warm five-method single-pair loop measured 0.008 s versus 0.139 s
-(approximately 17.4x; startup is not included).
+Primary native-R comparison: outputs/native_tsmr_grid_benchmark.csv records 4.945 seconds for fastMR versus 338.919 seconds for the standard TwoSampleMR::mr() workflow on the same 82-row IL6, 2,500-pair, five-method, nboot=100 workload: a 68.538x speedup. The maximum absolute beta difference across all five methods and all 2,500 pairs was 3.47e-18. IVW, Egger, weighted median, simple mode, and weighted mode each matched native TwoSampleMR to machine precision in single-method seeded randomized parity tests (12 panels; maximum combined beta/SE/p-value difference 1.01e-12). The full-grid bootstrap SEs are intentionally independent Monte Carlo draws at nboot=100, so their median absolute differences were 9.28e-05 for weighted median, 8.89e-04 for simple mode, and 2.52e-04 for weighted mode; these are recorded in outputs/native_tsmr_grid_parity.csv rather than misreported as deterministic estimator errors.
+
+The 5-thread adversarial gate passed 20 randomized grids plus near-zero, negative, duplicate-ratio, and single-SNP edge panels with a maximum serial-versus-5-thread difference of 0. The native-R mode point audit passed 40 randomized panels with maximum absolute beta difference 1.05e-13. The package test suite passed 36 expectations with one expected Arrow skip, and the built tarball check completed with 0 errors, 0 warnings, and 3 notes.
 
 The thread correctness gate reported a maximum seeded difference of `0` for
 `threads=1`, `4`, and `10`. Bootstrap values are deterministic within fastMR;

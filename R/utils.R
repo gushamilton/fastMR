@@ -150,3 +150,21 @@ fastmr_tidy_native <- function(native_results, methods, id.exposure = "", id.out
   if (!is.null(outcome_index)) out$outcome_index <- outcome_index
   out
 }
+
+
+fastmr_native_call <- function(native, args, seed) {
+  if (is.null(seed)) return(do.call(native, args))
+  state_env <- .GlobalEnv
+  had_state <- exists(".Random.seed", envir = state_env, inherits = FALSE)
+  old_state <- if (had_state) get(".Random.seed", envir = state_env, inherits = FALSE) else NULL
+  on.exit({
+    if (had_state) {
+      assign(".Random.seed", old_state, envir = state_env)
+    } else if (exists(".Random.seed", envir = state_env, inherits = FALSE)) {
+      rm(".Random.seed", envir = state_env)
+    }
+  }, add = TRUE)
+  set.seed(seed)
+  args[["seed"]] <- NULL
+  do.call(native, args)
+}
