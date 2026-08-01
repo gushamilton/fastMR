@@ -386,6 +386,8 @@ struct Prepared {
   std::vector<double> ratio_se;
   std::vector<double> bootstrap;
   std::vector<double> mode_bootstrap;
+  std::vector<double> egger_x_bootstrap;
+  std::vector<double> egger_y_bootstrap;
 };
 
 void prepare_ratios(Prepared& p) {
@@ -502,6 +504,89 @@ Result compute_egger(const Prepared& p) {
   result.q_pval = chi_square_pvalue(rss, df);
   result.sigma = true;
   result.sigma_value = sigma;
+  return result;
+}
+
+Result compute_egger_bootstrap(const Prepared& p, int nboot) {
+  const int n = static_cast<int>(p.x.size());
+  if (n < 3 || nboot <= 0 || p.egger_x_bootstrap.empty()) {
+    return empty_result("egger_bootstrap", n);
+  }
+  std::vector<double> betas(nboot), intercepts(nboot);
+  std::vector<double> weights(n);
+  for (int i = 0; i < n; ++i) weights[i] = 1.0 / (p.sy[i] * p.sy[i]);
+  for (int draw = 0; draw < nboot; ++draw) {
+    const double* xs = p.egger_x_bootstrap.data() + static_cast<std::size_t>(draw) * n;
+    const double* ys = p.egger_y_bootstrap.data() + static_cast<std::size_t>(draw) * n;
+    double mean_x = 0.0;
+    double mean_y = 0.0;
+    double mean_xw = 0.0;
+    double mean_yw = 0.0;
+    for (int i = 0; i < n; ++i) {
+      const double sign = xs[i] >= 0.0 ? 1.0 : -1.0;
+      const double x = std::abs(xs[i]);
+      const double y = ys[i] * sign;
+      mean_x += x;
+      mean_y += y;
+      mean_xw += x * weights[i];
+      mean_yw += y * weights[i];
+    }
+    mean_x /= static_cast<double>(n);
+    mean_y /= static_cast<double>(n);
+    mean_xw /= static_cast<double>(n);
+    mean_yw /= static_cast<double>(n);
+    double covariance = 0.0;
+    double variance = 0.0;
+    for (int i = 0; i < n; ++i) {
+      const double sign = xs[i] >= 0.0 ? 1.0 : -1.0;
+      const double xw = std::abs(xs[i]) * weights[i];
+      const double yw = ys[i] * sign * weights[i];
+      covariance += (xw - mean_xw) * (yw - mean_yw);
+      variance += (xw - mean_xw) * (xw - mean_xw);
+    }
+    const double beta = variance > 0.0 ? covariance / variance : NA_VALUE;
+    betas[draw] = beta;
+    intercepts[draw] = std::isfinite(beta) ? mean_y - mean_x * beta : NA_VALUE;
+  }
+  double beta_mean = 0.0;
+  double intercept_mean = 0.0;
+  int finite_count = 0;
+  for (int draw = 0; draw < nboot; ++draw) {
+    if (std::isfinite(betas[draw])) {
+      beta_mean += betas[draw];
+      ++finite_count;
+    }
+    if (std::isfinite(intercepts[draw])) intercept_mean += intercepts[draw];
+  }
+  if (finite_count == 0) return empty_result("egger_bootstrap", n);
+  beta_mean /= static_cast<double>(finite_count);
+  int intercept_count = 0;
+  for (double value : intercepts) if (std::isfinite(value)) ++intercept_count;
+  if (intercept_count > 0) intercept_mean /= static_cast<double>(intercept_count);
+  std::vector<double> finite_betas;
+  std::vector<double> finite_intercepts;
+  finite_betas.reserve(betas.size());
+  finite_intercepts.reserve(intercepts.size());
+  for (double value : betas) if (std::isfinite(value)) finite_betas.push_back(value);
+  for (double value : intercepts) if (std::isfinite(value)) finite_intercepts.push_back(value);
+  const double beta_se = sample_std(finite_betas);
+  const double intercept_se = sample_std(finite_intercepts);
+  const int sign = beta_mean > 0.0 ? 1 : (beta_mean < 0.0 ? -1 : 0);
+  int opposite = 0;
+  for (double value : betas) if (std::isfinite(value) && sign * value < 0.0) ++opposite;
+  Result result = empty_result("egger_bootstrap", n);
+  result.beta = beta_mean;
+  result.se = beta_se;
+  result.pval = static_cast<double>(opposite) / static_cast<double>(nboot);
+  result.intercept = true;
+  result.intercept_value = intercept_mean;
+  result.intercept_se = intercept_se;
+  const int intercept_sign = intercept_mean > 0.0 ? 1 : (intercept_mean < 0.0 ? -1 : 0);
+  int intercept_opposite = 0;
+  for (double value : intercepts) if (std::isfinite(value) && intercept_sign * value < 0.0) ++intercept_opposite;
+  result.intercept_pval = static_cast<double>(intercept_opposite) / static_cast<double>(nboot);
+  result.bootstrap = true;
+  result.bootstrap_value = nboot;
   return result;
 }
 
@@ -630,11 +715,16 @@ Result compute_wald(const Prepared& p) {
   return result;
 }
 
-void make_bootstrap(Prepared& p, int nboot, SEXP seed) {
-  if (nboot <= 0 || p.ratio.size() < 3) return;
+void make_bootstrap(Prepared& p, int nboot, SEXP seed,
+                    bool needs_median, bool needs_egger) {
+  if (nboot <= 0 || p.ratio.size() < 3 || (!needs_median && !needs_egger)) return;
   (void) seed;
   const std::size_t n = p.ratio.size();
-  p.bootstrap.resize(static_cast<std::size_t>(nboot) * n);
+  if (needs_median) p.bootstrap.resize(static_cast<std::size_t>(nboot) * n);
+  if (needs_egger) {
+    p.egger_x_bootstrap.resize(static_cast<std::size_t>(nboot) * p.x.size());
+    p.egger_y_bootstrap.resize(static_cast<std::size_t>(nboot) * p.x.size());
+  }
   std::vector<double> exp_z(static_cast<std::size_t>(nboot) * p.x.size());
   std::vector<double> out_z(static_cast<std::size_t>(nboot) * p.x.size());
   // R fills matrix(rnorm(nboot*n, mean=rep(x, each=nboot)), nrow=nboot)
@@ -652,11 +742,17 @@ void make_bootstrap(Prepared& p, int nboot, SEXP seed) {
   for (int draw = 0; draw < nboot; ++draw) {
     std::size_t ratio_index = 0;
     for (std::size_t snp = 0; snp < p.x.size(); ++snp) {
-      if (p.x[snp] == 0.0) continue;
       const double exp_draw = p.x[snp] + p.sx[snp] * exp_z[static_cast<std::size_t>(draw) * p.x.size() + snp];
       const double out_draw = p.y[snp] + p.sy[snp] * out_z[static_cast<std::size_t>(draw) * p.x.size() + snp];
-      p.bootstrap[static_cast<std::size_t>(draw) * n + ratio_index] =
-        exp_draw == 0.0 ? NA_VALUE : out_draw / exp_draw;
+      if (needs_egger) {
+        p.egger_x_bootstrap[static_cast<std::size_t>(draw) * p.x.size() + snp] = exp_draw;
+        p.egger_y_bootstrap[static_cast<std::size_t>(draw) * p.x.size() + snp] = out_draw;
+      }
+      if (p.x[snp] == 0.0) continue;
+      if (needs_median) {
+        p.bootstrap[static_cast<std::size_t>(draw) * n + ratio_index] =
+          exp_draw == 0.0 ? NA_VALUE : out_draw / exp_draw;
+      }
       ++ratio_index;
     }
   }
@@ -684,11 +780,13 @@ std::vector<Result> compute_pair(Prepared p,
   if (prepare_bootstrap) {
     bool needs_median = false;
     bool needs_mode = false;
+    bool needs_egger = false;
     for (const std::string& method : methods) {
       needs_median = needs_median || method == "simple_median" || method == "weighted_median";
       needs_mode = needs_mode || method == "simple_mode" || method == "weighted_mode";
+      needs_egger = needs_egger || method == "egger_bootstrap";
     }
-    if (needs_median) make_bootstrap(p, nboot, seed);
+    if (needs_median || needs_egger) make_bootstrap(p, nboot, seed, needs_median, needs_egger);
     if (needs_mode) make_mode_bootstrap(p, nboot);
   }
   std::vector<Result> result;
@@ -708,6 +806,8 @@ std::vector<Result> compute_pair(Prepared p,
       result[i] = compute_ivw(p, method);
     } else if (method == "egger") {
       result[i] = compute_egger(p);
+    } else if (method == "egger_bootstrap") {
+      result[i] = compute_egger_bootstrap(p, nboot);
     } else if (method == "simple_median" || method == "weighted_median") {
       result[i] = compute_median(p, method, nboot, method == "weighted_median");
     } else if (method == "simple_mode" || method == "weighted_mode") {
@@ -750,7 +850,7 @@ Rcpp::List result_to_list(const Result& result) {
 
 std::vector<std::string> parse_methods(Rcpp::CharacterVector methods) {
   const std::vector<std::string> allowed = {
-    "ivw", "ivw_fe", "ivw_mre", "egger", "simple_median", "weighted_median",
+    "ivw", "ivw_fe", "ivw_mre", "egger", "egger_bootstrap", "simple_median", "weighted_median",
     "simple_mode", "weighted_mode", "wald_ratio"
   };
   std::vector<std::string> parsed;
@@ -807,6 +907,7 @@ struct GridData {
   int outcome_count = 0;
   int snp_count = 0;
   std::vector<double> exp_beta, out_beta, exp_se, out_se;
+  std::vector<double> exp_draws;
   std::vector<double> exp_inverse, out_draws, mode_z;
 };
 
@@ -833,14 +934,16 @@ GridData copy_grid(Rcpp::NumericMatrix exp_beta, Rcpp::NumericMatrix out_beta,
 }
 
 void fill_grid_bootstrap_layout(GridData& grid, int nboot, SEXP seed,
-                                 bool needs_median, bool needs_mode) {
-  if (nboot <= 0 || (!needs_median && !needs_mode)) return;
+                                 bool needs_median, bool needs_mode,
+                                 bool needs_egger) {
+  if (nboot <= 0 || (!needs_median && !needs_mode && !needs_egger)) return;
   (void) seed;
   const std::size_t n = static_cast<std::size_t>(grid.snp_count);
   const std::size_t block = static_cast<std::size_t>(nboot) * n;
 
-  if (needs_median) {
-    grid.exp_inverse.resize(static_cast<std::size_t>(grid.exposure_count) * block);
+  if (needs_median || needs_egger) {
+    if (needs_median) grid.exp_inverse.resize(static_cast<std::size_t>(grid.exposure_count) * block);
+    if (needs_egger) grid.exp_draws.resize(static_cast<std::size_t>(grid.exposure_count) * block);
     grid.out_draws.resize(static_cast<std::size_t>(grid.outcome_count) * block);
     std::vector<double> ze(static_cast<std::size_t>(nboot) * n);
     std::vector<double> zo(static_cast<std::size_t>(nboot) * n);
@@ -862,7 +965,8 @@ void fill_grid_bootstrap_layout(GridData& grid, int nboot, SEXP seed,
         for (std::size_t snp = 0; snp < n; ++snp) {
           const double value = grid.exp_beta[source + snp] +
             grid.exp_se[source + snp] * ze[static_cast<std::size_t>(draw) * n + snp];
-          grid.exp_inverse[target + snp] = value == 0.0 ? NA_VALUE : 1.0 / value;
+          if (needs_egger) grid.exp_draws[target + snp] = value;
+          if (needs_median) grid.exp_inverse[target + snp] = value == 0.0 ? NA_VALUE : 1.0 / value;
         }
       }
       for (int outcome = 0; outcome < grid.outcome_count; ++outcome) {
@@ -901,19 +1005,29 @@ Prepared pair_from_grid(const GridData& grid, int exposure, int outcome,
     p.sy[snp] = grid.out_se[out_offset + snp];
   }
   prepare_ratios(p);
-  if (nboot > 0 && p.ratio.size() >= 3 && !grid.exp_inverse.empty()) {
+  if (nboot > 0 && p.ratio.size() >= 3 && (!grid.exp_inverse.empty() || !grid.exp_draws.empty())) {
     const std::size_t block = static_cast<std::size_t>(nboot) * n;
-    p.bootstrap.resize(static_cast<std::size_t>(nboot) * p.ratio.size());
     std::size_t ratio_count = p.ratio.size();
+    if (!grid.exp_inverse.empty()) p.bootstrap.resize(static_cast<std::size_t>(nboot) * ratio_count);
+    if (!grid.exp_draws.empty()) {
+      p.egger_x_bootstrap.resize(static_cast<std::size_t>(nboot) * n);
+      p.egger_y_bootstrap.resize(static_cast<std::size_t>(nboot) * n);
+    }
     for (int draw = 0; draw < nboot; ++draw) {
       const std::size_t raw = static_cast<std::size_t>(draw) * n;
       const std::size_t exp_raw = static_cast<std::size_t>(exposure) * block + raw;
       const std::size_t out_raw = static_cast<std::size_t>(outcome) * block + raw;
       std::size_t ratio_index = 0;
       for (std::size_t snp = 0; snp < n; ++snp) {
+        if (!grid.exp_draws.empty()) {
+          p.egger_x_bootstrap[static_cast<std::size_t>(draw) * n + snp] = grid.exp_draws[exp_raw + snp];
+          p.egger_y_bootstrap[static_cast<std::size_t>(draw) * n + snp] = grid.out_draws[out_raw + snp];
+        }
         if (p.x[snp] == 0.0) continue;
-        p.bootstrap[static_cast<std::size_t>(draw) * ratio_count + ratio_index] =
-          grid.out_draws[out_raw + snp] * grid.exp_inverse[exp_raw + snp];
+        if (!grid.exp_inverse.empty()) {
+          p.bootstrap[static_cast<std::size_t>(draw) * ratio_count + ratio_index] =
+            grid.out_draws[out_raw + snp] * grid.exp_inverse[exp_raw + snp];
+        }
         ++ratio_index;
       }
     }
@@ -981,11 +1095,13 @@ Rcpp::List fastmr_grid_native(Rcpp::NumericMatrix exposure_beta,
   GridData grid = copy_grid(exposure_beta, outcome_beta, exposure_se, outcome_se);
   bool needs_median = false;
   bool needs_mode = false;
+  bool needs_egger = false;
   for (const std::string& method : parsed_methods) {
     needs_median = needs_median || method == "simple_median" || method == "weighted_median";
     needs_mode = needs_mode || method == "simple_mode" || method == "weighted_mode";
+    needs_egger = needs_egger || method == "egger_bootstrap";
   }
-  fill_grid_bootstrap_layout(grid, nboot, seed, needs_median, needs_mode);
+  fill_grid_bootstrap_layout(grid, nboot, seed, needs_median, needs_mode, needs_egger);
   const std::size_t pair_count = static_cast<std::size_t>(grid.exposure_count) *
                                  static_cast<std::size_t>(grid.outcome_count);
   std::vector<std::vector<Result>> results(pair_count);

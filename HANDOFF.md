@@ -115,6 +115,18 @@ five grid shapes it ran 12.17-13.04x faster than native TwoSampleMR at five
 threads, with a maximum beta difference of `3.30e-17`. Its bootstrap SE and
 p-value differences are Monte Carlo differences from independent streams.
 
+MR-Egger bootstrap is now also implemented as `egger_bootstrap`. Its seeded
+single-pair parity audit over 12 randomized panels reached maximum beta, SE,
+and p-value deltas of `2.22e-16`, `2.78e-17`, and `0`; intercept deltas were
+below `1.1e-17`. The grid reuses raw exposure/outcome bootstrap draws across
+pairs and remains bitwise deterministic across one and five threads. The
+five-shape native benchmark is recorded in
+`outputs/native_tsmr_egger_bootstrap_benchmark.csv` and `.md`; it measured
+12.84-13.35x speedups at five threads. Its maximum grid beta delta was
+`6.37e-4` because native TwoSampleMR and fastMR use independent per-pair
+versus shared-grid bootstrap streams; the seeded single-pair estimator parity
+above is the exact implementation gate.
+
 ## Per-method shape benchmarks
 
 `outputs/native_tsmr_method_benchmark.csv` and `.md` compare each default MR

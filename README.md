@@ -6,8 +6,9 @@ registered C++17 backend for the shared exposure/outcome grid that dominates
 large MR scans.
 
 The first release includes IVW (under-dispersion-corrected, fixed-effects, and
-multiplicative random-effects variants), MR-Egger, simple and weighted median,
-simple mode, weighted mode, Wald ratio, and basic multivariable IVW. The
+multiplicative random-effects variants), MR-Egger, MR-Egger bootstrap, simple
+and weighted median, simple mode, weighted mode, Wald ratio, and basic
+multivariable IVW. The
 default methods are exact; there is no approximate mode estimator in the
 default API.
 

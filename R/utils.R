@@ -5,13 +5,14 @@
 #' @export
 fastmr_method_registry <- function() {
   data.frame(
-    code = c("ivw", "ivw_fe", "ivw_mre", "egger", "simple_median",
+    code = c("ivw", "ivw_fe", "ivw_mre", "egger", "egger_bootstrap", "simple_median",
              "weighted_median", "simple_mode", "weighted_mode", "wald_ratio"),
     method = c(
       "Inverse variance weighted",
       "Inverse variance weighted (fixed effects)",
       "Inverse variance weighted (multiplicative random effects)",
       "MR Egger",
+      "MR Egger (bootstrap)",
       "Simple median",
       "Weighted median",
       "Simple mode",
@@ -23,6 +24,7 @@ fastmr_method_registry <- function() {
       "Fixed-effects IVW standard error",
       "Multiplicative random-effects IVW without under-dispersion correction",
       "Weighted Egger regression with an intercept",
+      "Parametric bootstrap MR-Egger regression",
       "Unweighted median of Wald ratios",
       "Weighted median of delta-method Wald ratios",
       "Unweighted kernel mode of Wald ratios",
@@ -41,6 +43,7 @@ fastmr_normalize_methods <- function(methods) {
     mr_ivw_fe = "ivw_fe",
     mr_ivw_mre = "ivw_mre",
     mr_egger_regression = "egger",
+    mr_egger_regression_bootstrap = "egger_bootstrap",
     mr_simple_median = "simple_median",
     mr_weighted_median = "weighted_median",
     mr_simple_mode = "simple_mode",
@@ -48,6 +51,7 @@ fastmr_normalize_methods <- function(methods) {
     mr_wald_ratio = "wald_ratio",
     `Inverse variance weighted` = "ivw",
     `MR Egger` = "egger",
+    `MR Egger (bootstrap)` = "egger_bootstrap",
     `Simple median` = "simple_median",
     `Weighted median` = "weighted_median",
     `Simple mode` = "simple_mode",
