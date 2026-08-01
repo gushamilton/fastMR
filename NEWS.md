@@ -2,8 +2,14 @@
 
 * Added compact mixed-method grid results, preserving diagnostics while
   avoiding thousands of nested Rcpp lists. The full 50x50 IL6 five-method
-  benchmark now runs in 1.58 seconds versus 334.83 seconds for native
-  TwoSampleMR (211.9x faster).
+  benchmark now runs in 1.564 seconds versus 339.139 seconds for native
+  TwoSampleMR (216.8x faster).
+* Reused weighted-median sort order across bootstrap draws and across the
+  simple/weighted median pair. The current native five-shape benchmark gives
+  166-254x speedups for weighted median, with a 50x50 grid at 0.068 seconds.
+* Mixed-method grids now source all IVW, fixed-effects IVW, and multiplicative
+  random-effects IVW rows from the BLAS batch, avoiding a second cross-product
+  pass when IVW is requested alongside other methods.
 * Added a compact all-IVW grid return path after the BLAS cross-products. On
   the Mac mini, the 50x50 one-method grid averages 0.00088 seconds over 100
   warm calls, 1,492x faster than the measured pre-BLAS scalar path; native

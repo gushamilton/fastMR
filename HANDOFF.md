@@ -91,10 +91,10 @@ were:
 | seeded thread correctness rerun | 5.103 | 490 |
 
 Primary native-R comparison: `outputs/native_tsmr_grid_benchmark.csv` records
-1.580 seconds for fastMR versus 334.830 seconds for the standard
+1.564 seconds for fastMR versus 339.139 seconds for the standard
 `TwoSampleMR::mr()` workflow on the same 82-row IL6, 2,500-pair, five-method,
-nboot=100 workload: a 211.9x speedup. The maximum absolute IVW beta
-difference was `3.47e-18`, and all five method point estimates matched native
+nboot=100 workload: a 216.8x speedup. The maximum absolute IVW beta
+difference was `3.25e-18`, and all five method point estimates matched native
 TwoSampleMR to machine precision. The full-grid bootstrap SEs are intentionally
 independent Monte Carlo draws at nboot=100; their differences are recorded in
 the parity artifacts rather than treated as deterministic estimator errors.
@@ -106,6 +106,11 @@ The thread correctness gate reported a maximum seeded difference of `0` for
 their seeded standard errors need not be bitwise identical to NumPy or
 TwoSampleMR because those implementations use different random-number
 streams.
+
+The final mixed-method adversarial gate in `outputs/adversarial_mixed_grid.csv`
+covered 150 randomized and edge panels (three repeats, nboot=7) comparing the
+full five-method result between one and five threads. It had zero failures and
+an exact maximum serial-versus-five-thread delta of 0.
 
 The IVW-specific algorithmic benchmark is recorded in
 `outputs/ivw_algorithmic_benchmark.csv` and `.md`. On the same 2,500-pair
@@ -131,15 +136,22 @@ seconds and weighted mode from 1.910 to 1.011 seconds on the 2,500-pair grid
 SE, and p-value deltas of `6.44e-15`, `4.54e-13`, and `8.09e-14`; the mode grid
 serial-versus-five-thread delta was exactly 0.
 
+The latest mixed-kernel loop reused the weighted-median sort permutation across
+bootstrap draws and when simple and weighted median are requested together. It
+also routes IVW, fixed-effects IVW, and multiplicative random-effects IVW
+through the BLAS batch even when other methods are present. The paired median
+grid remains within floating-point tolerance of separate method calls, and the
+5-thread grid test suite remains deterministic.
+
 ## Implementation-versus-thread scaling
 
 The direct `system.time()` scaling run is recorded in
 `outputs/iteration_scaling.csv` and `.md`. On the 2,500-pair IL6 grid with all
-five main methods, `nboot=0` took 0.478 seconds at one thread and 0.442 seconds
-at ten threads. At `nboot=100`, one thread took 8.426 seconds and ten threads
-took 2.017 seconds (4.18x thread scaling). Against the prior native
-TwoSampleMR reference of 338.919 seconds, this is approximately 21.9x faster
-serially and 114.0x faster at ten threads; the remaining gain is implementation
+five main methods, `nboot=0` took 0.084 seconds at one thread and 0.017 seconds
+at ten threads. At `nboot=100`, one thread took 8.063 seconds and ten threads
+took 1.544 seconds (5.22x thread scaling). Against the current native
+TwoSampleMR reference of 339.139 seconds, this is approximately 42.1x faster
+serially and 219.8x faster at ten threads; the remaining gain is implementation
 and shared-grid work, not just threading.
 
 The local harmonisation path processed 20,000 synthetic strand/complement/
@@ -185,15 +197,16 @@ measured speedup ranges were:
 
 | method | speedup range |
 |---|---:|
-| IVW | 10.08-10.82x |
-| MR-Egger | 8.67-9.85x |
-| weighted median | 12.06-13.21x |
-| simple mode | 45.12-48.99x |
-| weighted mode | 44.82-48.28x |
+| IVW | 1,498-14,083x |
+| MR-Egger | 1,581-7,247x |
+| weighted median | 166-254x |
+| simple mode | 115-135x |
+| weighted mode | 85-137x |
 
 All deterministic beta differences were at machine precision (maximum
 `8e-18` for IVW/Egger/median and approximately `2.7e-16` for mode point
-estimates). Bootstrap SE and p-value differences are Monte Carlo differences:
+estimates). The current compact-grid timings are sub-millisecond to 2 ms for
+IVW and Egger on the balanced 50x50 shape. Bootstrap SE and p-value differences are Monte Carlo differences:
 the two implementations generate independent bootstrap streams at `nboot=100`.
 The grid kernel also skips unused stochastic buffers for deterministic
 method-only calls. The dedicated IVW benchmark below measures the new BLAS

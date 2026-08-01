@@ -1,2 +1,2 @@
 "workload","pairs","nboot","seed","fastMR_seconds","TwoSampleMR_seconds","speedup","fastMR_pairs_per_second","TwoSampleMR_pairs_per_second","max_ivw_beta_difference"
-"IL6 82-row fixture; 50x50 grid; five methods; nboot=100",2500,100,20260801,1.58,334.83,211.917721518987,1582.27848101266,7.46647552489323,3.46944695195361e-18
+"IL6 82-row fixture; 50x50 grid; five methods; nboot=100",2500,100,20260801,1.564,339.139,216.840792838875,1598.46547314578,7.37160869142151,3.25260651745651e-18
