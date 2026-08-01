@@ -6,7 +6,7 @@
 fastmr_method_registry <- function() {
   data.frame(
     code = c("ivw", "ivw_fe", "ivw_mre", "egger", "egger_bootstrap", "uwr",
-             "sign", "simple_median", "weighted_median", "simple_mode",
+             "sign", "simple_median", "weighted_median", "penalised_weighted_median", "simple_mode",
              "weighted_mode", "wald_ratio"),
     method = c(
       "Inverse variance weighted",
@@ -18,6 +18,7 @@ fastmr_method_registry <- function() {
       "Sign concordance test",
       "Simple median",
       "Weighted median",
+      "Penalised weighted median",
       "Simple mode",
       "Weighted mode",
       "Wald ratio"
@@ -32,6 +33,7 @@ fastmr_method_registry <- function() {
       "Exact binomial sign concordance test",
       "Unweighted median of Wald ratios",
       "Weighted median of delta-method Wald ratios",
+      "Penalised weighted median with chi-square down-weighting",
       "Unweighted kernel mode of Wald ratios",
       "Ratio-SE-weighted kernel mode of Wald ratios",
       "Single-SNP Wald ratio"
@@ -53,6 +55,7 @@ fastmr_normalize_methods <- function(methods) {
     mr_sign = "sign",
     mr_simple_median = "simple_median",
     mr_weighted_median = "weighted_median",
+    mr_penalised_weighted_median = "penalised_weighted_median",
     mr_simple_mode = "simple_mode",
     mr_weighted_mode = "weighted_mode",
     mr_wald_ratio = "wald_ratio",
@@ -63,6 +66,7 @@ fastmr_normalize_methods <- function(methods) {
     `Sign concordance test` = "sign",
     `Simple median` = "simple_median",
     `Weighted median` = "weighted_median",
+    `Penalised weighted median` = "penalised_weighted_median",
     `Simple mode` = "simple_mode",
     `Weighted mode` = "weighted_mode",
     `Wald ratio` = "wald_ratio"

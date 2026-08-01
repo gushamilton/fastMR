@@ -1,5 +1,8 @@
 # fastMR 0.1.0
 
+* Added native-compatible penalised weighted median with configurable `penk`
+  and exact two-stream bootstrap parity; its five-shape benchmark reaches
+  122-160x speedups over native TwoSampleMR.
 * Reused exact mode-kernel FFT workspaces/plans and median-selection storage
   across bootstrap draws, reducing the 50x50 mode grid by about 7-8% without
   changing the native density semantics.

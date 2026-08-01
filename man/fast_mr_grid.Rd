@@ -33,7 +33,7 @@ fast_mr_grid(
 
 \item{threads}{Maximum native worker count.}
 
-\item{...}{Optional \code{phi} bandwidth multiplier for mode methods.}
+\item{...}{Optional \code{phi} bandwidth multiplier for mode methods and \code{penk} penalty multiplier for penalised weighted median (default 20).}
 }
 \value{
 A tidy data frame with one row per method and grid pair.

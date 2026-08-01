@@ -433,6 +433,7 @@ struct Prepared {
   std::vector<double> ratio;
   std::vector<double> ratio_se;
   std::vector<double> bootstrap;
+  std::vector<double> penalised_bootstrap;
   std::vector<double> mode_bootstrap;
   std::vector<double> egger_x_bootstrap;
   std::vector<double> egger_y_bootstrap;
@@ -726,6 +727,40 @@ Result compute_median(const Prepared& p, const std::string& method,
   return result;
 }
 
+Result compute_penalised_median(const Prepared& p, int nboot, double penk) {
+  const int n = static_cast<int>(p.ratio.size());
+  if (n < 3) return empty_result("penalised_weighted_median", n);
+  std::vector<double> weights(n), penalised_weights(n);
+  for (int i = 0; i < n; ++i) weights[i] = 1.0 / (p.ratio_se[i] * p.ratio_se[i]);
+  const double weighted_beta = weighted_median_point(p.ratio, weights);
+  for (int i = 0; i < n; ++i) {
+    const double statistic = weights[i] * (p.ratio[i] - weighted_beta) *
+                             (p.ratio[i] - weighted_beta);
+    const double penalty = R::pchisq(statistic, 1.0, false, false);
+    penalised_weights[i] = weights[i] * std::min(1.0, penalty * penk);
+  }
+  const double beta = weighted_median_point(p.ratio, penalised_weights);
+  double se = NA_VALUE;
+  const std::vector<double>& bootstrap = p.penalised_bootstrap.empty()
+    ? p.bootstrap : p.penalised_bootstrap;
+  if (nboot > 0 && !bootstrap.empty()) {
+    std::vector<double> estimates(nboot);
+    for (int draw = 0; draw < nboot; ++draw) {
+      const double* row = bootstrap.data() + static_cast<std::size_t>(draw) * n;
+      estimates[draw] = weighted_median_point(
+        std::vector<double>(row, row + n), penalised_weights);
+    }
+    se = sample_std(estimates);
+  }
+  Result result = empty_result("penalised_weighted_median", n);
+  result.beta = beta;
+  result.se = se;
+  result.pval = z_pvalue(safe_statistic(beta, se));
+  result.bootstrap = true;
+  result.bootstrap_value = nboot;
+  return result;
+}
+
 Result compute_mode(const Prepared& p, const std::string& method, int nboot, double phi) {
   const int n = static_cast<int>(p.ratio.size());
   if (n < 3) return empty_result(method, n);
@@ -817,46 +852,61 @@ Result compute_wald(const Prepared& p) {
 }
 
 void make_bootstrap(Prepared& p, int nboot, SEXP seed,
-                    bool needs_median, bool needs_egger) {
-  if (nboot <= 0 || p.ratio.size() < 3 || (!needs_median && !needs_egger)) return;
+                    bool needs_median, bool needs_egger,
+                    bool needs_penalised) {
+  if (nboot <= 0 || p.ratio.size() < 3 ||
+      (!needs_median && !needs_egger && !needs_penalised)) return;
   (void) seed;
   const std::size_t n = p.ratio.size();
-  if (needs_median) p.bootstrap.resize(static_cast<std::size_t>(nboot) * n);
-  if (needs_egger) {
-    p.egger_x_bootstrap.resize(static_cast<std::size_t>(nboot) * p.x.size());
-    p.egger_y_bootstrap.resize(static_cast<std::size_t>(nboot) * p.x.size());
-  }
-  std::vector<double> exp_z(static_cast<std::size_t>(nboot) * p.x.size());
-  std::vector<double> out_z(static_cast<std::size_t>(nboot) * p.x.size());
-  // R fills matrix(rnorm(nboot*n, mean=rep(x, each=nboot)), nrow=nboot)
-  // column by column, so consume the RNG stream in SNP-major order.
-  for (std::size_t snp = 0; snp < p.x.size(); ++snp) {
-    for (int draw = 0; draw < nboot; ++draw) {
-      exp_z[static_cast<std::size_t>(draw) * p.x.size() + snp] = R::rnorm(0.0, 1.0);
-    }
-  }
-  for (std::size_t snp = 0; snp < p.x.size(); ++snp) {
-    for (int draw = 0; draw < nboot; ++draw) {
-      out_z[static_cast<std::size_t>(draw) * p.x.size() + snp] = R::rnorm(0.0, 1.0);
-    }
-  }
-  for (int draw = 0; draw < nboot; ++draw) {
-    std::size_t ratio_index = 0;
-    for (std::size_t snp = 0; snp < p.x.size(); ++snp) {
-      const double exp_draw = p.x[snp] + p.sx[snp] * exp_z[static_cast<std::size_t>(draw) * p.x.size() + snp];
-      const double out_draw = p.y[snp] + p.sy[snp] * out_z[static_cast<std::size_t>(draw) * p.x.size() + snp];
+  auto draw_stream = [&](bool penalised) {
+    if (penalised) {
+      p.penalised_bootstrap.resize(static_cast<std::size_t>(nboot) * n);
+    } else {
+      if (needs_median) p.bootstrap.resize(static_cast<std::size_t>(nboot) * n);
       if (needs_egger) {
-        p.egger_x_bootstrap[static_cast<std::size_t>(draw) * p.x.size() + snp] = exp_draw;
-        p.egger_y_bootstrap[static_cast<std::size_t>(draw) * p.x.size() + snp] = out_draw;
+        p.egger_x_bootstrap.resize(static_cast<std::size_t>(nboot) * p.x.size());
+        p.egger_y_bootstrap.resize(static_cast<std::size_t>(nboot) * p.x.size());
       }
-      if (p.x[snp] == 0.0) continue;
-      if (needs_median) {
-        p.bootstrap[static_cast<std::size_t>(draw) * n + ratio_index] =
-          exp_draw == 0.0 ? NA_VALUE : out_draw / exp_draw;
-      }
-      ++ratio_index;
     }
-  }
+    std::vector<double> exp_z(static_cast<std::size_t>(nboot) * p.x.size());
+    std::vector<double> out_z(static_cast<std::size_t>(nboot) * p.x.size());
+    // R fills matrix(rnorm(nboot*n, mean=rep(x, each=nboot)), nrow=nboot)
+    // column by column, so consume each RNG stream in SNP-major order.
+    for (std::size_t snp = 0; snp < p.x.size(); ++snp) {
+      for (int draw = 0; draw < nboot; ++draw) {
+        exp_z[static_cast<std::size_t>(draw) * p.x.size() + snp] = R::rnorm(0.0, 1.0);
+      }
+    }
+    for (std::size_t snp = 0; snp < p.x.size(); ++snp) {
+      for (int draw = 0; draw < nboot; ++draw) {
+        out_z[static_cast<std::size_t>(draw) * p.x.size() + snp] = R::rnorm(0.0, 1.0);
+      }
+    }
+    for (int draw = 0; draw < nboot; ++draw) {
+      std::size_t ratio_index = 0;
+      for (std::size_t snp = 0; snp < p.x.size(); ++snp) {
+        const double exp_draw = p.x[snp] + p.sx[snp] * exp_z[static_cast<std::size_t>(draw) * p.x.size() + snp];
+        const double out_draw = p.y[snp] + p.sy[snp] * out_z[static_cast<std::size_t>(draw) * p.x.size() + snp];
+        if (!penalised && needs_egger) {
+          p.egger_x_bootstrap[static_cast<std::size_t>(draw) * p.x.size() + snp] = exp_draw;
+          p.egger_y_bootstrap[static_cast<std::size_t>(draw) * p.x.size() + snp] = out_draw;
+        }
+        if (p.x[snp] == 0.0) continue;
+        if (penalised) {
+          p.penalised_bootstrap[static_cast<std::size_t>(draw) * n + ratio_index] =
+            exp_draw == 0.0 ? NA_VALUE : out_draw / exp_draw;
+        } else if (needs_median) {
+          p.bootstrap[static_cast<std::size_t>(draw) * n + ratio_index] =
+            exp_draw == 0.0 ? NA_VALUE : out_draw / exp_draw;
+        }
+        ++ratio_index;
+      }
+    }
+  };
+  // Native penalised weighted median first calls weighted median (and consumes
+  // its full bootstrap stream), then bootstraps the penalised weights again.
+  draw_stream(false);
+  if (needs_penalised) draw_stream(true);
 }
 
 void make_mode_bootstrap(Prepared& p, int nboot) {
@@ -876,18 +926,24 @@ std::vector<Result> compute_pair(Prepared p,
                                  const std::vector<std::string>& methods,
                                  int nboot, SEXP seed,
                                  bool prepare_bootstrap = true,
-                                 double phi = 1.0) {
+                                 double phi = 1.0,
+                                 double penk = 20.0) {
   prepare_ratios(p);
   if (prepare_bootstrap) {
     bool needs_median = false;
+    bool needs_penalised = false;
     bool needs_mode = false;
     bool needs_egger = false;
     for (const std::string& method : methods) {
-      needs_median = needs_median || method == "simple_median" || method == "weighted_median";
+      needs_median = needs_median || method == "simple_median" ||
+                     method == "weighted_median";
+      needs_penalised = needs_penalised || method == "penalised_weighted_median";
       needs_mode = needs_mode || method == "simple_mode" || method == "weighted_mode";
       needs_egger = needs_egger || method == "egger_bootstrap";
     }
-    if (needs_median || needs_egger) make_bootstrap(p, nboot, seed, needs_median, needs_egger);
+    if (needs_median || needs_egger || needs_penalised) {
+      make_bootstrap(p, nboot, seed, needs_median, needs_egger, needs_penalised);
+    }
     if (needs_mode) make_mode_bootstrap(p, nboot);
   }
   std::vector<Result> result;
@@ -915,6 +971,8 @@ std::vector<Result> compute_pair(Prepared p,
       result[i] = compute_egger_bootstrap(p, nboot);
     } else if (method == "simple_median" || method == "weighted_median") {
       result[i] = compute_median(p, method, nboot, method == "weighted_median");
+    } else if (method == "penalised_weighted_median") {
+      result[i] = compute_penalised_median(p, nboot, penk);
     } else if (method == "simple_mode" || method == "weighted_mode") {
       result[i] = compute_mode(p, method, nboot, phi);
     } else if (method == "wald_ratio") {
@@ -956,7 +1014,7 @@ Rcpp::List result_to_list(const Result& result) {
 std::vector<std::string> parse_methods(Rcpp::CharacterVector methods) {
   const std::vector<std::string> allowed = {
     "ivw", "ivw_fe", "ivw_mre", "egger", "egger_bootstrap", "uwr", "sign",
-    "simple_median", "weighted_median",
+    "simple_median", "weighted_median", "penalised_weighted_median",
     "simple_mode", "weighted_mode", "wald_ratio"
   };
   std::vector<std::string> parsed;
@@ -1014,7 +1072,9 @@ struct GridData {
   int snp_count = 0;
   std::vector<double> exp_beta, out_beta, exp_se, out_se;
   std::vector<double> exp_draws;
-  std::vector<double> exp_inverse, out_draws, mode_z;
+  std::vector<double> exp_inverse, out_draws;
+  std::vector<double> exp_inverse_penalised, out_draws_penalised;
+  std::vector<double> mode_z;
 };
 
 bool only_ivw_methods(const std::vector<std::string>& methods) {
@@ -1170,13 +1230,13 @@ GridData copy_grid(Rcpp::NumericMatrix exp_beta, Rcpp::NumericMatrix out_beta,
 
 void fill_grid_bootstrap_layout(GridData& grid, int nboot, SEXP seed,
                                  bool needs_median, bool needs_mode,
-                                 bool needs_egger) {
-  if (nboot <= 0 || (!needs_median && !needs_mode && !needs_egger)) return;
+                                 bool needs_egger, bool needs_penalised) {
+  if (nboot <= 0 || (!needs_median && !needs_mode && !needs_egger && !needs_penalised)) return;
   (void) seed;
   const std::size_t n = static_cast<std::size_t>(grid.snp_count);
   const std::size_t block = static_cast<std::size_t>(nboot) * n;
 
-  if (needs_median || needs_egger) {
+  if (needs_median || needs_egger || needs_penalised) {
     if (needs_median) grid.exp_inverse.resize(static_cast<std::size_t>(grid.exposure_count) * block);
     if (needs_egger) grid.exp_draws.resize(static_cast<std::size_t>(grid.exposure_count) * block);
     grid.out_draws.resize(static_cast<std::size_t>(grid.outcome_count) * block);
@@ -1210,6 +1270,44 @@ void fill_grid_bootstrap_layout(GridData& grid, int nboot, SEXP seed,
                                    static_cast<std::size_t>(draw) * n;
         for (std::size_t snp = 0; snp < n; ++snp) {
           grid.out_draws[target + snp] = grid.out_beta[source + snp] +
+            grid.out_se[source + snp] * zo[static_cast<std::size_t>(draw) * n + snp];
+        }
+      }
+    }
+  }
+
+  if (needs_penalised) {
+    grid.exp_inverse_penalised.resize(static_cast<std::size_t>(grid.exposure_count) * block);
+    grid.out_draws_penalised.resize(static_cast<std::size_t>(grid.outcome_count) * block);
+    std::vector<double> ze(static_cast<std::size_t>(nboot) * n);
+    std::vector<double> zo(static_cast<std::size_t>(nboot) * n);
+    for (std::size_t snp = 0; snp < n; ++snp) {
+      for (int draw = 0; draw < nboot; ++draw) {
+        ze[static_cast<std::size_t>(draw) * n + snp] = R::rnorm(0.0, 1.0);
+      }
+    }
+    for (std::size_t snp = 0; snp < n; ++snp) {
+      for (int draw = 0; draw < nboot; ++draw) {
+        zo[static_cast<std::size_t>(draw) * n + snp] = R::rnorm(0.0, 1.0);
+      }
+    }
+    for (int draw = 0; draw < nboot; ++draw) {
+      for (int exposure = 0; exposure < grid.exposure_count; ++exposure) {
+        const std::size_t source = static_cast<std::size_t>(exposure) * n;
+        const std::size_t target = static_cast<std::size_t>(exposure) * block +
+                                   static_cast<std::size_t>(draw) * n;
+        for (std::size_t snp = 0; snp < n; ++snp) {
+          const double value = grid.exp_beta[source + snp] +
+            grid.exp_se[source + snp] * ze[static_cast<std::size_t>(draw) * n + snp];
+          grid.exp_inverse_penalised[target + snp] = value == 0.0 ? NA_VALUE : 1.0 / value;
+        }
+      }
+      for (int outcome = 0; outcome < grid.outcome_count; ++outcome) {
+        const std::size_t source = static_cast<std::size_t>(outcome) * n;
+        const std::size_t target = static_cast<std::size_t>(outcome) * block +
+                                   static_cast<std::size_t>(draw) * n;
+        for (std::size_t snp = 0; snp < n; ++snp) {
+          grid.out_draws_penalised[target + snp] = grid.out_beta[source + snp] +
             grid.out_se[source + snp] * zo[static_cast<std::size_t>(draw) * n + snp];
         }
       }
@@ -1267,6 +1365,23 @@ Prepared pair_from_grid(const GridData& grid, int exposure, int outcome,
       }
     }
   }
+  if (nboot > 0 && p.ratio.size() >= 3 && !grid.exp_inverse_penalised.empty()) {
+    const std::size_t block = static_cast<std::size_t>(nboot) * n;
+    const std::size_t ratio_count = p.ratio.size();
+    p.penalised_bootstrap.resize(static_cast<std::size_t>(nboot) * ratio_count);
+    for (int draw = 0; draw < nboot; ++draw) {
+      const std::size_t raw = static_cast<std::size_t>(draw) * n;
+      const std::size_t exp_raw = static_cast<std::size_t>(exposure) * block + raw;
+      const std::size_t out_raw = static_cast<std::size_t>(outcome) * block + raw;
+      std::size_t ratio_index = 0;
+      for (std::size_t snp = 0; snp < n; ++snp) {
+        if (p.x[snp] == 0.0) continue;
+        p.penalised_bootstrap[static_cast<std::size_t>(draw) * ratio_count + ratio_index] =
+          grid.out_draws_penalised[out_raw + snp] * grid.exp_inverse_penalised[exp_raw + snp];
+        ++ratio_index;
+      }
+    }
+  }
   if (nboot > 0 && p.ratio.size() >= 3 && !grid.mode_z.empty()) {
     const std::size_t ratio_count = p.ratio.size();
     p.mode_bootstrap.resize(static_cast<std::size_t>(nboot) * ratio_count);
@@ -1306,12 +1421,14 @@ Rcpp::List fastmr_run_native(Rcpp::NumericVector exposure_beta,
                              int nboot = 1000,
                              SEXP seed = R_NilValue,
                              int threads = 1,
-                             double phi = 1.0) {
+                             double phi = 1.0,
+                             double penk = 20.0) {
   Rcpp::RNGScope scope;
   validate_controls(nboot, threads, phi);
+  if (!std::isfinite(penk) || penk <= 0.0) Rcpp::stop("penk must be positive and finite");
   const std::vector<std::string> parsed_methods = parse_methods(methods);
   Prepared prepared = one_pair_from_vectors(exposure_beta, outcome_beta, exposure_se, outcome_se);
-  return results_to_list(compute_pair(std::move(prepared), parsed_methods, nboot, seed, true, phi));
+  return results_to_list(compute_pair(std::move(prepared), parsed_methods, nboot, seed, true, phi, penk));
 }
 
 // [[Rcpp::export]]
@@ -1323,9 +1440,11 @@ Rcpp::List fastmr_grid_native(Rcpp::NumericMatrix exposure_beta,
                               int nboot = 1000,
                               SEXP seed = R_NilValue,
                               int threads = 1,
-                              double phi = 1.0) {
+                              double phi = 1.0,
+                              double penk = 20.0) {
   Rcpp::RNGScope scope;
   validate_controls(nboot, threads, phi);
+  if (!std::isfinite(penk) || penk <= 0.0) Rcpp::stop("penk must be positive and finite");
   const std::vector<std::string> parsed_methods = parse_methods(methods);
   GridData grid = copy_grid(exposure_beta, outcome_beta, exposure_se, outcome_se);
   const std::size_t pair_count = static_cast<std::size_t>(grid.exposure_count) *
@@ -1337,14 +1456,17 @@ Rcpp::List fastmr_grid_native(Rcpp::NumericMatrix exposure_beta,
     return output;
   }
   bool needs_median = false;
+  bool needs_penalised = false;
   bool needs_mode = false;
   bool needs_egger = false;
   for (const std::string& method : parsed_methods) {
-    needs_median = needs_median || method == "simple_median" || method == "weighted_median";
+    needs_median = needs_median || method == "simple_median" ||
+                   method == "weighted_median";
+    needs_penalised = needs_penalised || method == "penalised_weighted_median";
     needs_mode = needs_mode || method == "simple_mode" || method == "weighted_mode";
     needs_egger = needs_egger || method == "egger_bootstrap";
   }
-  fill_grid_bootstrap_layout(grid, nboot, seed, needs_median, needs_mode, needs_egger);
+  fill_grid_bootstrap_layout(grid, nboot, seed, needs_median, needs_mode, needs_egger, needs_penalised);
   std::vector<std::vector<Result>> results(pair_count);
   const int thread_count = bounded_threads(threads, pair_count);
 
@@ -1355,14 +1477,14 @@ Rcpp::List fastmr_grid_native(Rcpp::NumericMatrix exposure_beta,
     const int outcome = index % grid.outcome_count;
     results[static_cast<std::size_t>(index)] = compute_pair(
       pair_from_grid(grid, exposure, outcome, nboot), parsed_methods, nboot,
-      R_NilValue, false, phi);
+      R_NilValue, false, phi, penk);
   }
 #else
   if (thread_count == 1) {
     for (std::size_t index = 0; index < pair_count; ++index) {
       const int exposure = static_cast<int>(index / static_cast<std::size_t>(grid.outcome_count));
       const int outcome = static_cast<int>(index % static_cast<std::size_t>(grid.outcome_count));
-      results[index] = compute_pair(pair_from_grid(grid, exposure, outcome, nboot), parsed_methods, nboot, R_NilValue, false, phi);
+      results[index] = compute_pair(pair_from_grid(grid, exposure, outcome, nboot), parsed_methods, nboot, R_NilValue, false, phi, penk);
     }
   } else {
     std::atomic<std::size_t> next(0);
@@ -1375,7 +1497,7 @@ Rcpp::List fastmr_grid_native(Rcpp::NumericMatrix exposure_beta,
           if (index >= pair_count) break;
           const int exposure = static_cast<int>(index / static_cast<std::size_t>(grid.outcome_count));
           const int outcome = static_cast<int>(index % static_cast<std::size_t>(grid.outcome_count));
-          results[index] = compute_pair(pair_from_grid(grid, exposure, outcome, nboot), parsed_methods, nboot, R_NilValue, false, phi);
+          results[index] = compute_pair(pair_from_grid(grid, exposure, outcome, nboot), parsed_methods, nboot, R_NilValue, false, phi, penk);
         }
       });
     }

@@ -10,7 +10,8 @@
 #'   ratio bootstrap layout per pair.
 #' @param threads Maximum native worker count. It is most useful for
 #'   [fast_mr_grid()]; single-pair calls remain bounded and deterministic.
-#' @param ... Optional `phi` bandwidth multiplier for mode methods.
+#' @param ... Optional `phi` bandwidth multiplier for mode methods and `penk`
+#'   penalty multiplier for penalised weighted median (default 20).
 #' @return A tidy data frame using TwoSampleMR-compatible result columns.
 #' @export
 fast_mr <- function(data,
@@ -23,10 +24,12 @@ fast_mr <- function(data,
   controls <- fastmr_validate_controls(nboot, seed, threads)
   methods <- fastmr_normalize_methods(methods)
   dots <- list(...)
-  unknown_dots <- setdiff(names(dots), "phi")
+  unknown_dots <- setdiff(names(dots), c("phi", "penk"))
   if (length(unknown_dots)) stop("unknown option(s): ", paste(unknown_dots, collapse = ", "), call. = FALSE)
   phi <- if (is.null(dots$phi)) 1 else dots$phi
   if (length(phi) != 1L || !is.finite(phi) || phi <= 0) stop("phi must be positive and finite", call. = FALSE)
+  penk <- if (is.null(dots$penk)) 20 else dots$penk
+  if (length(penk) != 1L || !is.finite(penk) || penk <= 0) stop("penk must be positive and finite", call. = FALSE)
   prepared <- fastmr_prepare_vectors(data)
   n <- nrow(prepared)
   id.exp <- if ("id.exposure" %in% names(data)) as.character(data$id.exposure) else rep("", n)
@@ -48,7 +51,7 @@ fast_mr <- function(data,
         exposure_se = prepared[["se.exposure"]][index],
         outcome_se = prepared[["se.outcome"]][index],
         methods = methods, nboot = controls[["nboot"]], seed = NULL,
-        threads = controls[["threads"]], phi = phi
+        threads = controls[["threads"]], phi = phi, penk = penk
       ),
       controls[["seed"]]
     )
@@ -74,7 +77,8 @@ fast_mr <- function(data,
 #' @param nboot Number of bootstrap draws.
 #' @param seed Optional integer seed.
 #' @param threads Maximum native worker count.
-#' @param ... Optional `phi` bandwidth multiplier for mode methods.
+#' @param ... Optional `phi` bandwidth multiplier for mode methods and `penk`
+#'   penalty multiplier for penalised weighted median (default 20).
 #' @return A tidy data frame with one row per method and grid pair.
 #' @export
 fast_mr_grid <- function(exposure_beta, outcome_beta, exposure_se, outcome_se,
@@ -83,10 +87,12 @@ fast_mr_grid <- function(exposure_beta, outcome_beta, exposure_se, outcome_se,
   controls <- fastmr_validate_controls(nboot, seed, threads)
   methods <- fastmr_normalize_methods(methods)
   dots <- list(...)
-  unknown_dots <- setdiff(names(dots), "phi")
+  unknown_dots <- setdiff(names(dots), c("phi", "penk"))
   if (length(unknown_dots)) stop("unknown option(s): ", paste(unknown_dots, collapse = ", "), call. = FALSE)
   phi <- if (is.null(dots$phi)) 1 else dots$phi
   if (length(phi) != 1L || !is.finite(phi) || phi <= 0) stop("phi must be positive and finite", call. = FALSE)
+  penk <- if (is.null(dots$penk)) 20 else dots$penk
+  if (length(penk) != 1L || !is.finite(penk) || penk <= 0) stop("penk must be positive and finite", call. = FALSE)
   arrays <- Map(fastmr_matrix_numeric,
                 list(exposure_beta, outcome_beta, exposure_se, outcome_se),
                 c("exposure_beta", "outcome_beta", "exposure_se", "outcome_se"))
@@ -106,7 +112,7 @@ fast_mr_grid <- function(exposure_beta, outcome_beta, exposure_se, outcome_se,
       exposure_se = arrays[["exposure_se"]],
       outcome_se = arrays[["outcome_se"]],
       methods = methods, nboot = controls[["nboot"]], seed = NULL,
-      threads = controls[["threads"]], phi = phi
+      threads = controls[["threads"]], phi = phi, penk = penk
     ),
     controls[["seed"]]
   )

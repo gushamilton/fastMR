@@ -24,7 +24,8 @@ modified.
   Grid result tidying is also flattened into one data-frame construction rather
   than one data frame per pair.
 * Exact default methods: IVW, fixed-effects IVW, multiplicative random-effects
-  IVW, MR-Egger, weighted median, simple mode, weighted mode, and Wald ratio.
+  IVW, MR-Egger, weighted median, penalised weighted median, simple mode,
+  weighted mode, and Wald ratio.
   The mode implementation matches native R `stats::density` semantics with the
   same weighted binning, extended FFT range, interpolation, and 512-point grid;
   no approximate mode estimate is routed through the default API. Its exact
@@ -199,6 +200,18 @@ shapes. Speedups were 73.58-80.66x at five fastMR threads. Point estimates
 matched to below `2.7e-16`; bootstrap SE and p-value differences are expected
 Monte Carlo differences because native runs independent per-pair streams while
 fastMR shares the grid bootstrap layout.
+
+Penalised weighted median now follows native TwoSampleMR 0.7.9 semantics,
+including its chi-square penalty, configurable `penk` multiplier, and two
+independent exposure/outcome bootstrap streams. The direct 12-SNP parity gate
+matched beta, SE, and p-value to below `3.5e-18`. The five-shape native sweep
+is recorded in `outputs/native_tsmr_penalised_median_benchmark.csv` and `.md`:
+speedups were 122.5-159.5x at five fastMR threads, with maximum beta deltas
+below `6.6e-19`. Grid bootstrap SE differences are Monte Carlo differences
+from the native per-pair streams. The repeated adversarial gate in
+`outputs/adversarial_penalised_median.csv` covered 300 randomized, zero,
+near-zero, negative, duplicate-ratio, high-SE, and three-SNP panels; serial
+versus five-thread results were bitwise identical with zero failures.
 
 ## Remaining limitations
 

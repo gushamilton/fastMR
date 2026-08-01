@@ -29,7 +29,7 @@ ratio bootstrap layout per pair.}
 \item{threads}{Maximum native worker count. It is most useful for
 \code{\link[=fast_mr_grid]{fast_mr_grid()}}; single-pair calls remain bounded and deterministic.}
 
-\item{...}{Optional \code{phi} bandwidth multiplier for mode methods.}
+\item{...}{Optional \code{phi} bandwidth multiplier for mode methods and \code{penk} penalty multiplier for penalised weighted median (default 20).}
 }
 \value{
 A tidy data frame using TwoSampleMR-compatible result columns.

@@ -6,9 +6,9 @@ registered C++17 backend for the shared exposure/outcome grid that dominates
 large MR scans.
 
 The first release includes IVW (under-dispersion-corrected, fixed-effects, and
-multiplicative random-effects variants), MR-Egger, MR-Egger bootstrap, simple
-and weighted median, simple mode, weighted mode, unweighted regression, sign
-concordance, Wald ratio, and basic multivariable IVW. The
+multiplicative random-effects variants), MR-Egger, MR-Egger bootstrap, simple,
+weighted, and penalised weighted median, simple mode, weighted mode, unweighted
+regression, sign concordance, Wald ratio, and basic multivariable IVW. The
 default methods are exact; there is no approximate mode estimator in the
 default API.
 
@@ -58,6 +58,9 @@ mixed-method path remains available when other estimators are requested.
 The exact simple/weighted mode kernel also reuses its FFT workspaces and plan
 across bootstrap draws. This reduces allocation and setup cost while retaining
 the native density-grid semantics.
+
+Penalised weighted median follows TwoSampleMR's chi-square down-weighting and
+two-stream bootstrap semantics, with `penk = 20` by default.
 
 For a local preprocessing path, harmonise alleles without a network dependency
 and then clump with either a supplied LD matrix or a local PLINK reference:

@@ -11,8 +11,8 @@ Rcpp::Rostream<false>& Rcpp::Rcerr = Rcpp::Rcpp_cerr_get();
 #endif
 
 // fastmr_run_native
-Rcpp::List fastmr_run_native(Rcpp::NumericVector exposure_beta, Rcpp::NumericVector outcome_beta, Rcpp::NumericVector exposure_se, Rcpp::NumericVector outcome_se, Rcpp::CharacterVector methods, int nboot, SEXP seed, int threads, double phi);
-RcppExport SEXP _fastMR_fastmr_run_native(SEXP exposure_betaSEXP, SEXP outcome_betaSEXP, SEXP exposure_seSEXP, SEXP outcome_seSEXP, SEXP methodsSEXP, SEXP nbootSEXP, SEXP seedSEXP, SEXP threadsSEXP, SEXP phiSEXP) {
+Rcpp::List fastmr_run_native(Rcpp::NumericVector exposure_beta, Rcpp::NumericVector outcome_beta, Rcpp::NumericVector exposure_se, Rcpp::NumericVector outcome_se, Rcpp::CharacterVector methods, int nboot, SEXP seed, int threads, double phi, double penk);
+RcppExport SEXP _fastMR_fastmr_run_native(SEXP exposure_betaSEXP, SEXP outcome_betaSEXP, SEXP exposure_seSEXP, SEXP outcome_seSEXP, SEXP methodsSEXP, SEXP nbootSEXP, SEXP seedSEXP, SEXP threadsSEXP, SEXP phiSEXP, SEXP penkSEXP) {
 BEGIN_RCPP
     Rcpp::RObject rcpp_result_gen;
     Rcpp::RNGScope rcpp_rngScope_gen;
@@ -25,13 +25,14 @@ BEGIN_RCPP
     Rcpp::traits::input_parameter< SEXP >::type seed(seedSEXP);
     Rcpp::traits::input_parameter< int >::type threads(threadsSEXP);
     Rcpp::traits::input_parameter< double >::type phi(phiSEXP);
-    rcpp_result_gen = Rcpp::wrap(fastmr_run_native(exposure_beta, outcome_beta, exposure_se, outcome_se, methods, nboot, seed, threads, phi));
+    Rcpp::traits::input_parameter< double >::type penk(penkSEXP);
+    rcpp_result_gen = Rcpp::wrap(fastmr_run_native(exposure_beta, outcome_beta, exposure_se, outcome_se, methods, nboot, seed, threads, phi, penk));
     return rcpp_result_gen;
 END_RCPP
 }
 // fastmr_grid_native
-Rcpp::List fastmr_grid_native(Rcpp::NumericMatrix exposure_beta, Rcpp::NumericMatrix outcome_beta, Rcpp::NumericMatrix exposure_se, Rcpp::NumericMatrix outcome_se, Rcpp::CharacterVector methods, int nboot, SEXP seed, int threads, double phi);
-RcppExport SEXP _fastMR_fastmr_grid_native(SEXP exposure_betaSEXP, SEXP outcome_betaSEXP, SEXP exposure_seSEXP, SEXP outcome_seSEXP, SEXP methodsSEXP, SEXP nbootSEXP, SEXP seedSEXP, SEXP threadsSEXP, SEXP phiSEXP) {
+Rcpp::List fastmr_grid_native(Rcpp::NumericMatrix exposure_beta, Rcpp::NumericMatrix outcome_beta, Rcpp::NumericMatrix exposure_se, Rcpp::NumericMatrix outcome_se, Rcpp::CharacterVector methods, int nboot, SEXP seed, int threads, double phi, double penk);
+RcppExport SEXP _fastMR_fastmr_grid_native(SEXP exposure_betaSEXP, SEXP outcome_betaSEXP, SEXP exposure_seSEXP, SEXP outcome_seSEXP, SEXP methodsSEXP, SEXP nbootSEXP, SEXP seedSEXP, SEXP threadsSEXP, SEXP phiSEXP, SEXP penkSEXP) {
 BEGIN_RCPP
     Rcpp::RObject rcpp_result_gen;
     Rcpp::RNGScope rcpp_rngScope_gen;
@@ -44,14 +45,15 @@ BEGIN_RCPP
     Rcpp::traits::input_parameter< SEXP >::type seed(seedSEXP);
     Rcpp::traits::input_parameter< int >::type threads(threadsSEXP);
     Rcpp::traits::input_parameter< double >::type phi(phiSEXP);
-    rcpp_result_gen = Rcpp::wrap(fastmr_grid_native(exposure_beta, outcome_beta, exposure_se, outcome_se, methods, nboot, seed, threads, phi));
+    Rcpp::traits::input_parameter< double >::type penk(penkSEXP);
+    rcpp_result_gen = Rcpp::wrap(fastmr_grid_native(exposure_beta, outcome_beta, exposure_se, outcome_se, methods, nboot, seed, threads, phi, penk));
     return rcpp_result_gen;
 END_RCPP
 }
 
 static const R_CallMethodDef CallEntries[] = {
-    {"_fastMR_fastmr_run_native", (DL_FUNC) &_fastMR_fastmr_run_native, 9},
-    {"_fastMR_fastmr_grid_native", (DL_FUNC) &_fastMR_fastmr_grid_native, 9},
+    {"_fastMR_fastmr_run_native", (DL_FUNC) &_fastMR_fastmr_run_native, 10},
+    {"_fastMR_fastmr_grid_native", (DL_FUNC) &_fastMR_fastmr_grid_native, 10},
     {NULL, NULL, 0}
 };
 
