@@ -10,6 +10,9 @@
 * Mixed-method grids now source all IVW, fixed-effects IVW, and multiplicative
   random-effects IVW rows from the BLAS batch, avoiding a second cross-product
   pass when IVW is requested alongside other methods.
+* Added large-grid scaling coverage: the raw compact IVW kernel processes a
+  1,000x1,000 grid (one million pairs, 82 SNPs) in about 0.102 seconds on the
+  Mac mini, or about 9.8 million pairs per second before tidy-frame allocation.
 * Added a compact all-IVW grid return path after the BLAS cross-products. On
   the Mac mini, the 50x50 one-method grid averages 0.00088 seconds over 100
   warm calls, 1,492x faster than the measured pre-BLAS scalar path; native

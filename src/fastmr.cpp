@@ -5,11 +5,9 @@
 #include <atomic>
 #include <cmath>
 #include <complex>
-#include <cstdint>
 #include <limits>
 #include <memory>
 #include <numeric>
-#include <random>
 #include <string>
 #include <thread>
 #include <utility>
@@ -89,16 +87,6 @@ double mad(const std::vector<double>& values) {
   for (double value : values) deviations.push_back(std::abs(value - center));
   const double result = median_inplace(deviations);
   return 1.4826 * result;
-}
-
-double weighted_median_point_ptr(const double* values, const double* weights,
-                                 std::size_t count, std::vector<std::size_t>& order);
-
-double weighted_median_point(const std::vector<double>& values,
-                             const std::vector<double>& weights) {
-  if (values.empty() || values.size() != weights.size()) return NA_VALUE;
-  std::vector<std::size_t> order;
-  return weighted_median_point_ptr(values.data(), weights.data(), values.size(), order);
 }
 
 double weighted_median_ordered(const double* values, const double* weights,
@@ -824,7 +812,8 @@ Result compute_penalised_median(const Prepared& p, int nboot, double penk) {
     const double penalty = R::pchisq(statistic, 1.0, false, false);
     penalised_weights[i] = weights[i] * std::min(1.0, penalty * penk);
   }
-  const double beta = weighted_median_point(p.ratio, penalised_weights);
+  const double beta = weighted_median_point_ptr(
+    p.ratio.data(), penalised_weights.data(), p.ratio.size(), order);
   double se = NA_VALUE;
   const std::vector<double>& bootstrap = p.penalised_bootstrap.empty()
     ? p.bootstrap : p.penalised_bootstrap;

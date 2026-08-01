@@ -32,9 +32,11 @@ fast_mr_multivariable_ivw <- function(exposure_beta, outcome_beta, outcome_se,
     if (!all(dim(P) == dim(X))) stop("exposure_pval must match exposure_beta", call. = FALSE)
   }
   p <- ncol(X)
+  base_keep <- is.finite(y) & is.finite(sy) & sy > 0 &
+    apply(X, 1L, function(row) all(is.finite(row)))
   result <- vector("list", p)
   for (j in seq_len(p)) {
-    keep <- is.finite(y) & is.finite(sy) & sy > 0 & apply(X, 1L, function(row) all(is.finite(row)))
+    keep <- base_keep
     if (!is.null(P)) keep <- keep & is.finite(P[, j]) & P[, j] < pval_threshold
     n <- sum(keep)
     beta <- rep(NA_real_, p)

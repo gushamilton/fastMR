@@ -126,6 +126,14 @@ and all-zero exposure rows. The maximum direct-versus-scalar beta/SE/p-value
 delta was `2.08e-14`, with zero scalar-gate failures; serial-versus-five-thread
 results were bitwise identical in all 100 panels.
 
+The large-grid scaling artifact in `outputs/ivw_large_grid_scaling.csv` and
+`.md` measures the compact native path at 50x50 through 1,000x1,000 pairs.
+The largest run contains one million pairs and completes in about 0.102 seconds
+(about 9.8 million pairs/second in the repeated warm run) for the 82-SNP
+fixture. It intentionally
+reports the compact native result before constructing the much larger tidy R
+data frame, so compute throughput and output materialization remain distinct.
+
 The latest exact-mode benchmark is recorded in
 `outputs/mode_optimization_benchmark.csv` and `.md`: cached FFT plans,
 per-stage twiddle factors, reusable workspaces, and `nth_element` median
