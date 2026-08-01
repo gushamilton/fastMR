@@ -1547,6 +1547,82 @@ Rcpp::List results_to_list(const std::vector<Result>& results) {
   return output;
 }
 
+Rcpp::List results_to_compact_grid(const std::vector<std::vector<Result>>& results,
+                                   const std::vector<std::string>& methods) {
+  const std::size_t pair_count = results.size();
+  const int method_count = static_cast<int>(methods.size());
+  Rcpp::NumericMatrix nsnp(method_count, pair_count);
+  Rcpp::NumericMatrix beta(method_count, pair_count);
+  Rcpp::NumericMatrix se(method_count, pair_count);
+  Rcpp::NumericMatrix pval(method_count, pair_count);
+  Rcpp::NumericMatrix ratio_se_mean(method_count, pair_count);
+  Rcpp::NumericMatrix bootstrap(method_count, pair_count);
+  Rcpp::NumericMatrix phi(method_count, pair_count);
+  Rcpp::NumericMatrix q(method_count, pair_count);
+  Rcpp::NumericMatrix q_df(method_count, pair_count);
+  Rcpp::NumericMatrix q_pval(method_count, pair_count);
+  Rcpp::NumericMatrix sigma(method_count, pair_count);
+  Rcpp::NumericMatrix intercept(method_count, pair_count);
+  Rcpp::NumericMatrix intercept_se(method_count, pair_count);
+  Rcpp::NumericMatrix intercept_pval(method_count, pair_count);
+  Rcpp::NumericMatrix flipped(method_count, pair_count);
+  Rcpp::NumericMatrix se_exposure_mean(method_count, pair_count);
+  const std::vector<Rcpp::NumericMatrix*> fields = {
+    &nsnp, &beta, &se, &pval, &ratio_se_mean, &bootstrap, &phi, &q, &q_df,
+    &q_pval, &sigma, &intercept, &intercept_se, &intercept_pval, &flipped,
+    &se_exposure_mean
+  };
+  for (Rcpp::NumericMatrix* field : fields) std::fill(field->begin(), field->end(), NA_VALUE);
+  for (std::size_t pair = 0; pair < pair_count; ++pair) {
+    for (int method_index = 0; method_index < method_count; ++method_index) {
+      const Result& result = results[pair][static_cast<std::size_t>(method_index)];
+      nsnp(method_index, pair) = result.n;
+      beta(method_index, pair) = finite_or_na(result.beta);
+      se(method_index, pair) = finite_or_na(result.se);
+      pval(method_index, pair) = finite_or_na(result.pval);
+      if (result.ratio_se_mean) ratio_se_mean(method_index, pair) = finite_or_na(result.ratio_se_mean_value);
+      if (result.bootstrap) bootstrap(method_index, pair) = result.bootstrap_value;
+      if (result.phi) phi(method_index, pair) = finite_or_na(result.phi_value);
+      if (result.q) {
+        q(method_index, pair) = finite_or_na(result.q_value);
+        q_df(method_index, pair) = result.q_df;
+        q_pval(method_index, pair) = finite_or_na(result.q_pval);
+      }
+      if (result.sigma) sigma(method_index, pair) = finite_or_na(result.sigma_value);
+      if (result.intercept) {
+        intercept(method_index, pair) = finite_or_na(result.intercept_value);
+        intercept_se(method_index, pair) = finite_or_na(result.intercept_se);
+        intercept_pval(method_index, pair) = finite_or_na(result.intercept_pval);
+        flipped(method_index, pair) = result.flipped;
+        se_exposure_mean(method_index, pair) = finite_or_na(result.se_exposure_mean);
+      }
+    }
+  }
+  Rcpp::CharacterVector method_codes(method_count);
+  for (int i = 0; i < method_count; ++i) method_codes[i] = methods[static_cast<std::size_t>(i)];
+  Rcpp::List output = Rcpp::List::create(
+    Rcpp::_["methods"] = method_codes,
+    Rcpp::_["nsnp"] = nsnp,
+    Rcpp::_["beta"] = beta,
+    Rcpp::_["se"] = se,
+    Rcpp::_["pval"] = pval,
+    Rcpp::_["ratio_se_mean"] = ratio_se_mean,
+    Rcpp::_["bootstrap"] = bootstrap,
+    Rcpp::_["phi"] = phi,
+    Rcpp::_["Q"] = q,
+    Rcpp::_["Q_df"] = q_df,
+    Rcpp::_["Q_pval"] = q_pval,
+    Rcpp::_["sigma"] = sigma,
+    Rcpp::_["intercept"] = intercept,
+    Rcpp::_["intercept_se"] = intercept_se,
+    Rcpp::_["intercept_pval"] = intercept_pval,
+    Rcpp::_["flipped"] = flipped,
+    Rcpp::_["se_exposure_mean"] = se_exposure_mean
+  );
+  output.attr("class") = "fastmr_grid_compact";
+  return output;
+}
+
 int bounded_threads(int requested, std::size_t jobs) {
   const int bounded = std::max(1, std::min<int>(requested, static_cast<int>(std::max<std::size_t>(1, jobs))));
   return bounded;
@@ -1644,7 +1720,5 @@ Rcpp::List fastmr_grid_native(Rcpp::NumericMatrix exposure_beta,
   }
 #endif
 
-  Rcpp::List output(pair_count);
-  for (std::size_t i = 0; i < pair_count; ++i) output[i] = results_to_list(results[i]);
-  return output;
+  return results_to_compact_grid(results, parsed_methods);
 }

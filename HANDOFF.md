@@ -23,6 +23,9 @@ modified.
   numerator/denominator cross-products across all exposure/outcome pairs.
   The native result is now a compact method-by-pair numeric layout, avoiding
   one nested result list per pair; R still returns the same tidy data frame.
+* Mixed-method grids use the same compact method-by-pair layout, retaining
+  `Q`, intercept, bootstrap, phi, and other method-specific fields while
+  avoiding per-pair nested Rcpp result lists.
 * Exact default methods: IVW, fixed-effects IVW, multiplicative random-effects
   IVW, MR-Egger, weighted median, penalised weighted median, simple mode,
   weighted mode, and Wald ratio.
@@ -87,7 +90,14 @@ were:
 | Arrow Parquet read | 0.001 | 82,000 rows/s |
 | seeded thread correctness rerun | 5.103 | 490 |
 
-Primary native-R comparison: outputs/native_tsmr_grid_benchmark.csv records 4.945 seconds for fastMR versus 338.919 seconds for the standard TwoSampleMR::mr() workflow on the same 82-row IL6, 2,500-pair, five-method, nboot=100 workload: a 68.538x speedup. The maximum absolute beta difference across all five methods and all 2,500 pairs was 3.47e-18. IVW, Egger, weighted median, simple mode, and weighted mode each matched native TwoSampleMR to machine precision in single-method seeded randomized parity tests (12 panels; maximum combined beta/SE/p-value difference 1.01e-12). The full-grid bootstrap SEs are intentionally independent Monte Carlo draws at nboot=100, so their median absolute differences were 9.28e-05 for weighted median, 8.89e-04 for simple mode, and 2.52e-04 for weighted mode; these are recorded in outputs/native_tsmr_grid_parity.csv rather than misreported as deterministic estimator errors.
+Primary native-R comparison: `outputs/native_tsmr_grid_benchmark.csv` records
+1.580 seconds for fastMR versus 334.830 seconds for the standard
+`TwoSampleMR::mr()` workflow on the same 82-row IL6, 2,500-pair, five-method,
+nboot=100 workload: a 211.9x speedup. The maximum absolute IVW beta
+difference was `3.47e-18`, and all five method point estimates matched native
+TwoSampleMR to machine precision. The full-grid bootstrap SEs are intentionally
+independent Monte Carlo draws at nboot=100; their differences are recorded in
+the parity artifacts rather than treated as deterministic estimator errors.
 
 The 5-thread adversarial gate passed 20 randomized grids plus near-zero, negative, duplicate-ratio, and single-SNP edge panels with a maximum serial-versus-5-thread difference of 0. The native-R mode point audit passed 40 randomized panels with maximum absolute beta difference 1.05e-13. The package test suite passed with one expected Arrow skip, and the built tarball check completed with 0 errors, 0 warnings, and 3 notes.
 

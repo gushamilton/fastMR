@@ -1,5 +1,9 @@
 # fastMR 0.1.0
 
+* Added compact mixed-method grid results, preserving diagnostics while
+  avoiding thousands of nested Rcpp lists. The full 50x50 IL6 five-method
+  benchmark now runs in 1.58 seconds versus 334.83 seconds for native
+  TwoSampleMR (211.9x faster).
 * Added a compact all-IVW grid return path after the BLAS cross-products. On
   the Mac mini, the 50x50 one-method grid averages 0.00088 seconds over 100
   warm calls, 1,492x faster than the measured pre-BLAS scalar path; native

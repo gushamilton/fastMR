@@ -62,6 +62,10 @@ plans, and per-stage twiddle factors across bootstrap draws. This reduces
 allocation and transform setup cost while retaining the native density-grid
 semantics.
 
+Mixed-method grids also use a compact native method-by-pair result layout,
+including method-specific diagnostics, before the final tidy data frame is
+constructed in R.
+
 Penalised weighted median follows TwoSampleMR's chi-square down-weighting and
 two-stream bootstrap semantics, with `penk = 20` by default.
 
