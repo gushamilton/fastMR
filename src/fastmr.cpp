@@ -7,6 +7,7 @@
 #include <complex>
 #include <cstdint>
 #include <limits>
+#include <memory>
 #include <numeric>
 #include <random>
 #include <string>
@@ -66,22 +67,27 @@ double sample_std(const std::vector<double>& values) {
   return std::sqrt(ss / static_cast<double>(values.size() - 1));
 }
 
+double median_inplace(std::vector<double>& values) {
+  if (values.empty()) return NA_VALUE;
+  const std::size_t middle = values.size() / 2;
+  if (values.size() % 2 != 0) {
+    std::nth_element(values.begin(), values.begin() + static_cast<std::ptrdiff_t>(middle), values.end());
+    return values[middle];
+  }
+  std::nth_element(values.begin(), values.begin() + static_cast<std::ptrdiff_t>(middle - 1), values.end());
+  const double lower = values[middle - 1];
+  std::nth_element(values.begin(), values.begin() + static_cast<std::ptrdiff_t>(middle), values.end());
+  return 0.5 * (lower + values[middle]);
+}
+
 double mad(const std::vector<double>& values) {
   if (values.empty()) return NA_VALUE;
   std::vector<double> sorted(values);
-  std::sort(sorted.begin(), sorted.end());
-  const std::size_t middle = sorted.size() / 2;
-  const double center = sorted.size() % 2 == 0
-    ? 0.5 * (sorted[middle - 1] + sorted[middle])
-    : sorted[middle];
+  const double center = median_inplace(sorted);
   std::vector<double> deviations;
   deviations.reserve(values.size());
   for (double value : values) deviations.push_back(std::abs(value - center));
-  std::sort(deviations.begin(), deviations.end());
-  const std::size_t dmiddle = deviations.size() / 2;
-  const double result = deviations.size() % 2 == 0
-    ? 0.5 * (deviations[dmiddle - 1] + deviations[dmiddle])
-    : deviations[dmiddle];
+  const double result = median_inplace(deviations);
   return 1.4826 * result;
 }
 
@@ -134,31 +140,50 @@ double sample_std_ptr(const double* values, std::size_t count) {
 double mad_ptr(const double* values, std::size_t count, std::vector<double>& scratch) {
   if (count == 0) return NA_VALUE;
   scratch.assign(values, values + count);
-  std::sort(scratch.begin(), scratch.end());
-  const std::size_t middle = count / 2;
-  const double center = count % 2 == 0
-    ? 0.5 * (scratch[middle - 1] + scratch[middle])
-    : scratch[middle];
+  const double center = median_inplace(scratch);
   for (std::size_t i = 0; i < count; ++i) scratch[i] = std::abs(values[i] - center);
-  std::sort(scratch.begin(), scratch.end());
-  const std::size_t dmiddle = count / 2;
-  return 1.4826 * (count % 2 == 0
-    ? 0.5 * (scratch[dmiddle - 1] + scratch[dmiddle])
-    : scratch[dmiddle]);
+  return 1.4826 * median_inplace(scratch);
+}
+
+struct FFTPlan {
+  std::size_t n;
+  std::vector<std::size_t> bit_reverse;
+  std::vector<std::complex<double>> forward_steps;
+  std::vector<std::complex<double>> inverse_steps;
+
+  explicit FFTPlan(std::size_t size) : n(size), bit_reverse(size) {
+    for (std::size_t i = 1, j = 0; i < n; ++i) {
+      std::size_t bit = n >> 1;
+      for (; j & bit; bit >>= 1) j ^= bit;
+      j ^= bit;
+      bit_reverse[i] = j;
+    }
+    for (std::size_t length = 2; length <= n; length <<= 1) {
+      const double angle = 2.0 * 3.14159265358979323846 / static_cast<double>(length);
+      forward_steps.emplace_back(std::cos(-angle), std::sin(-angle));
+      inverse_steps.emplace_back(std::cos(angle), std::sin(angle));
+    }
+  }
+};
+
+const FFTPlan& fft_plan(std::size_t n) {
+  static const FFTPlan plan_1024(1024);
+  if (n == plan_1024.n) return plan_1024;
+  static thread_local std::unique_ptr<FFTPlan> fallback;
+  if (!fallback || fallback->n != n) fallback = std::make_unique<FFTPlan>(n);
+  return *fallback;
 }
 
 void fft_inplace(std::vector<std::complex<double>>& values, bool inverse) {
   const std::size_t n = values.size();
-  for (std::size_t i = 1, j = 0; i < n; ++i) {
-    std::size_t bit = n >> 1;
-    for (; j & bit; bit >>= 1) j ^= bit;
-    j ^= bit;
+  const FFTPlan& plan = fft_plan(n);
+  for (std::size_t i = 1; i < n; ++i) {
+    const std::size_t j = plan.bit_reverse[i];
     if (i < j) std::swap(values[i], values[j]);
   }
-  for (std::size_t length = 2; length <= n; length <<= 1) {
-    const double sign = inverse ? 1.0 : -1.0;
-    const double angle = sign * 2.0 * 3.14159265358979323846 / static_cast<double>(length);
-    const std::complex<double> step(std::cos(angle), std::sin(angle));
+  for (std::size_t stage = 0, length = 2; length <= n; ++stage, length <<= 1) {
+    const std::complex<double> step = inverse ? plan.inverse_steps[stage]
+                                              : plan.forward_steps[stage];
     for (std::size_t start = 0; start < n; start += length) {
       std::complex<double> factor(1.0, 0.0);
       const std::size_t half = length >> 1;
@@ -177,13 +202,28 @@ void fft_inplace(std::vector<std::complex<double>>& values, bool inverse) {
   }
 }
 
+struct ModeDensityWorkspace {
+  std::vector<double> scratch;
+  std::vector<std::complex<double>> binned;
+  std::vector<std::complex<double>> simple;
+  std::vector<std::complex<double>> weighted;
+  std::vector<std::complex<double>> kernel;
+};
+
+ModeDensityWorkspace& mode_workspace() {
+  static thread_local ModeDensityWorkspace workspace;
+  return workspace;
+}
+
 double mode_point_r_density(const double* values, const double* weights,
                             std::size_t count, double phi) {
   if (count == 0) return NA_VALUE;
   for (std::size_t i = 0; i < count; ++i) {
     if (!std::isfinite(values[i]) || !std::isfinite(weights[i]) || weights[i] < 0.0) return NA_VALUE;
   }
-  std::vector<double> scratch;
+  ModeDensityWorkspace& workspace = mode_workspace();
+  std::vector<double>& scratch = workspace.scratch;
+  scratch.clear();
   scratch.reserve(count);
   const double raw_bandwidth = 0.9 * std::min(sample_std_ptr(values, count),
                                                 mad_ptr(values, count, scratch)) /
@@ -202,7 +242,8 @@ double mode_point_r_density(const double* values, const double* weights,
   const double lo = from - 4.0 * bandwidth;
   const double up = to + 4.0 * bandwidth;
   const double delta = (up - lo) / static_cast<double>(n - 1);
-  std::vector<std::complex<double>> binned(length, std::complex<double>(0.0, 0.0));
+  std::vector<std::complex<double>>& binned = workspace.binned;
+  binned.assign(length, std::complex<double>(0.0, 0.0));
   for (std::size_t i = 0; i < count; ++i) {
     const double xpos = (values[i] - lo) / delta;
     if (!std::isfinite(xpos) || xpos > static_cast<double>(std::numeric_limits<int>::max()) ||
@@ -218,7 +259,8 @@ double mode_point_r_density(const double* values, const double* weights,
       binned[index] += (1.0 - fraction) * weights[i];
     }
   }
-  std::vector<std::complex<double>> kernel(length);
+  std::vector<std::complex<double>>& kernel = workspace.kernel;
+  kernel.resize(length);
   for (int i = 0; i < length; ++i) {
     const double distance = (i <= n) ? static_cast<double>(i) * delta
                                      : -static_cast<double>(length - i) * delta;
@@ -263,7 +305,9 @@ std::pair<double, double> mode_point_r_density_pair(const double* values,
         !std::isfinite(weighted_weights[i]) || simple_weights[i] < 0.0 ||
         weighted_weights[i] < 0.0) return std::make_pair(NA_VALUE, NA_VALUE);
   }
-  std::vector<double> scratch;
+  ModeDensityWorkspace& workspace = mode_workspace();
+  std::vector<double>& scratch = workspace.scratch;
+  scratch.clear();
   scratch.reserve(count);
   const double raw_bandwidth = 0.9 * std::min(sample_std_ptr(values, count),
                                                 mad_ptr(values, count, scratch)) /
@@ -282,8 +326,10 @@ std::pair<double, double> mode_point_r_density_pair(const double* values,
   const double lo = from - 4.0 * bandwidth;
   const double up = to + 4.0 * bandwidth;
   const double delta = (up - lo) / static_cast<double>(n - 1);
-  std::vector<std::complex<double>> simple(length, std::complex<double>(0.0, 0.0));
-  std::vector<std::complex<double>> weighted(length, std::complex<double>(0.0, 0.0));
+  std::vector<std::complex<double>>& simple = workspace.simple;
+  std::vector<std::complex<double>>& weighted = workspace.weighted;
+  simple.assign(length, std::complex<double>(0.0, 0.0));
+  weighted.assign(length, std::complex<double>(0.0, 0.0));
   auto bin = [&](std::vector<std::complex<double>>& target, const double* source) {
     for (std::size_t i = 0; i < count; ++i) {
       const double xpos = (values[i] - lo) / delta;
@@ -303,7 +349,8 @@ std::pair<double, double> mode_point_r_density_pair(const double* values,
   };
   bin(simple, simple_weights);
   bin(weighted, weighted_weights);
-  std::vector<std::complex<double>> kernel(length);
+  std::vector<std::complex<double>>& kernel = workspace.kernel;
+  kernel.resize(length);
   for (int i = 0; i < length; ++i) {
     const double distance = (i <= n) ? static_cast<double>(i) * delta
                                      : -static_cast<double>(length - i) * delta;

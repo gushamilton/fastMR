@@ -1,5 +1,8 @@
 # fastMR 0.1.0
 
+* Reused exact mode-kernel FFT workspaces/plans and median-selection storage
+  across bootstrap draws, reducing the 50x50 mode grid by about 7-8% without
+  changing the native density semantics.
 * Added a batched BLAS IVW grid path for `ivw`, `ivw_fe`, and `ivw_mre`, plus
   one-pass flattening of grid results. On the Mac mini this makes a 50x50
   IVW grid about 5.6x faster than the prior scalar fastMR path and about

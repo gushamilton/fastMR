@@ -27,8 +27,10 @@ modified.
   IVW, MR-Egger, weighted median, simple mode, weighted mode, and Wald ratio.
   The mode implementation matches native R `stats::density` semantics with the
   same weighted binning, extended FFT range, interpolation, and 512-point grid;
-  no approximate mode estimate is routed through the default API. Seeded
-  bootstraps use R RNG draw order and preserve the caller's RNG state.
+  no approximate mode estimate is routed through the default API. Its exact
+  kernel reuses per-worker FFT buffers/plans and median selection storage across
+  bootstrap draws. Seeded bootstraps use R RNG draw order and preserve the
+  caller's RNG state.
 * Basic multivariable IVW and optional `arrow::read_parquet()` wrappers. Arrow
   remains in Suggests and has a targeted error when unavailable.
 * Simple median, `fast_harmonise_data()` for local allele alignment, and
@@ -75,12 +77,12 @@ were:
 |---|---:|---:|
 | single pair, five methods | 0.008 | 125 |
 | IVW + Egger single pair | 0.001 | 1,000 |
-| grid, nboot 0, threads 1 | 1.258 | 1,987 |
-| grid, nboot 0, threads 4 | 1.152 | 2,170 |
-| grid, nboot 0, threads 10 | 1.148 | 2,178 |
-| grid, nboot 100, threads 1 | 16.587 | 151 |
-| grid, nboot 100, threads 4 | 5.348 | 467 |
-| grid, nboot 100, threads 10 | 3.864 | 647 |
+| grid, nboot 0, threads 1 | 1.242 | 2,013 |
+| grid, nboot 0, threads 4 | 1.122 | 2,228 |
+| grid, nboot 0, threads 10 | 1.117 | 2,238 |
+| grid, nboot 100, threads 1 | 16.601 | 151 |
+| grid, nboot 100, threads 4 | 5.279 | 474 |
+| grid, nboot 100, threads 10 | 3.971 | 630 |
 | Arrow Parquet read | 0.001 | 82,000 rows/s |
 | seeded thread correctness rerun | 5.103 | 490 |
 
@@ -107,15 +109,24 @@ and all-zero exposure rows. The maximum direct-versus-scalar beta/SE/p-value
 delta was `2.08e-14`, with zero scalar-gate failures; serial-versus-five-thread
 results were bitwise identical in all 100 panels.
 
+The latest exact-mode benchmark is recorded in
+`outputs/mode_optimization_benchmark.csv` and `.md`: reusable FFT workspaces,
+cached 1,024-point plans, and `nth_element` median selection reduced simple
+mode from the measured 1.886 seconds to 1.760 seconds and weighted mode from
+1.910 to 1.770 seconds on the 2,500-pair grid (7.2-7.9% faster). The native
+single-pair parity audit in `outputs/native_mode_parity.csv` covered 24 method
+panels, with maximum beta, SE, and p-value deltas of `6.44e-15`, `4.54e-13`,
+and `8.09e-14`; the mode grid serial-versus-five-thread delta was exactly 0.
+
 ## Implementation-versus-thread scaling
 
 The direct `system.time()` scaling run is recorded in
 `outputs/iteration_scaling.csv` and `.md`. On the 2,500-pair IL6 grid with all
-five main methods, `nboot=0` took 1.470 seconds at one thread and 1.197 seconds
-at ten threads. At `nboot=100`, one thread took 17.106 seconds and ten threads
-took 3.887 seconds (4.40x thread scaling). Against the prior native
-TwoSampleMR reference of 338.919 seconds, this is approximately 19.8x faster
-serially and 87.2x faster at ten threads; the remaining gain is implementation
+five main methods, `nboot=0` took 0.564 seconds at one thread and 0.435 seconds
+at ten threads. At `nboot=100`, one thread took 15.496 seconds and ten threads
+took 2.974 seconds (5.21x thread scaling). Against the prior native
+TwoSampleMR reference of 338.919 seconds, this is approximately 21.9x faster
+serially and 114.0x faster at ten threads; the remaining gain is implementation
 and shared-grid work, not just threading.
 
 The local harmonisation path processed 20,000 synthetic strand/complement/
@@ -181,6 +192,13 @@ path with native TwoSampleMR across the same five grid shapes. At five
 requested threads, speedups were 54.93-60.67x, with maximum beta deltas below
 `3.3e-18`, maximum SE deltas below `3.1e-18`, and maximum p-value deltas below
 `8e-16`.
+
+`outputs/native_tsmr_mode_benchmark.csv` and `.md` are the latest native
+TwoSampleMR comparisons for simple and weighted mode across the same five
+shapes. Speedups were 73.58-80.66x at five fastMR threads. Point estimates
+matched to below `2.7e-16`; bootstrap SE and p-value differences are expected
+Monte Carlo differences because native runs independent per-pair streams while
+fastMR shares the grid bootstrap layout.
 
 ## Remaining limitations
 

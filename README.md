@@ -55,6 +55,10 @@ pairs are computed together, and tidy results are flattened in one pass. This
 is the high-throughput path for large exposure-by-outcome IVW scans; the
 mixed-method path remains available when other estimators are requested.
 
+The exact simple/weighted mode kernel also reuses its FFT workspaces and plan
+across bootstrap draws. This reduces allocation and setup cost while retaining
+the native density-grid semantics.
+
 For a local preprocessing path, harmonise alleles without a network dependency
 and then clump with either a supplied LD matrix or a local PLINK reference:
 

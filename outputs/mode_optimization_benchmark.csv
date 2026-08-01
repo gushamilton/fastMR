@@ -1,0 +1,3 @@
+"method","pairs","repeats","median_fastMR_seconds","min_fastMR_seconds","pre_workspace_seconds","speedup_vs_pre_workspace"
+"simple_mode",2500,5,1.76,1.746,1.886,1.07159090909091
+"weighted_mode",2500,5,1.77,1.74,1.91,1.07909604519774
