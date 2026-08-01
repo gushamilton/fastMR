@@ -49,6 +49,12 @@ grid side, and worker count is bounded by the number of pairs. If the build
 toolchain has no OpenMP, the same kernel uses a serial or `std::thread`
 fallback; no nested thread pools are created.
 
+For grids containing only IVW variants (`ivw`, `ivw_fe`, and `ivw_mre`),
+fastMR takes a batched BLAS path: the exposure/outcome cross-products for all
+pairs are computed together, and tidy results are flattened in one pass. This
+is the high-throughput path for large exposure-by-outcome IVW scans; the
+mixed-method path remains available when other estimators are requested.
+
 For a local preprocessing path, harmonise alleles without a network dependency
 and then clump with either a supplied LD matrix or a local PLINK reference:
 

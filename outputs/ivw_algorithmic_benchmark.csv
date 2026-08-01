@@ -1,0 +1,4 @@
+"threads","pairs","repeats","median_fastMR_seconds","min_fastMR_seconds","scalar_pre_blas_seconds","speedup_vs_scalar"
+1,2500,5,0.237,0.231,1.313,5.54008438818565
+5,2500,5,0.235,0.23,1.313,5.58723404255319
+10,2500,5,0.234999999999999,0.228,1.313,5.5872340425532

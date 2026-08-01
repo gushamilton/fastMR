@@ -16,8 +16,13 @@ modified.
   kernel copies R column-major matrices once into contiguous row-major storage,
   shares seeded bootstrap layouts and exposure/outcome grid-side layouts, and
   bounds worker count. It uses OpenMP when the toolchain exposes it and a
-  portable bounded `std::thread`/serial fallback otherwise; Ferguss-Mini's
-  Apple Clang build used the fallback.
+  portable bounded `std::thread`/serial fallback otherwise. The Mac mini uses
+  the portable path because its R build does not expose standard OpenMP flags;
+  other toolchains retain OpenMP automatically when R exposes them.
+* IVW-only grids (`ivw`, `ivw_fe`, `ivw_mre`) use a batched BLAS kernel for
+  numerator/denominator cross-products across all exposure/outcome pairs.
+  Grid result tidying is also flattened into one data-frame construction rather
+  than one data frame per pair.
 * Exact default methods: IVW, fixed-effects IVW, multiplicative random-effects
   IVW, MR-Egger, weighted median, simple mode, weighted mode, and Wald ratio.
   The mode implementation matches native R `stats::density` semantics with the
@@ -46,7 +51,7 @@ Commands used the required explicit paths:
 /opt/homebrew/bin/R CMD check --no-manual --as-cran fastMR_0.1.0.tar.gz
 ```
 
-Results: local install succeeded; testthat passed 36 expectations with one expected
+Results: local install succeeded; the testthat suite passed with one expected
 skip because Arrow is installed; the tarball check completed with **0 errors,
 0 warnings, and 3 notes**. The notes are the planned GitHub URL returning 404
 until a remote is created, the full MIT text being reported as a non-DCF
@@ -70,18 +75,18 @@ were:
 |---|---:|---:|
 | single pair, five methods | 0.008 | 125 |
 | IVW + Egger single pair | 0.001 | 1,000 |
-| grid, nboot 0, threads 1 | 2.367 | 1,056 |
-| grid, nboot 0, threads 4 | 2.349 | 1,064 |
-| grid, nboot 0, threads 10 | 2.287 | 1,093 |
-| grid, nboot 100, threads 1 | 16.725 | 149 |
-| grid, nboot 100, threads 4 | 6.543 | 382 |
-| grid, nboot 100, threads 10 | 5.089 | 491 |
+| grid, nboot 0, threads 1 | 1.258 | 1,987 |
+| grid, nboot 0, threads 4 | 1.152 | 2,170 |
+| grid, nboot 0, threads 10 | 1.148 | 2,178 |
+| grid, nboot 100, threads 1 | 16.587 | 151 |
+| grid, nboot 100, threads 4 | 5.348 | 467 |
+| grid, nboot 100, threads 10 | 3.864 | 647 |
 | Arrow Parquet read | 0.001 | 82,000 rows/s |
 | seeded thread correctness rerun | 5.103 | 490 |
 
 Primary native-R comparison: outputs/native_tsmr_grid_benchmark.csv records 4.945 seconds for fastMR versus 338.919 seconds for the standard TwoSampleMR::mr() workflow on the same 82-row IL6, 2,500-pair, five-method, nboot=100 workload: a 68.538x speedup. The maximum absolute beta difference across all five methods and all 2,500 pairs was 3.47e-18. IVW, Egger, weighted median, simple mode, and weighted mode each matched native TwoSampleMR to machine precision in single-method seeded randomized parity tests (12 panels; maximum combined beta/SE/p-value difference 1.01e-12). The full-grid bootstrap SEs are intentionally independent Monte Carlo draws at nboot=100, so their median absolute differences were 9.28e-05 for weighted median, 8.89e-04 for simple mode, and 2.52e-04 for weighted mode; these are recorded in outputs/native_tsmr_grid_parity.csv rather than misreported as deterministic estimator errors.
 
-The 5-thread adversarial gate passed 20 randomized grids plus near-zero, negative, duplicate-ratio, and single-SNP edge panels with a maximum serial-versus-5-thread difference of 0. The native-R mode point audit passed 40 randomized panels with maximum absolute beta difference 1.05e-13. The package test suite passed 36 expectations with one expected Arrow skip, and the built tarball check completed with 0 errors, 0 warnings, and 3 notes.
+The 5-thread adversarial gate passed 20 randomized grids plus near-zero, negative, duplicate-ratio, and single-SNP edge panels with a maximum serial-versus-5-thread difference of 0. The native-R mode point audit passed 40 randomized panels with maximum absolute beta difference 1.05e-13. The package test suite passed with one expected Arrow skip, and the built tarball check completed with 0 errors, 0 warnings, and 3 notes.
 
 The thread correctness gate reported a maximum seeded difference of `0` for
 `threads=1`, `4`, and `10`. Bootstrap values are deterministic within fastMR;
@@ -89,17 +94,29 @@ their seeded standard errors need not be bitwise identical to NumPy or
 TwoSampleMR because those implementations use different random-number
 streams.
 
+The IVW-specific algorithmic benchmark is recorded in
+`outputs/ivw_algorithmic_benchmark.csv` and `.md`. On the same 2,500-pair
+fixture, the new BLAS plus one-pass tidy path took a median 0.235-0.237 seconds
+over five warm repeats at 1, 5, and 10 requested threads, versus 1.313 seconds
+for the measured pre-BLAS scalar fastMR path: 5.54-5.59x faster. The
+implementation gain is therefore present before thread scaling.
+
+The 100-panel adversarial IVW gate is recorded in
+`outputs/adversarial_ivw_threads.csv`. It included zero, negative, near-zero,
+and all-zero exposure rows. The maximum direct-versus-scalar beta/SE/p-value
+delta was `2.08e-14`, with zero scalar-gate failures; serial-versus-five-thread
+results were bitwise identical in all 100 panels.
+
 ## Implementation-versus-thread scaling
 
 The direct `system.time()` scaling run is recorded in
 `outputs/iteration_scaling.csv` and `.md`. On the 2,500-pair IL6 grid with all
-five main methods, `nboot=0` took 2.428 seconds at one thread and 2.333 seconds
-at ten threads: the deterministic kernel is already implementation-bound.
-At `nboot=100`, one thread took 18.897 seconds and ten threads took 5.297
-seconds (3.57x thread scaling). Against the prior native TwoSampleMR reference
-of 338.919 seconds, this is approximately 17.9x faster serially and 64.0x
-faster at ten threads; the remaining gain is implementation and shared-grid
-work, not just threading.
+five main methods, `nboot=0` took 1.470 seconds at one thread and 1.197 seconds
+at ten threads. At `nboot=100`, one thread took 17.106 seconds and ten threads
+took 3.887 seconds (4.40x thread scaling). Against the prior native
+TwoSampleMR reference of 338.919 seconds, this is approximately 19.8x faster
+serially and 87.2x faster at ten threads; the remaining gain is implementation
+and shared-grid work, not just threading.
 
 The local harmonisation path processed 20,000 synthetic strand/complement/
 palindrome cases in 0.015 seconds versus 0.107 seconds for native
@@ -154,9 +171,16 @@ All deterministic beta differences were at machine precision (maximum
 `8e-18` for IVW/Egger/median and approximately `2.7e-16` for mode point
 estimates). Bootstrap SE and p-value differences are Monte Carlo differences:
 the two implementations generate independent bootstrap streams at `nboot=100`.
-The grid kernel now also skips unused stochastic buffers for deterministic
-method-only calls; on the balanced 50x50 grid this reduced IVW and Egger to
-1.298 and 1.436 seconds respectively at five threads.
+The grid kernel also skips unused stochastic buffers for deterministic
+method-only calls. The dedicated IVW benchmark below measures the new BLAS
+path separately; the older mixed-method measurements remain useful for
+estimating the cost of requesting all five methods together.
+
+`outputs/native_tsmr_ivw_benchmark.csv` and `.md` compare the new IVW-only
+path with native TwoSampleMR across the same five grid shapes. At five
+requested threads, speedups were 54.93-60.67x, with maximum beta deltas below
+`3.3e-18`, maximum SE deltas below `3.1e-18`, and maximum p-value deltas below
+`8e-16`.
 
 ## Remaining limitations
 

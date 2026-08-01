@@ -168,6 +168,46 @@ fastmr_tidy_native <- function(native_results, methods, id.exposure = "", id.out
   out
 }
 
+fastmr_tidy_grid_native <- function(native_results, methods, exposure_labels, outcome_labels) {
+  if (!length(native_results)) return(fastmr_tidy_native(list(), methods))
+  flat <- unlist(native_results, recursive = FALSE, use.names = FALSE)
+  method_count <- length(methods)
+  pair_index <- rep(seq_along(native_results), each = method_count)
+  exposure_count <- length(exposure_labels)
+  outcome_count <- length(outcome_labels)
+  exposure_index <- ((pair_index - 1L) %/% outcome_count) + 1L
+  outcome_index <- ((pair_index - 1L) %% outcome_count) + 1L
+  registry <- fastmr_method_registry()
+  code <- vapply(flat, fastmr_scalar, character(1), name = "method", default = "")
+  display <- registry$method[match(code, registry$code)]
+  out <- data.frame(
+    id.exposure = exposure_labels[exposure_index],
+    id.outcome = outcome_labels[outcome_index],
+    method = display,
+    method_code = code,
+    nsnp = vapply(flat, fastmr_scalar, numeric(1), name = "n", default = NA_real_),
+    b = vapply(flat, fastmr_scalar, numeric(1), name = "beta"),
+    se = vapply(flat, fastmr_scalar, numeric(1), name = "se"),
+    pval = vapply(flat, fastmr_scalar, numeric(1), name = "pval"),
+    Q = vapply(flat, fastmr_scalar, numeric(1), name = "Q"),
+    Q_df = vapply(flat, fastmr_scalar, numeric(1), name = "Q_df"),
+    Q_pval = vapply(flat, fastmr_scalar, numeric(1), name = "Q_pval"),
+    sigma = vapply(flat, fastmr_scalar, numeric(1), name = "sigma"),
+    intercept = vapply(flat, fastmr_scalar, numeric(1), name = "intercept"),
+    intercept_se = vapply(flat, fastmr_scalar, numeric(1), name = "intercept_se"),
+    intercept_pval = vapply(flat, fastmr_scalar, numeric(1), name = "intercept_pval"),
+    ratio_se_mean = vapply(flat, fastmr_scalar, numeric(1), name = "ratio_se_mean"),
+    bootstrap = vapply(flat, fastmr_scalar, numeric(1), name = "bootstrap"),
+    phi = vapply(flat, fastmr_scalar, numeric(1), name = "phi"),
+    flipped = vapply(flat, fastmr_scalar, numeric(1), name = "flipped"),
+    se_exposure_mean = vapply(flat, fastmr_scalar, numeric(1), name = "se_exposure_mean"),
+    exposure_index = exposure_index,
+    outcome_index = outcome_index,
+    stringsAsFactors = FALSE
+  )
+  out
+}
+
 
 fastmr_native_call <- function(native, args, seed) {
   if (is.null(seed)) return(do.call(native, args))

@@ -114,16 +114,5 @@ fast_mr_grid <- function(exposure_beta, outcome_beta, exposure_se, outcome_se,
   out.labels <- rownames(arrays$outcome_beta)
   if (is.null(exp.labels)) exp.labels <- as.character(seq_len(nrow(arrays$exposure_beta)))
   if (is.null(out.labels)) out.labels <- as.character(seq_len(nrow(arrays$outcome_beta)))
-  parts <- vector("list", length(native))
-  for (i in seq_along(native)) {
-    exposure_index <- ((i - 1L) %/% nrow(arrays$outcome_beta)) + 1L
-    outcome_index <- ((i - 1L) %% nrow(arrays$outcome_beta)) + 1L
-    parts[[i]] <- fastmr_tidy_native(
-      native[[i]], methods,
-      exposure_index = exposure_index, outcome_index = outcome_index,
-      exposure_label = exp.labels[[exposure_index]], outcome_label = out.labels[[outcome_index]]
-    )
-  }
-  if (!length(parts)) return(fastmr_tidy_native(list(), methods))
-  do.call(rbind, parts)
+  fastmr_tidy_grid_native(native, methods, exp.labels, out.labels)
 }

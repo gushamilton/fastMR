@@ -1,4 +1,5 @@
 #include <Rcpp.h>
+#include <R_ext/BLAS.h>
 
 #include <algorithm>
 #include <atomic>
@@ -969,6 +970,135 @@ struct GridData {
   std::vector<double> exp_inverse, out_draws, mode_z;
 };
 
+bool only_ivw_methods(const std::vector<std::string>& methods) {
+  if (methods.empty()) return false;
+  for (const std::string& method : methods) {
+    if (method != "ivw" && method != "ivw_fe" && method != "ivw_mre") return false;
+  }
+  return true;
+}
+
+std::vector<std::vector<Result>> compute_ivw_grid_blas(
+    const GridData& grid, const std::vector<std::string>& methods) {
+  const int exposure_count = grid.exposure_count;
+  const int outcome_count = grid.outcome_count;
+  const int snp_count = grid.snp_count;
+  const std::size_t pair_count = static_cast<std::size_t>(exposure_count) *
+                                 static_cast<std::size_t>(outcome_count);
+  std::vector<std::vector<Result>> results(pair_count);
+  if (snp_count < 2) {
+    for (std::size_t pair = 0; pair < pair_count; ++pair) {
+      results[pair].resize(methods.size());
+      for (std::size_t i = 0; i < methods.size(); ++i) {
+        results[pair][i] = empty_result(methods[i], snp_count);
+      }
+    }
+    return results;
+  }
+
+  // Store the exposure matrices as nSNP x nExposure and the outcome matrices
+  // as nSNP x nOutcome in memory. The row-major pair layout already has this
+  // byte order, so BLAS can consume the contiguous vectors without another
+  // transpose or R-to-C++ conversion.
+  const std::size_t exp_size = static_cast<std::size_t>(snp_count) * exposure_count;
+  const std::size_t out_size = static_cast<std::size_t>(snp_count) * outcome_count;
+  std::vector<double> exp_squared(exp_size);
+  std::vector<double> out_weight(out_size);
+  std::vector<double> out_weighted(out_size);
+  std::vector<double> out_y2(static_cast<std::size_t>(outcome_count), 0.0);
+  for (int exposure = 0; exposure < exposure_count; ++exposure) {
+    const std::size_t offset = static_cast<std::size_t>(exposure) * snp_count;
+    for (int snp = 0; snp < snp_count; ++snp) {
+      const double x = grid.exp_beta[offset + static_cast<std::size_t>(snp)];
+      exp_squared[offset + static_cast<std::size_t>(snp)] = x * x;
+    }
+  }
+  for (int outcome = 0; outcome < outcome_count; ++outcome) {
+    const std::size_t offset = static_cast<std::size_t>(outcome) * snp_count;
+    double y2 = 0.0;
+    for (int snp = 0; snp < snp_count; ++snp) {
+      const std::size_t index = offset + static_cast<std::size_t>(snp);
+      const double weight = 1.0 / (grid.out_se[index] * grid.out_se[index]);
+      const double y = grid.out_beta[index];
+      out_weight[index] = weight;
+      out_weighted[index] = weight * y;
+      y2 += weight * y * y;
+    }
+    out_y2[static_cast<std::size_t>(outcome)] = y2;
+  }
+
+  // C is exposure-major in its mathematical shape but column-major in memory:
+  // C[exposure + exposure_count * outcome]. This is the same order as the
+  // public grid result list (exposure-major, outcome-minor) after indexing.
+  std::vector<double> numerator(pair_count, 0.0);
+  std::vector<double> denominator(pair_count, 0.0);
+  const char transposed = 'T';
+  const char normal = 'N';
+  const int m = exposure_count;
+  const int n = outcome_count;
+  const int k = snp_count;
+  const int lda = snp_count;
+  const int ldb = snp_count;
+  const int ldc = exposure_count;
+  const double alpha = 1.0;
+  const double beta_zero = 0.0;
+  F77_CALL(dgemm)(&transposed, &normal, &m, &n, &k, &alpha,
+                  grid.exp_beta.data(), &lda, out_weighted.data(), &ldb,
+                  &beta_zero, numerator.data(), &ldc FCONE FCONE);
+  F77_CALL(dgemm)(&transposed, &normal, &m, &n, &k, &alpha,
+                  exp_squared.data(), &lda, out_weight.data(), &ldb,
+                  &beta_zero, denominator.data(), &ldc FCONE FCONE);
+
+  for (int exposure = 0; exposure < exposure_count; ++exposure) {
+    for (int outcome = 0; outcome < outcome_count; ++outcome) {
+      const std::size_t matrix_index = static_cast<std::size_t>(exposure) +
+                                       static_cast<std::size_t>(exposure_count) * outcome;
+      const double den = denominator[matrix_index];
+      const double num = numerator[matrix_index];
+      const double beta_value = den > 0.0 && std::isfinite(den) ? num / den : NA_VALUE;
+      double rss = NA_VALUE;
+      double sigma = NA_VALUE;
+      double base_se = NA_VALUE;
+      if (std::isfinite(beta_value)) {
+        const double y2 = out_y2[static_cast<std::size_t>(outcome)];
+        rss = y2 - 2.0 * beta_value * num + beta_value * beta_value * den;
+        // BLAS reduction order can leave a tiny negative residue at an exact
+        // fit. Preserve the scalar path's non-negative RSS contract.
+        if (rss < 0.0 && rss > -1e-12 * std::max(1.0, y2)) rss = 0.0;
+        if (rss >= 0.0 && std::isfinite(rss)) {
+          sigma = std::sqrt(rss / static_cast<double>(snp_count - 1));
+          base_se = std::sqrt(1.0 / den);
+        }
+      }
+      const double residual_se = std::isfinite(sigma) && std::isfinite(base_se)
+        ? base_se * sigma : NA_VALUE;
+      results[static_cast<std::size_t>(exposure) * outcome_count + outcome].resize(methods.size());
+      for (std::size_t i = 0; i < methods.size(); ++i) {
+        const std::string& method = methods[i];
+        Result result = empty_result(method, snp_count);
+        result.beta = beta_value;
+        if (method == "ivw") {
+          result.se = sigma > 0.0 && std::isfinite(sigma)
+            ? residual_se / std::min(1.0, sigma) : residual_se;
+        } else if (method == "ivw_fe") {
+          result.se = sigma > 0.0 && std::isfinite(sigma) ? residual_se / sigma : NA_VALUE;
+        } else {
+          result.se = residual_se;
+        }
+        result.pval = z_pvalue(safe_statistic(result.beta, result.se));
+        result.q = true;
+        result.q_value = rss;
+        result.q_df = snp_count - 1;
+        result.q_pval = chi_square_pvalue(rss, snp_count - 1);
+        result.sigma = true;
+        result.sigma_value = sigma;
+        results[static_cast<std::size_t>(exposure) * outcome_count + outcome][i] = result;
+      }
+    }
+  }
+  return results;
+}
+
 GridData copy_grid(Rcpp::NumericMatrix exp_beta, Rcpp::NumericMatrix out_beta,
                   Rcpp::NumericMatrix exp_se, Rcpp::NumericMatrix out_se) {
   validate_grid_shapes(exp_beta, out_beta, exp_se, out_se);
@@ -1151,6 +1281,14 @@ Rcpp::List fastmr_grid_native(Rcpp::NumericMatrix exposure_beta,
   validate_controls(nboot, threads, phi);
   const std::vector<std::string> parsed_methods = parse_methods(methods);
   GridData grid = copy_grid(exposure_beta, outcome_beta, exposure_se, outcome_se);
+  const std::size_t pair_count = static_cast<std::size_t>(grid.exposure_count) *
+                                 static_cast<std::size_t>(grid.outcome_count);
+  if (only_ivw_methods(parsed_methods)) {
+    const std::vector<std::vector<Result>> results = compute_ivw_grid_blas(grid, parsed_methods);
+    Rcpp::List output(pair_count);
+    for (std::size_t i = 0; i < pair_count; ++i) output[i] = results_to_list(results[i]);
+    return output;
+  }
   bool needs_median = false;
   bool needs_mode = false;
   bool needs_egger = false;
@@ -1160,8 +1298,6 @@ Rcpp::List fastmr_grid_native(Rcpp::NumericMatrix exposure_beta,
     needs_egger = needs_egger || method == "egger_bootstrap";
   }
   fill_grid_bootstrap_layout(grid, nboot, seed, needs_median, needs_mode, needs_egger);
-  const std::size_t pair_count = static_cast<std::size_t>(grid.exposure_count) *
-                                 static_cast<std::size_t>(grid.outcome_count);
   std::vector<std::vector<Result>> results(pair_count);
   const int thread_count = bounded_threads(threads, pair_count);
 
