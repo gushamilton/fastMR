@@ -1,0 +1,6 @@
+"method","fast_rows","native_rows","beta_delta","se_delta","pval_delta"
+"ivw",1,1,1.66533453693773e-16,1.38777878078145e-17,1.02363600803437e-23
+"egger",1,1,1.11022302462516e-16,4.16333634234434e-17,0
+"weighted_median",1,1,0,0,0
+"simple_mode",1,1,1.11022302462516e-16,0,0
+"weighted_mode",1,1,1.11022302462516e-16,0,0

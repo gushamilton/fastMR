@@ -39,3 +39,8 @@
 * Added a registered Rcpp C++17 shared-grid kernel with bounded parallelism and
   a serial fallback when OpenMP is unavailable.
 * Added optional Arrow Parquet readers and a reproducible IL6/CRP benchmark.
+* Added a reproducible simulation and harmonisation tyre-kick suite covering
+  swapped, complemented, reverse-complemented, palindromic, incompatible,
+  unequal-SNP, empty-overlap, and 7x11-grid cases; it matched native
+  TwoSampleMR with zero harmonisation flag mismatches and a maximum
+  representative grid beta delta of 1.33e-15.

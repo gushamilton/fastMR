@@ -101,6 +101,19 @@ the parity artifacts rather than treated as deterministic estimator errors.
 
 The 5-thread adversarial gate passed 20 randomized grids plus near-zero, negative, duplicate-ratio, and single-SNP edge panels with a maximum serial-versus-5-thread difference of 0. The native-R mode point audit passed 40 randomized panels with maximum absolute beta difference 1.05e-13. The package test suite passed with one expected Arrow skip, and the built tarball check completed with 0 errors, 0 warnings, and 3 notes.
 
+The simulation tyre-kick suite in `benchmarks/simulation_kick_the_tires.R`
+uses a fresh 60-SNP causal simulation rather than the IL6 fixture. It
+deliberately introduces swapped, complemented, reverse-complemented,
+supported-palindromic, ambiguous-palindromic, incompatible, and lowercase
+alleles. Across harmonisation actions 1, 2, and 3, fastMR matched native
+`TwoSampleMR::harmonise_data()` with zero row, allele, beta, frequency, or
+`mr_keep` mismatches. The uneven-SNP test uses 47 exposure SNPs and 34
+outcome SNPs, retaining the expected 27-variant overlap; IVW, MR-Egger,
+weighted median, simple mode, and weighted mode all matched native MR point
+estimates to floating-point tolerance. A 7x11 grid (77 pairs) had a maximum
+representative beta delta of `1.33e-15`. An empty overlap safely returns a
+zero-row result. The CSV summaries and Markdown report are in `outputs/`.
+
 The thread correctness gate reported a maximum seeded difference of `0` for
 `threads=1`, `4`, and `10`. Bootstrap values are deterministic within fastMR;
 their seeded standard errors need not be bitwise identical to NumPy or
