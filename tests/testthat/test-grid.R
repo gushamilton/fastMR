@@ -54,3 +54,12 @@ test_that("MR-Egger bootstrap grid results are thread deterministic", {
                     seed = 20260805, threads = 5)
   expect_equal(a, b, tolerance = 0)
 })
+
+test_that("unweighted regression and sign grid methods cover every pair", {
+  g <- grid_fixture(2, 2)
+  result <- fast_mr_grid(g$exposure_beta, g$outcome_beta, g$exposure_se, g$outcome_se,
+                          methods = c("uwr", "sign"), nboot = 0, threads = 5)
+  expect_equal(nrow(result), 8)
+  expect_equal(as.vector(table(result$method_code)), c(4, 4))
+  expect_true(all(is.finite(result$b)))
+})

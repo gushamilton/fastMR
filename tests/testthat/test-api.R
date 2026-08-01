@@ -51,6 +51,14 @@ test_that("MR-Egger bootstrap handles zero and negative exposure effects", {
   expect_true(is.finite(result$pval))
 })
 
+test_that("unweighted regression and sign concordance are available", {
+  d <- il6_fixture()[1:8, ]
+  result <- fast_mr(d, methods = c("mr_uwr", "mr_sign"), nboot = 0)
+  expect_equal(result$method_code, c("uwr", "sign"))
+  expect_true(all(is.finite(result$b)))
+  expect_true(all(is.finite(result$pval)))
+})
+
 test_that("grouping preserves tidy pair metadata", {
   d <- il6_fixture()[1:8, ]
   d$id.exposure <- rep(c("A", "B"), each = 4)

@@ -452,6 +452,59 @@ Result compute_ivw(const Prepared& p, const std::string& method) {
   return result;
 }
 
+Result compute_uwr(const Prepared& p) {
+  const int n = static_cast<int>(p.x.size());
+  if (n < 2) return empty_result("uwr", n);
+  double denominator = 0.0;
+  double numerator = 0.0;
+  for (int i = 0; i < n; ++i) {
+    denominator += p.x[i] * p.x[i];
+    numerator += p.x[i] * p.y[i];
+  }
+  if (!(denominator > 0.0) || !std::isfinite(denominator)) return empty_result("uwr", n);
+  const double beta = numerator / denominator;
+  double rss = 0.0;
+  for (int i = 0; i < n; ++i) {
+    const double residual = p.y[i] - beta * p.x[i];
+    rss += residual * residual;
+  }
+  const int df = n - 1;
+  const double sigma = std::sqrt(rss / static_cast<double>(df));
+  const double residual_se = std::sqrt(1.0 / denominator) * sigma;
+  const double se = sigma > 0.0 && std::isfinite(sigma)
+    ? residual_se / std::min(1.0, sigma) : residual_se;
+  Result result = empty_result("uwr", n);
+  result.beta = beta;
+  result.se = se;
+  result.pval = z_pvalue(safe_statistic(beta, se));
+  result.q = true;
+  result.q_value = rss;
+  result.q_df = df;
+  result.q_pval = chi_square_pvalue(rss, df);
+  result.sigma = true;
+  result.sigma_value = sigma;
+  return result;
+}
+
+Result compute_sign(const Prepared& p) {
+  int n = 0;
+  int concordant = 0;
+  for (std::size_t i = 0; i < p.x.size(); ++i) {
+    if (p.x[i] == 0.0 || p.y[i] == 0.0) continue;
+    ++n;
+    if ((p.x[i] > 0.0) == (p.y[i] > 0.0)) ++concordant;
+  }
+  if (n < 6) return empty_result("sign", n);
+  const double beta = (2.0 * static_cast<double>(concordant) / static_cast<double>(n)) - 1.0;
+  const int lower = std::min(concordant, n - concordant);
+  double pval = 2.0 * R::pbinom(static_cast<double>(lower), static_cast<double>(n), 0.5, true, false);
+  pval = std::min(1.0, pval);
+  Result result = empty_result("sign", n);
+  result.beta = beta;
+  result.pval = pval;
+  return result;
+}
+
 Result compute_egger(const Prepared& p) {
   const int n = static_cast<int>(p.x.size());
   if (n < 3) return empty_result("egger", n);
@@ -804,6 +857,10 @@ std::vector<Result> compute_pair(Prepared p,
     if ((method == "simple_mode" || method == "weighted_mode") && has_simple && has_weighted) continue;
     if (method == "ivw" || method == "ivw_fe" || method == "ivw_mre") {
       result[i] = compute_ivw(p, method);
+    } else if (method == "uwr") {
+      result[i] = compute_uwr(p);
+    } else if (method == "sign") {
+      result[i] = compute_sign(p);
     } else if (method == "egger") {
       result[i] = compute_egger(p);
     } else if (method == "egger_bootstrap") {
@@ -850,7 +907,8 @@ Rcpp::List result_to_list(const Result& result) {
 
 std::vector<std::string> parse_methods(Rcpp::CharacterVector methods) {
   const std::vector<std::string> allowed = {
-    "ivw", "ivw_fe", "ivw_mre", "egger", "egger_bootstrap", "simple_median", "weighted_median",
+    "ivw", "ivw_fe", "ivw_mre", "egger", "egger_bootstrap", "uwr", "sign",
+    "simple_median", "weighted_median",
     "simple_mode", "weighted_mode", "wald_ratio"
   };
   std::vector<std::string> parsed;

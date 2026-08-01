@@ -127,6 +127,13 @@ five-shape native benchmark is recorded in
 versus shared-grid bootstrap streams; the seeded single-pair estimator parity
 above is the exact implementation gate.
 
+Unweighted regression (`uwr`) and the exact binomial sign concordance test
+(`sign`) are also implemented. Over 20 randomized single-pair panels their
+maximum native beta/SE/p-value deltas were `8.33e-17`, `8.88e-16`, and
+`2.22e-16` for UWR, and zero, zero, and `2.22e-16` for sign. Their five-shape
+grid speedups and machine-precision point parity are recorded in
+`outputs/native_tsmr_uwr_sign_benchmark.csv` and `.md`.
+
 ## Per-method shape benchmarks
 
 `outputs/native_tsmr_method_benchmark.csv` and `.md` compare each default MR

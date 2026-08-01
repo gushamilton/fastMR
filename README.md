@@ -7,8 +7,8 @@ large MR scans.
 
 The first release includes IVW (under-dispersion-corrected, fixed-effects, and
 multiplicative random-effects variants), MR-Egger, MR-Egger bootstrap, simple
-and weighted median, simple mode, weighted mode, Wald ratio, and basic
-multivariable IVW. The
+and weighted median, simple mode, weighted mode, unweighted regression, sign
+concordance, Wald ratio, and basic multivariable IVW. The
 default methods are exact; there is no approximate mode estimator in the
 default API.
 
