@@ -9,8 +9,8 @@ Description: Exact summary-statistics Mendelian randomization methods with a
     dependency-light R interface for TwoSampleMR-style tidy data, including
     optional Arrow Parquet input.
 License: MIT + file LICENSE
-URL: https://github.com/fergushamilton/fastMR
-BugReports: https://github.com/fergushamilton/fastMR/issues
+URL: https://github.com/gushamilton/fastMR
+BugReports: https://github.com/gushamilton/fastMR/issues
 Encoding: UTF-8
 Roxygen: list(markdown = TRUE)
 RoxygenNote: 7.3.3

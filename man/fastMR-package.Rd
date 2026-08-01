@@ -11,8 +11,8 @@ Exact summary-statistics Mendelian randomization methods with a registered C++ s
 \seealso{
 Useful links:
 \itemize{
-  \item \url{https://github.com/fergushamilton/fastMR}
-  \item Report bugs at \url{https://github.com/fergushamilton/fastMR/issues}
+  \item \url{https://github.com/gushamilton/fastMR}
+  \item Report bugs at \url{https://github.com/gushamilton/fastMR/issues}
 }
 
 }
