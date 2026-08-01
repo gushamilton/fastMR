@@ -44,3 +44,8 @@
   unequal-SNP, empty-overlap, and 7x11-grid cases; it matched native
   TwoSampleMR with zero harmonisation flag mismatches and a maximum
   representative grid beta delta of 1.33e-15.
+* Extended local harmonisation to the full native `harmonise_data()` behavior:
+  actions 1/2/3, 2-2/2-1/1-2/1-1 allele information, indel recoding, missing
+  frequencies, outcome-specific action vectors, and native `mr_keep` handling.
+  A 63-comparison audit against TwoSampleMR 0.7.9 matched every key field
+  exactly.

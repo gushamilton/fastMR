@@ -37,9 +37,10 @@ modified.
   RNG draw order and preserve the caller's RNG state.
 * Basic multivariable IVW and optional `arrow::read_parquet()` wrappers. Arrow
   remains in Suggests and has a targeted error when unavailable.
-* Simple median, `fast_harmonise_data()` for local allele alignment, and
-  `fast_clump_data()` for either an in-memory LD matrix or a local PLINK
-  reference panel. The preprocessing layer has no mandatory new dependency.
+* Simple median, full local `fast_harmonise_data()` parity for the native
+  TwoSampleMR actions and allele-information cases, and `fast_clump_data()`
+  for either an in-memory LD matrix or a local PLINK reference panel. The
+  preprocessing layer has no mandatory new dependency.
 
 The 82-row IL6/CRP fixture and provenance are in `inst/extdata/`. The C++
 kernel is a direct R port of the validated shared-grid implementation in the
@@ -113,6 +114,16 @@ weighted median, simple mode, and weighted mode all matched native MR point
 estimates to floating-point tolerance. A 7x11 grid (77 pairs) had a maximum
 representative beta delta of `1.33e-15`. An empty overlap safely returns a
 zero-row result. The CSV summaries and Markdown report are in `outputs/`.
+
+The full native harmonisation audit is in
+`benchmarks/harmonisation_native_options.R`. It covers 21 deliberately
+constructed cases across all three actions (63 comparisons): complete 2-2,
+partial 2-1, 1-2, and 1-1 allele information; direct, reverse, complement,
+palindromic, incompatible, and indel alleles; missing frequencies; incomplete
+effect/se values; and an outcome-specific action vector. All 63 comparisons
+matched native TwoSampleMR 0.7.9 key fields exactly, with maximum numeric delta
+0. The result is recorded in `outputs/harmonisation_native_options.csv` and
+`.md`.
 
 The thread correctness gate reported a maximum seeded difference of `0` for
 `threads=1`, `4`, and `10`. Bootstrap values are deterministic within fastMR;
@@ -264,6 +275,6 @@ versus five-thread results were bitwise identical with zero failures.
 The current package is intentionally local-summary-statistics only: it does
 not implement OpenGWAS extraction, proxy lookup, or the broader TwoSampleMR
 method catalogue. The package URL is a planned destination only; creating or
-pushing a remote was deliberately left to the owner. Harmonisation currently
-targets common bi-allelic SNPs; indel recoding and proxy handling remain out of
-scope for the local fast path.
+pushing a remote was deliberately left to the owner. Harmonisation supports
+native local SNP/indel alignment but does not perform proxy lookup or remote
+variant substitution.

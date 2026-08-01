@@ -1,17 +1,21 @@
 #' Fast local harmonisation of exposure and outcome summary statistics
 #'
 #' This is the local, dependency-free analogue of
-#' [TwoSampleMR::harmonise_data()]. It handles common bi-allelic SNPs,
-#' complements, strand swaps, palindromic-frequency checks, and the standard
-#' `action` policies. Indel recoding and proxy lookup remain outside this
+#' [TwoSampleMR::harmonise_data()]. It implements all three native `action`
+#' policies, all four native allele-information cases (2-2, 2-1, 1-2, and
+#' 1-1), strand swaps, palindromic-frequency checks, and TwoSampleMR's local
+#' indel recoding rules. Proxy lookup and remote extraction remain outside this
 #' local summary-statistics layer.
 #'
 #' @param exposure_dat Exposure data with TwoSampleMR allele and beta columns.
 #' @param outcome_dat Outcome data with TwoSampleMR allele and beta columns.
-#' @param action Integer 1, 2, or 3 controlling palindromic handling.
+#' @param action Integer 1, 2, or 3 controlling palindromic handling: retain
+#'   palindromes, infer strand from allele frequencies, or remove palindromes.
 #' @param tolerance Frequency tolerance around 0.5 for palindromic SNPs.
 #' @return A harmonised data frame with `mr_keep`, `remove`, `palindromic`, and
-#'   `ambiguous` columns, plus a compact `log` attribute.
+#'   `ambiguous` columns, plus a compact `log` attribute. Rows without an
+#'   effect allele in either dataset follow native TwoSampleMR behavior and are
+#'   omitted from the harmonised result.
 #' @export
 fast_harmonise_data <- function(exposure_dat, outcome_dat, action = 2,
                                 tolerance = 0.08) {
@@ -51,88 +55,221 @@ fast_harmonise_data <- function(exposure_dat, outcome_dat, action = 2,
                                        total_variants = 0L, total_variants_for_mr = 0L)
     return(merged)
   }
-  # Normalize the allele strings once; avoid a per-SNP R loop in the hot path.
+
+  # Match harmonise_cleanup_variables() in TwoSampleMR. In particular, NR is
+  # a missing outcome frequency and an empty outcome other allele is missing.
   allele_cols <- c("effect_allele.exposure", "other_allele.exposure",
                    "effect_allele.outcome", "other_allele.outcome")
   for (column in allele_cols) merged[[column]] <- toupper(as.character(merged[[column]]))
   merged$beta.exposure <- suppressWarnings(as.numeric(merged$beta.exposure))
   merged$beta.outcome <- suppressWarnings(as.numeric(merged$beta.outcome))
-  merged$eaf.exposure <- suppressWarnings(as.numeric(merged$eaf.exposure))
-  merged$eaf.outcome <- suppressWarnings(as.numeric(merged$eaf.outcome))
 
-  complement <- c(A = "T", T = "A", C = "G", G = "C")
-  comp <- function(x) unname(complement[x])
+  merged$eaf.exposure <- suppressWarnings(as.numeric(as.character(merged$eaf.exposure)))
+  outcome_eaf <- as.character(merged$eaf.outcome)
+  outcome_eaf[outcome_eaf %in% c("NR", "NR ")] <- NA_character_
+  merged$eaf.outcome <- suppressWarnings(as.numeric(outcome_eaf))
+
+  # TwoSampleMR partitions rows into four cases. Rows with no effect allele
+  # are not handled by the native harmonise_* helpers and are therefore
+  # omitted here as well.
   a1 <- merged$effect_allele.exposure
   a2 <- merged$other_allele.exposure
   b1 <- merged$effect_allele.outcome
   b2 <- merged$other_allele.outcome
-  beta_out <- merged$beta.outcome
-  eaf_out <- merged$eaf.outcome
-
-  complete <- !is.na(a1) & !is.na(a2) & !is.na(b1) & !is.na(b2)
-  palindromic <- complete & ((a1 == "A" & a2 == "T") | (a1 == "T" & a2 == "A") |
-    (a1 == "C" & a2 == "G") | (a1 == "G" & a2 == "C"))
-  direct <- complete & a1 == b1 & a2 == b2
-  reverse <- complete & a1 != a2 & a1 == b2 & a2 == b1
-  to_swap <- reverse
-  if (any(to_swap)) {
-    tmp <- b1[to_swap]; b1[to_swap] <- b2[to_swap]; b2[to_swap] <- tmp
-    beta_out[to_swap] <- -beta_out[to_swap]
-    eaf_out[to_swap] <- 1 - eaf_out[to_swap]
+  i22 <- !is.na(a1) & !is.na(a2) & !is.na(b1) & !is.na(b2)
+  i21 <- !is.na(a1) & !is.na(a2) & !is.na(b1) & is.na(b2)
+  i12 <- !is.na(a1) & is.na(a2) & !is.na(b1) & !is.na(b2)
+  i11 <- !is.na(a1) & is.na(a2) & !is.na(b1) & is.na(b2)
+  valid <- i22 | i21 | i12 | i11
+  if (!any(valid)) {
+    empty <- merged[FALSE, , drop = FALSE]
+    attr(empty, "log") <- data.frame(candidate_variants = nrow(exposure_dat),
+                                      variants_absent_from_reference = nrow(exposure_dat),
+                                      total_variants = 0L, total_variants_for_mr = 0L)
+    return(empty)
   }
-
-  # Resolve non-palindromic strand complements before checking compatibility.
-  complementable <- complete & !palindromic & !direct & !to_swap &
-    b1 %in% names(complement) & b2 %in% names(complement)
-  if (any(complementable)) {
-    b1[complementable] <- comp(b1[complementable])
-    b2[complementable] <- comp(b2[complementable])
-    reverse_comp <- complementable & a1 == b2 & a2 == b1
-    if (any(reverse_comp)) {
-      tmp <- b1[reverse_comp]; b1[reverse_comp] <- b2[reverse_comp]; b2[reverse_comp] <- tmp
-      beta_out[reverse_comp] <- -beta_out[reverse_comp]
-      eaf_out[reverse_comp] <- 1 - eaf_out[reverse_comp]
-    }
-  }
-  aligned <- complete & a1 == b1 & a2 == b2
-  remove <- !aligned
-  minf <- 0.5 - tolerance
-  maxf <- 0.5 + tolerance
-  f_a <- merged$eaf.exposure
-  f_b <- eaf_out
-  temp_a <- f_a; temp_b <- f_b
-  temp_a[is.na(temp_a)] <- 0.5
-  temp_b[is.na(temp_b)] <- 0.5
-  ambiguous <- palindromic & ((temp_a > minf & temp_a < maxf) |
-                              (temp_b > minf & temp_b < maxf))
+  merged <- merged[valid, , drop = FALSE]
+  i22 <- i22[valid]; i21 <- i21[valid]; i12 <- i12[valid]; i11 <- i11[valid]
+  a1 <- merged$effect_allele.exposure
+  a2 <- merged$other_allele.exposure
+  b1 <- merged$effect_allele.outcome
+  b2 <- merged$other_allele.outcome
+  beta_a <- merged$beta.exposure
+  beta_b <- merged$beta.outcome
+  eaf_a <- merged$eaf.exposure
+  eaf_b <- merged$eaf.outcome
   if (length(action) == 1L) action <- rep(action, length(unique(merged$id.outcome)))
   if (length(action) != length(unique(merged$id.outcome))) {
     stop("action must have length 1 or one value per unique id.outcome", call. = FALSE)
   }
-  action_map <- setNames(action, unique(merged$id.outcome))
+  action_map <- setNames(action, unique(as.character(merged$id.outcome)))
   row_action <- unname(action_map[as.character(merged$id.outcome)])
-  if (any(row_action == 2L)) {
-    opposite <- palindromic & !remove &
-      row_action == 2L & ((temp_a < 0.5 & temp_b > 0.5) | (temp_a > 0.5 & temp_b < 0.5))
-    beta_out[opposite] <- -beta_out[opposite]
-    eaf_out[opposite] <- 1 - eaf_out[opposite]
+  remove <- rep(FALSE, nrow(merged))
+  palindromic <- rep(FALSE, nrow(merged))
+  ambiguous <- rep(FALSE, nrow(merged))
+  switched <- rep(FALSE, nrow(merged))
+  flipped_basic <- rep(FALSE, nrow(merged))
+  flipped_palindrome <- rep(FALSE, nrow(merged))
+  flip_alleles <- function(x) chartr("ACGTacgt", "TGCAtgca", x)
+  is_palindromic <- function(x, y) (x == "T" & y == "A") | (x == "A" & y == "T") |
+    (x == "G" & y == "C") | (x == "C" & y == "G")
+  minf <- 0.5 - tolerance
+  maxf <- 0.5 + tolerance
+
+  # 2-2: complete alleles in both studies, including native indel recoding.
+  if (any(i22)) {
+    ii <- which(i22)
+    aa1 <- a1[ii]; aa2 <- a2[ii]; bb1 <- b1[ii]; bb2 <- b2[ii]
+    nca1 <- nchar(aa1); nca2 <- nchar(aa2); ncb1 <- nchar(bb1); ncb2 <- nchar(bb2)
+    indel <- nca1 > 1 | nca2 > 1 | aa1 %in% c("D", "I")
+    r <- rep(TRUE, length(ii))
+    z <- indel & nca1 > nca2 & bb1 == "I" & bb2 == "D"; bb1[z] <- aa1[z]; bb2[z] <- aa2[z]
+    z <- indel & nca1 < nca2 & bb1 == "I" & bb2 == "D"; bb1[z] <- aa2[z]; bb2[z] <- aa1[z]
+    z <- indel & nca1 > nca2 & bb1 == "D" & bb2 == "I"; bb1[z] <- aa2[z]; bb2[z] <- aa1[z]
+    z <- indel & nca1 < nca2 & bb1 == "D" & bb2 == "I"; bb1[z] <- aa1[z]; bb2[z] <- aa2[z]
+    z <- indel & ncb1 > ncb2 & aa1 == "I" & aa2 == "D"; aa1[z] <- bb1[z]; aa2[z] <- bb2[z]
+    z <- indel & ncb1 < ncb2 & aa1 == "I" & aa2 == "D"; aa2[z] <- bb1[z]; aa1[z] <- bb2[z]
+    z <- indel & ncb1 > ncb2 & aa1 == "D" & aa2 == "I"; aa2[z] <- bb1[z]; aa1[z] <- bb2[z]
+    z <- indel & ncb1 < ncb2 & aa1 == "D" & aa2 == "I"; aa1[z] <- bb1[z]; aa2[z] <- bb2[z]
+    r[indel & nca1 > 1 & nca1 == nca2 & bb1 %in% c("D", "I")] <- FALSE
+    r[indel & ncb1 > 1 & ncb1 == ncb2 & aa1 %in% c("D", "I")] <- FALSE
+    r[aa1 == aa2] <- FALSE; r[bb1 == bb2] <- FALSE
+    status <- aa1 == bb1 & aa2 == bb2
+    z <- aa1 == bb2 & aa2 == bb1
+    switched[ii[z]] <- TRUE
+    tmp <- bb1[z]; bb1[z] <- bb2[z]; bb2[z] <- tmp
+    beta_b[ii[z]] <- -beta_b[ii[z]]; eaf_b[ii[z]] <- 1 - eaf_b[ii[z]]
+    status <- aa1 == bb1 & aa2 == bb2
+    pal <- is_palindromic(aa1, aa2)
+    z <- !pal & !status
+    bb1[z] <- flip_alleles(bb1[z]); bb2[z] <- flip_alleles(bb2[z]); flipped_basic[ii[z]] <- TRUE
+    status <- aa1 == bb1 & aa2 == bb2
+    z <- !pal & !status & aa1 == bb2 & aa2 == bb1
+    switched[ii[z]] <- TRUE
+    tmp <- bb1[z]; bb1[z] <- bb2[z]; bb2[z] <- tmp
+    beta_b[ii[z]] <- -beta_b[ii[z]]; eaf_b[ii[z]] <- 1 - eaf_b[ii[z]]
+    status <- aa1 == bb1 & aa2 == bb2
+    rem <- !status; rem[!r] <- TRUE
+    fa <- eaf_a[ii]; fb <- eaf_b[ii]; fa[is.na(fa)] <- 0.5; fb[is.na(fb)] <- 0.5
+    amb <- ((fa > minf & fa < maxf) | (fb > minf & fb < maxf)) & pal
+    z <- ((fa < 0.5 & fb > 0.5) | (fa > 0.5 & fb < 0.5)) & pal & !rem & row_action[ii] == 2L
+    if (any(z)) {
+      beta_b[ii[z]] <- -beta_b[ii[z]]; eaf_b[ii[z]] <- 1 - eaf_b[ii[z]]
+      flipped_palindrome[ii[z]] <- TRUE
+    }
+    a1[ii] <- aa1; a2[ii] <- aa2; b1[ii] <- bb1; b2[ii] <- bb2
+    remove[ii] <- rem; palindromic[ii] <- pal; ambiguous[ii] <- amb
   }
+
+  # 2-1: both exposure alleles and only the outcome effect allele.
+  if (any(i21)) {
+    ii <- which(i21)
+    aa1 <- a1[ii]; aa2 <- a2[ii]; bb1 <- b1[ii]; bb2 <- rep(NA_character_, length(ii))
+    nca1 <- nchar(aa1); nca2 <- nchar(aa2); ncb1 <- nchar(bb1)
+    indel <- nca1 > 1 | nca2 > 1 | aa1 %in% c("D", "I")
+    r <- rep(TRUE, length(ii))
+    z <- indel & nca1 > nca2 & bb1 == "I"; bb1[z] <- aa1[z]; bb2[z] <- aa2[z]
+    z <- indel & nca1 < nca2 & bb1 == "I"; bb1[z] <- aa2[z]; bb2[z] <- aa1[z]
+    z <- indel & nca1 > nca2 & bb1 == "D"; bb1[z] <- aa2[z]; bb2[z] <- aa1[z]
+    z <- indel & nca1 < nca2 & bb1 == "D"; bb1[z] <- aa1[z]; bb2[z] <- aa2[z]
+    r[indel & aa1 == "I" & aa2 == "D"] <- FALSE
+    r[indel & aa1 == "D" & aa2 == "I"] <- FALSE
+    r[indel & nca1 > 1 & nca1 == nca2 & bb1 %in% c("D", "I")] <- FALSE
+    r[aa1 == aa2] <- FALSE
+    pal <- is_palindromic(aa1, aa2); rem <- pal
+    fa <- eaf_a[ii]; fb <- eaf_b[ii]; fa[is.na(fa)] <- 0.5; fb[is.na(fb)] <- 0.5
+    similar1 <- (fa < minf & fb < minf) | (fa > maxf & fb > maxf)
+    amb <- rep(FALSE, length(ii)); status <- aa1 == bb1
+    amb[status & !similar1] <- TRUE; bb2[status] <- aa2[status]
+    z <- aa2 == bb1
+    switched[ii[z]] <- TRUE
+    similar2 <- (fa < minf & fb > maxf) | (fa > maxf & fb < minf)
+    amb[z & !similar2] <- TRUE
+    bb2[z] <- bb1[z]; bb1[z] <- aa1[z]
+    beta_b[ii[z]] <- -beta_b[ii[z]]; eaf_b[ii[z]] <- 1 - eaf_b[ii[z]]
+    z <- aa1 != bb1 & aa2 != bb1
+    amb[z] <- TRUE; bb1[z] <- flip_alleles(bb1[z]); flipped_basic[ii[z]] <- TRUE
+    status <- aa1 == bb1; bb2[status] <- aa2[status]
+    z <- aa2 == bb1
+    bb2[z] <- bb1[z]; bb1[z] <- aa1[z]
+    beta_b[ii[z]] <- -beta_b[ii[z]]; eaf_b[ii[z]] <- 1 - eaf_b[ii[z]]
+    a1[ii] <- aa1; a2[ii] <- aa2; b1[ii] <- bb1; b2[ii] <- bb2
+    remove[ii] <- rem | !r; palindromic[ii] <- pal; ambiguous[ii] <- amb | pal
+  }
+
+  # 1-2: only the exposure effect allele and both outcome alleles.
+  if (any(i12)) {
+    ii <- which(i12)
+    aa1 <- a1[ii]; aa2 <- rep(NA_character_, length(ii)); bb1 <- b1[ii]; bb2 <- b2[ii]
+    ncb1 <- nchar(bb1); ncb2 <- nchar(bb2); nca1 <- nchar(aa1)
+    indel <- ncb1 > 1 | ncb2 > 1 | bb1 %in% c("D", "I")
+    r <- rep(TRUE, length(ii))
+    z <- indel & ncb1 > ncb2 & aa1 == "I"; aa1[z] <- bb1[z]; aa2[z] <- bb2[z]
+    z <- indel & ncb1 < ncb2 & aa1 == "I"; aa2[z] <- bb1[z]; aa1[z] <- bb2[z]
+    z <- indel & ncb1 > ncb2 & aa1 == "D"; aa2[z] <- bb1[z]; aa1[z] <- bb2[z]
+    z <- indel & ncb1 < ncb2 & aa1 == "D"; aa1[z] <- bb1[z]; aa2[z] <- bb2[z]
+    r[indel & bb1 == "I" & bb2 == "D"] <- FALSE
+    r[indel & bb1 == "D" & bb2 == "I"] <- FALSE
+    r[indel & ncb1 > 1 & ncb1 == ncb2 & aa1 %in% c("D", "I")] <- FALSE
+    r[indel & bb1 == bb2] <- FALSE
+    pal <- is_palindromic(bb1, bb2); rem <- pal
+    fa <- eaf_a[ii]; fb <- eaf_b[ii]; fa[is.na(fa)] <- 0.5; fb[is.na(fb)] <- 0.5
+    similar1 <- (fa < minf & fb < minf) | (fa > maxf & fb > maxf)
+    amb <- rep(FALSE, length(ii)); status <- aa1 == bb1
+    amb[status & !similar1] <- TRUE; aa2[status] <- bb2[status]
+    z <- aa1 == bb2
+    switched[ii[z]] <- TRUE
+    similar2 <- (fa < minf & fb > maxf) | (fa > maxf & fb < minf)
+    amb[z & !similar2] <- TRUE
+    aa2[z] <- aa1[z]; aa1[z] <- bb1[z]
+    beta_a[ii[z]] <- -beta_a[ii[z]]; eaf_a[ii[z]] <- 1 - eaf_a[ii[z]]
+    z <- aa1 != bb1 & aa1 != bb2
+    amb[z] <- TRUE; aa1[z] <- flip_alleles(aa1[z]); flipped_basic[ii[z]] <- TRUE
+    status <- aa1 == bb1; aa2[status] <- bb2[status]
+    z <- bb2 == aa1
+    bb2[z] <- bb1[z]; bb1[z] <- aa1[z]
+    beta_b[ii[z]] <- -beta_b[ii[z]]; eaf_b[ii[z]] <- 1 - eaf_b[ii[z]]
+    a1[ii] <- aa1; a2[ii] <- aa2; b1[ii] <- bb1; b2[ii] <- bb2
+    remove[ii] <- rem | !r; palindromic[ii] <- pal; ambiguous[ii] <- amb | pal
+  }
+
+  # 1-1: only the effect allele is available in both studies.
+  if (any(i11)) {
+    ii <- which(i11)
+    status <- a1[ii] == b1[ii]
+    fa <- eaf_a[ii]; fb <- eaf_b[ii]; fa[is.na(fa)] <- 0.5; fb[is.na(fb)] <- 0.5
+    similar <- (fa < minf & fb < minf) | (fa > maxf & fb > maxf)
+    remove[ii] <- !status
+    ambiguous[ii] <- status & !similar
+    a2[ii] <- NA_character_; b2[ii] <- NA_character_
+  }
+
+  merged$effect_allele.exposure <- a1
+  merged$other_allele.exposure <- a2
   merged$effect_allele.outcome <- b1
   merged$other_allele.outcome <- b2
-  merged$beta.outcome <- beta_out
-  merged$eaf.outcome <- eaf_out
+  merged$beta.exposure <- beta_a
+  merged$beta.outcome <- beta_b
+  merged$eaf.exposure <- eaf_a
+  merged$eaf.outcome <- eaf_b
   merged$remove <- remove
   merged$palindromic <- palindromic
   merged$ambiguous <- ambiguous
+
   merged$mr_keep <- !remove
   merged$mr_keep[row_action == 2L] <- merged$mr_keep[row_action == 2L] & !ambiguous[row_action == 2L]
   merged$mr_keep[row_action == 3L] <- merged$mr_keep[row_action == 3L] & !palindromic[row_action == 3L] & !ambiguous[row_action == 3L]
+  complete_mr <- stats::complete.cases(merged[, c("beta.exposure", "beta.outcome", "se.exposure", "se.outcome"), drop = FALSE])
+  merged$mr_keep[!complete_mr] <- FALSE
+  if (!"samplesize.outcome" %in% names(merged)) merged$samplesize.outcome <- NA_real_
   attr(merged, "log") <- data.frame(
     candidate_variants = nrow(exposure_dat),
     variants_absent_from_reference = nrow(exposure_dat) - nrow(merged),
     total_variants = nrow(merged),
     total_variants_for_mr = sum(merged$mr_keep, na.rm = TRUE),
-    switched_alleles = sum(to_swap | (complementable & a1 == b2 & a2 == b1), na.rm = TRUE),
+    switched_alleles = sum(switched),
+    flipped_alleles_basic = sum(flipped_basic),
+    flipped_alleles_palindrome = sum(flipped_palindrome),
     incompatible_alleles = sum(remove, na.rm = TRUE),
     ambiguous_alleles = sum(ambiguous, na.rm = TRUE)
   )

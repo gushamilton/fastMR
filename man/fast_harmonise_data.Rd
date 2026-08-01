@@ -9,8 +9,8 @@ fast_harmonise_data(exposure_dat, outcome_dat, action = 2, tolerance = 0.08)
 \arguments{
 \item{exposure_dat}{Exposure data with TwoSampleMR allele and beta columns.}
 \item{outcome_dat}{Outcome data with TwoSampleMR allele and beta columns.}
-\item{action}{Integer 1, 2, or 3 controlling palindromic handling.}
+\item{action}{Integer 1, 2, or 3 controlling palindromic handling: retain palindromes, infer strand from allele frequencies, or remove palindromes.}
 \item{tolerance}{Frequency tolerance around 0.5 for palindromic SNPs.}
 }
-\value{A harmonised data frame with \code{mr_keep}, \code{remove}, \code{palindromic}, and \code{ambiguous} columns, plus a compact \code{log} attribute.}
-\description{Local, dependency-free harmonisation for common bi-allelic SNP summary statistics.}
+\value{A harmonised data frame with \code{mr_keep}, \code{remove}, \code{palindromic}, and \code{ambiguous} columns, plus a compact \code{log} attribute. Rows without an effect allele in either dataset follow native TwoSampleMR behavior and are omitted from the harmonised result.}
+\description{Local, dependency-free analogue of \code{TwoSampleMR::harmonise_data()} implementing all three action policies, all four native allele-information cases (2-2, 2-1, 1-2, and 1-1), strand swaps, palindromic-frequency checks, and native indel recoding.}

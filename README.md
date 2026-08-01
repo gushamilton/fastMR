@@ -70,7 +70,10 @@ Penalised weighted median follows TwoSampleMR's chi-square down-weighting and
 two-stream bootstrap semantics, with `penk = 20` by default.
 
 For a local preprocessing path, harmonise alleles without a network dependency
-and then clump with either a supplied LD matrix or a local PLINK reference:
+and then clump with either a supplied LD matrix or a local PLINK reference.
+The harmoniser supports native TwoSampleMR actions 1, 2, and 3, four allele
+information cases (2-2, 2-1, 1-2, and 1-1), strand/complement handling,
+palindromic-frequency checks, and native indel recoding:
 
 ```r
 harmonised <- fast_harmonise_data(exposure_dat, outcome_dat, action = 2)
