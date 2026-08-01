@@ -825,48 +825,56 @@ GridData copy_grid(Rcpp::NumericMatrix exp_beta, Rcpp::NumericMatrix out_beta,
   return grid;
 }
 
-void fill_grid_bootstrap_layout(GridData& grid, int nboot, SEXP seed) {
-  if (nboot <= 0) return;
+void fill_grid_bootstrap_layout(GridData& grid, int nboot, SEXP seed,
+                                 bool needs_median, bool needs_mode) {
+  if (nboot <= 0 || (!needs_median && !needs_mode)) return;
   (void) seed;
   const std::size_t n = static_cast<std::size_t>(grid.snp_count);
   const std::size_t block = static_cast<std::size_t>(nboot) * n;
-  grid.exp_inverse.resize(static_cast<std::size_t>(grid.exposure_count) * block);
-  grid.out_draws.resize(static_cast<std::size_t>(grid.outcome_count) * block);
-  grid.mode_z.resize(block);
 
-  std::vector<double> ze(static_cast<std::size_t>(nboot) * n);
-  std::vector<double> zo(static_cast<std::size_t>(nboot) * n);
-  for (std::size_t snp = 0; snp < n; ++snp) {
-    for (int draw = 0; draw < nboot; ++draw) {
-      ze[static_cast<std::size_t>(draw) * n + snp] = R::rnorm(0.0, 1.0);
-    }
-  }
-  for (std::size_t snp = 0; snp < n; ++snp) {
-    for (int draw = 0; draw < nboot; ++draw) {
-      zo[static_cast<std::size_t>(draw) * n + snp] = R::rnorm(0.0, 1.0);
-    }
-  }
-  for (std::size_t snp = 0; snp < n; ++snp) {
-    for (int draw = 0; draw < nboot; ++draw) {
-      grid.mode_z[static_cast<std::size_t>(draw) * n + snp] = R::rnorm(0.0, 1.0);
-    }
-  }
-  for (int draw = 0; draw < nboot; ++draw) {
-    for (int exposure = 0; exposure < grid.exposure_count; ++exposure) {
-      const std::size_t source = static_cast<std::size_t>(exposure) * n;
-      const std::size_t target = static_cast<std::size_t>(exposure) * block +
-                                 static_cast<std::size_t>(draw) * n;
-      for (std::size_t snp = 0; snp < n; ++snp) {
-        const double value = grid.exp_beta[source + snp] + grid.exp_se[source + snp] * ze[static_cast<std::size_t>(draw) * n + snp];
-        grid.exp_inverse[target + snp] = value == 0.0 ? NA_VALUE : 1.0 / value;
+  if (needs_median) {
+    grid.exp_inverse.resize(static_cast<std::size_t>(grid.exposure_count) * block);
+    grid.out_draws.resize(static_cast<std::size_t>(grid.outcome_count) * block);
+    std::vector<double> ze(static_cast<std::size_t>(nboot) * n);
+    std::vector<double> zo(static_cast<std::size_t>(nboot) * n);
+    for (std::size_t snp = 0; snp < n; ++snp) {
+      for (int draw = 0; draw < nboot; ++draw) {
+        ze[static_cast<std::size_t>(draw) * n + snp] = R::rnorm(0.0, 1.0);
       }
     }
-    for (int outcome = 0; outcome < grid.outcome_count; ++outcome) {
-      const std::size_t source = static_cast<std::size_t>(outcome) * n;
-      const std::size_t target = static_cast<std::size_t>(outcome) * block +
-                                 static_cast<std::size_t>(draw) * n;
-      for (std::size_t snp = 0; snp < n; ++snp) {
-        grid.out_draws[target + snp] = grid.out_beta[source + snp] + grid.out_se[source + snp] * zo[static_cast<std::size_t>(draw) * n + snp];
+    for (std::size_t snp = 0; snp < n; ++snp) {
+      for (int draw = 0; draw < nboot; ++draw) {
+        zo[static_cast<std::size_t>(draw) * n + snp] = R::rnorm(0.0, 1.0);
+      }
+    }
+    for (int draw = 0; draw < nboot; ++draw) {
+      for (int exposure = 0; exposure < grid.exposure_count; ++exposure) {
+        const std::size_t source = static_cast<std::size_t>(exposure) * n;
+        const std::size_t target = static_cast<std::size_t>(exposure) * block +
+                                   static_cast<std::size_t>(draw) * n;
+        for (std::size_t snp = 0; snp < n; ++snp) {
+          const double value = grid.exp_beta[source + snp] +
+            grid.exp_se[source + snp] * ze[static_cast<std::size_t>(draw) * n + snp];
+          grid.exp_inverse[target + snp] = value == 0.0 ? NA_VALUE : 1.0 / value;
+        }
+      }
+      for (int outcome = 0; outcome < grid.outcome_count; ++outcome) {
+        const std::size_t source = static_cast<std::size_t>(outcome) * n;
+        const std::size_t target = static_cast<std::size_t>(outcome) * block +
+                                   static_cast<std::size_t>(draw) * n;
+        for (std::size_t snp = 0; snp < n; ++snp) {
+          grid.out_draws[target + snp] = grid.out_beta[source + snp] +
+            grid.out_se[source + snp] * zo[static_cast<std::size_t>(draw) * n + snp];
+        }
+      }
+    }
+  }
+
+  if (needs_mode) {
+    grid.mode_z.resize(block);
+    for (std::size_t snp = 0; snp < n; ++snp) {
+      for (int draw = 0; draw < nboot; ++draw) {
+        grid.mode_z[static_cast<std::size_t>(draw) * n + snp] = R::rnorm(0.0, 1.0);
       }
     }
   }
@@ -964,7 +972,13 @@ Rcpp::List fastmr_grid_native(Rcpp::NumericMatrix exposure_beta,
   validate_controls(nboot, threads, phi);
   const std::vector<std::string> parsed_methods = parse_methods(methods);
   GridData grid = copy_grid(exposure_beta, outcome_beta, exposure_se, outcome_se);
-  fill_grid_bootstrap_layout(grid, nboot, seed);
+  bool needs_median = false;
+  bool needs_mode = false;
+  for (const std::string& method : parsed_methods) {
+    needs_median = needs_median || method == "weighted_median";
+    needs_mode = needs_mode || method == "simple_mode" || method == "weighted_mode";
+  }
+  fill_grid_bootstrap_layout(grid, nboot, seed, needs_median, needs_mode);
   const std::size_t pair_count = static_cast<std::size_t>(grid.exposure_count) *
                                  static_cast<std::size_t>(grid.outcome_count);
   std::vector<std::vector<Result>> results(pair_count);

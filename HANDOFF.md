@@ -86,6 +86,30 @@ their seeded standard errors need not be bitwise identical to NumPy or
 TwoSampleMR because those implementations use different random-number
 streams.
 
+## Per-method shape benchmarks
+
+`outputs/native_tsmr_method_benchmark.csv` and `.md` compare each default MR
+method separately with native `TwoSampleMR::mr()` across five grid shapes:
+50x50, 1x250, 250x1, 10x100, and 100x10. Each run used the 82-row IL6/CRP
+fixture, `nboot=100`, seed `20260802`, and five fastMR worker threads. The
+measured speedup ranges were:
+
+| method | speedup range |
+|---|---:|
+| IVW | 10.08-10.82x |
+| MR-Egger | 8.67-9.85x |
+| weighted median | 12.06-13.21x |
+| simple mode | 45.12-48.99x |
+| weighted mode | 44.82-48.28x |
+
+All deterministic beta differences were at machine precision (maximum
+`8e-18` for IVW/Egger/median and approximately `2.7e-16` for mode point
+estimates). Bootstrap SE and p-value differences are Monte Carlo differences:
+the two implementations generate independent bootstrap streams at `nboot=100`.
+The grid kernel now also skips unused stochastic buffers for deterministic
+method-only calls; on the balanced 50x50 grid this reduced IVW and Egger to
+1.298 and 1.436 seconds respectively at five threads.
+
 ## Remaining limitations
 
 The current package is intentionally local-summary-statistics only: it does
