@@ -49,3 +49,8 @@
   frequencies, outcome-specific action vectors, and native `mr_keep` handling.
   A 63-comparison audit against TwoSampleMR 0.7.9 matched every key field
   exactly.
+* Completed a five-round Mac-mini optimization cycle: flat mixed-grid result
+  storage and fused/linearized exact-mode scans were retained, while `-O3`
+  and static thread chunks were rejected for portability or regression. The
+  final 2,500-pair five-method workload improved from 1.544 to 1.503 seconds
+  at ten threads.

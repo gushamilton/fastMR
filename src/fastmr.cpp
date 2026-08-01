@@ -260,6 +260,9 @@ double mode_point_r_density(const double* values, const double* weights,
   const double lo = from - 4.0 * bandwidth;
   const double up = to + 4.0 * bandwidth;
   const double delta = (up - lo) / static_cast<double>(n - 1);
+  const double output_step = (to - from) / static_cast<double>(n - 1);
+  const double position_start = (from - lo) / delta;
+  const double position_step = output_step / delta;
   std::vector<std::complex<double>>& binned = workspace.binned;
   binned.assign(length, std::complex<double>(0.0, 0.0));
   for (std::size_t i = 0; i < count; ++i) {
@@ -292,8 +295,7 @@ double mode_point_r_density(const double* values, const double* weights,
   int best_index = 0;
   double best_density = -std::numeric_limits<double>::infinity();
   for (int i = 0; i < n; ++i) {
-    const double x = from + (to - from) * static_cast<double>(i) / static_cast<double>(n - 1);
-    const double position = (x - lo) / delta;
+    const double position = position_start + position_step * static_cast<double>(i);
     int left = static_cast<int>(std::floor(position));
     double density = 0.0;
     if (left < 0) density = std::max(0.0, binned[0].real());
@@ -308,7 +310,7 @@ double mode_point_r_density(const double* values, const double* weights,
       best_index = i;
     }
   }
-  return from + (to - from) * static_cast<double>(best_index) / static_cast<double>(n - 1);
+  return from + output_step * static_cast<double>(best_index);
 }
 
 
@@ -344,6 +346,9 @@ std::pair<double, double> mode_point_r_density_pair(const double* values,
   const double lo = from - 4.0 * bandwidth;
   const double up = to + 4.0 * bandwidth;
   const double delta = (up - lo) / static_cast<double>(n - 1);
+  const double output_step = (to - from) / static_cast<double>(n - 1);
+  const double position_start = (from - lo) / delta;
+  const double position_step = output_step / delta;
   std::vector<std::complex<double>>& simple = workspace.simple;
   std::vector<std::complex<double>>& weighted = workspace.weighted;
   simple.assign(length, std::complex<double>(0.0, 0.0));
@@ -384,30 +389,39 @@ std::pair<double, double> mode_point_r_density_pair(const double* values,
   }
   fft_inplace(simple, true);
   fft_inplace(weighted, true);
-  auto find_max = [&](const std::vector<std::complex<double>>& density_values) {
-    int best_index = 0;
-    double best_density = -std::numeric_limits<double>::infinity();
-    for (int i = 0; i < n; ++i) {
-      const double x = from + (to - from) * static_cast<double>(i) / static_cast<double>(n - 1);
-      const double position = (x - lo) / delta;
-      const int left = static_cast<int>(std::floor(position));
-      double density = 0.0;
-      if (left < 0) density = std::max(0.0, density_values[0].real());
-      else if (left >= n - 1) density = std::max(0.0, density_values[n - 1].real());
-      else {
-        const double fraction = position - static_cast<double>(left);
-        density = (1.0 - fraction) * density_values[left].real() +
-                  fraction * density_values[left + 1].real();
-        density = std::max(0.0, density);
-      }
-      if (density > best_density) {
-        best_density = density;
-        best_index = i;
-      }
+  int simple_index = 0;
+  int weighted_index = 0;
+  double simple_best = -std::numeric_limits<double>::infinity();
+  double weighted_best = -std::numeric_limits<double>::infinity();
+  for (int i = 0; i < n; ++i) {
+    const double position = position_start + position_step * static_cast<double>(i);
+    const int left = static_cast<int>(std::floor(position));
+    double simple_density = 0.0;
+    double weighted_density = 0.0;
+    if (left < 0) {
+      simple_density = std::max(0.0, simple[0].real());
+      weighted_density = std::max(0.0, weighted[0].real());
+    } else if (left >= n - 1) {
+      simple_density = std::max(0.0, simple[n - 1].real());
+      weighted_density = std::max(0.0, weighted[n - 1].real());
+    } else {
+      const double fraction = position - static_cast<double>(left);
+      simple_density = std::max(0.0,
+        (1.0 - fraction) * simple[left].real() + fraction * simple[left + 1].real());
+      weighted_density = std::max(0.0,
+        (1.0 - fraction) * weighted[left].real() + fraction * weighted[left + 1].real());
     }
-    return from + (to - from) * static_cast<double>(best_index) / static_cast<double>(n - 1);
-  };
-  return std::make_pair(find_max(simple), find_max(weighted));
+    if (simple_density > simple_best) {
+      simple_best = simple_density;
+      simple_index = i;
+    }
+    if (weighted_density > weighted_best) {
+      weighted_best = weighted_density;
+      weighted_index = i;
+    }
+  }
+  return std::make_pair(from + output_step * static_cast<double>(simple_index),
+                        from + output_step * static_cast<double>(weighted_index));
 }
 
 struct Result {
@@ -1176,19 +1190,19 @@ bool only_ivw_methods(const std::vector<std::string>& methods) {
   return true;
 }
 
-std::vector<std::vector<Result>> compute_ivw_grid_blas(
+std::vector<Result> compute_ivw_grid_blas(
     const GridData& grid, const std::vector<std::string>& methods) {
   const int exposure_count = grid.exposure_count;
   const int outcome_count = grid.outcome_count;
   const int snp_count = grid.snp_count;
   const std::size_t pair_count = static_cast<std::size_t>(exposure_count) *
                                  static_cast<std::size_t>(outcome_count);
-  std::vector<std::vector<Result>> results(pair_count);
+  const std::size_t method_count = methods.size();
+  std::vector<Result> results(pair_count * method_count);
   if (snp_count < 2) {
     for (std::size_t pair = 0; pair < pair_count; ++pair) {
-      results[pair].resize(methods.size());
       for (std::size_t i = 0; i < methods.size(); ++i) {
-        results[pair][i] = empty_result(methods[i], snp_count);
+        results[pair * method_count + i] = empty_result(methods[i], snp_count);
       }
     }
     return results;
@@ -1270,7 +1284,8 @@ std::vector<std::vector<Result>> compute_ivw_grid_blas(
       }
       const double residual_se = std::isfinite(sigma) && std::isfinite(base_se)
         ? base_se * sigma : NA_VALUE;
-      results[static_cast<std::size_t>(exposure) * outcome_count + outcome].resize(methods.size());
+      const std::size_t result_offset =
+        (static_cast<std::size_t>(exposure) * outcome_count + outcome) * method_count;
       for (std::size_t i = 0; i < methods.size(); ++i) {
         const std::string& method = methods[i];
         Result result = empty_result(method, snp_count);
@@ -1290,7 +1305,7 @@ std::vector<std::vector<Result>> compute_ivw_grid_blas(
         result.q_pval = chi_square_pvalue(rss, snp_count - 1);
         result.sigma = true;
         result.sigma_value = sigma;
-        results[static_cast<std::size_t>(exposure) * outcome_count + outcome][i] = result;
+        results[result_offset + i] = result;
       }
     }
   }
@@ -1627,10 +1642,10 @@ Rcpp::List results_to_list(const std::vector<Result>& results) {
   return output;
 }
 
-Rcpp::List results_to_compact_grid(const std::vector<std::vector<Result>>& results,
+Rcpp::List results_to_compact_grid(const std::vector<Result>& results,
                                    const std::vector<std::string>& methods) {
-  const std::size_t pair_count = results.size();
   const int method_count = static_cast<int>(methods.size());
+  const std::size_t pair_count = method_count == 0 ? 0 : results.size() / static_cast<std::size_t>(method_count);
   Rcpp::NumericMatrix nsnp(method_count, pair_count);
   Rcpp::NumericMatrix beta(method_count, pair_count);
   Rcpp::NumericMatrix se(method_count, pair_count);
@@ -1655,7 +1670,8 @@ Rcpp::List results_to_compact_grid(const std::vector<std::vector<Result>>& resul
   for (Rcpp::NumericMatrix* field : fields) std::fill(field->begin(), field->end(), NA_VALUE);
   for (std::size_t pair = 0; pair < pair_count; ++pair) {
     for (int method_index = 0; method_index < method_count; ++method_index) {
-      const Result& result = results[pair][static_cast<std::size_t>(method_index)];
+      const Result& result = results[pair * static_cast<std::size_t>(method_count) +
+                                      static_cast<std::size_t>(method_index)];
       nsnp(method_index, pair) = result.n;
       beta(method_index, pair) = finite_or_na(result.beta);
       se(method_index, pair) = finite_or_na(result.se);
@@ -1765,7 +1781,7 @@ Rcpp::List fastmr_grid_native(Rcpp::NumericMatrix exposure_beta,
   // Compute every IVW flavour through the same BLAS batch used by an IVW-only
   // request. The remaining methods still run pairwise, but never redo the
   // dominant cross-product for the IVW rows.
-  std::vector<std::vector<Result>> ivw_results;
+  std::vector<Result> ivw_results;
   if (!ivw_methods.empty()) ivw_results = compute_ivw_grid_blas(grid, ivw_methods);
   bool needs_median = false;
   bool needs_penalised = false;
@@ -1779,7 +1795,7 @@ Rcpp::List fastmr_grid_native(Rcpp::NumericMatrix exposure_beta,
     needs_egger = needs_egger || method == "egger_bootstrap";
   }
   fill_grid_bootstrap_layout(grid, nboot, seed, needs_median, needs_mode, needs_egger, needs_penalised);
-  std::vector<std::vector<Result>> results(pair_count);
+  std::vector<Result> results(pair_count * parsed_methods.size());
   const int thread_count = bounded_threads(threads, pair_count);
 
 #ifdef _OPENMP
@@ -1798,12 +1814,13 @@ Rcpp::List fastmr_grid_native(Rcpp::NumericMatrix exposure_beta,
       if (parsed_methods[method_index] == "ivw" ||
           parsed_methods[method_index] == "ivw_fe" ||
           parsed_methods[method_index] == "ivw_mre") {
-        full_results[method_index] = ivw_results[pair][ivw_index++];
+        full_results[method_index] = ivw_results[pair * ivw_methods.size() + ivw_index++];
       } else {
         full_results[method_index] = std::move(other_results[other_index++]);
       }
     }
-    results[pair] = std::move(full_results);
+    std::move(full_results.begin(), full_results.end(),
+              results.begin() + static_cast<std::ptrdiff_t>(pair * parsed_methods.size()));
   }
 #else
   if (thread_count == 1) {
@@ -1820,12 +1837,13 @@ Rcpp::List fastmr_grid_native(Rcpp::NumericMatrix exposure_beta,
         if (parsed_methods[method_index] == "ivw" ||
             parsed_methods[method_index] == "ivw_fe" ||
             parsed_methods[method_index] == "ivw_mre") {
-          full_results[method_index] = ivw_results[index][ivw_index++];
+          full_results[method_index] = ivw_results[index * ivw_methods.size() + ivw_index++];
         } else {
           full_results[method_index] = std::move(other_results[other_index++]);
         }
       }
-      results[index] = std::move(full_results);
+      std::move(full_results.begin(), full_results.end(),
+                results.begin() + static_cast<std::ptrdiff_t>(index * parsed_methods.size()));
     }
   } else {
     std::atomic<std::size_t> next(0);
@@ -1848,12 +1866,13 @@ Rcpp::List fastmr_grid_native(Rcpp::NumericMatrix exposure_beta,
             if (parsed_methods[method_index] == "ivw" ||
                 parsed_methods[method_index] == "ivw_fe" ||
                 parsed_methods[method_index] == "ivw_mre") {
-              full_results[method_index] = ivw_results[index][ivw_index++];
+              full_results[method_index] = ivw_results[index * ivw_methods.size() + ivw_index++];
             } else {
               full_results[method_index] = std::move(other_results[other_index++]);
             }
           }
-          results[index] = std::move(full_results);
+          std::move(full_results.begin(), full_results.end(),
+                    results.begin() + static_cast<std::ptrdiff_t>(index * parsed_methods.size()));
         }
       });
     }

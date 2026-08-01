@@ -1,0 +1,8 @@
+"stage","change","seconds","accepted","delta_from_baseline_pct"
+"baseline","Pre-cycle O2 build, nested mixed-grid results, original mode scan",1.544,TRUE,0
+"round_1","Compiler -O3 (rejected: R CMD check portability warning)",1.523,FALSE,-1.36010362694301
+"round_2","Static fallback thread chunks (rejected)",1.728,FALSE,11.9170984455959
+"round_3","Flat mixed-grid Result storage",1.538,TRUE,-0.388601036269431
+"round_4","Linearized exact-mode interpolation positions",1.534,TRUE,-0.647668393782386
+"round_5","Fused simple/weighted exact-mode max scans",1.498,TRUE,-2.97927461139896
+"final_validation","Final retained implementation",1.503,TRUE,-2.65544041450777

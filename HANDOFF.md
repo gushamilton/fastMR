@@ -194,6 +194,18 @@ from a 1,500-variant test panel in about 0.038 seconds. The PLINK path is a
 direct local `system2()` delegation and was not timed on this Mini because no
 PLINK executable is installed there.
 
+The five-round optimization cycle is recorded in
+`benchmarks/optimization_rounds.R` and `outputs/optimization_rounds.csv`/`.md`.
+On the 2,500-pair IL6/CRP grid with five methods, 100 bootstrap draws, and ten
+threads, the final portable build measured 1.503 seconds versus the 1.544
+second pre-cycle baseline (2.66% faster). Flat mixed-grid `Result` storage
+removed per-pair nested-vector allocations. The exact mode scan now uses
+linearized interpolation positions and a fused simple/weighted maximum pass.
+Two candidates were explicitly rejected: `-O3` produced a portability warning
+in `R CMD check`, and static fallback thread chunks regressed the workload to
+1.728 seconds. The one-million-pair compact IVW run remains about 0.109
+seconds, or 9.2 million pairs per second, before tidy-frame allocation.
+
 The newly added Simple median is benchmarked separately in
 `outputs/native_tsmr_simple_median_benchmark.csv` and `.md`: across the same
 five grid shapes it ran 12.17-13.04x faster than native TwoSampleMR at five
