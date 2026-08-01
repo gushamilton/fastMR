@@ -41,7 +41,7 @@ Commands used the required explicit paths:
 /opt/homebrew/bin/R CMD check --no-manual --as-cran fastMR_0.1.0.tar.gz
 ```
 
-Results: local install succeeded; testthat passed 35 tests with one expected
+Results: local install succeeded; testthat passed 36 expectations with one expected
 skip because Arrow is installed; the tarball check completed with **0 errors,
 0 warnings, and 3 notes**. The notes are the planned GitHub URL returning 404
 until a remote is created, the full MIT text being reported as a non-DCF
