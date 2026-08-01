@@ -74,6 +74,7 @@ were:
 | Arrow Parquet read | 0.001 | 82,000 rows/s |
 | seeded thread correctness rerun | 5.103 | 490 |
 
+Primary native-R comparison: outputs/native_tsmr_grid_benchmark.csv records 7.946 seconds for fastMR versus 339.105 seconds for the standard TwoSampleMR::mr() workflow on the same 82-row IL6, 2,500-pair, five-method, nboot=100 workload: a 42.676x speedup. The maximum absolute IVW beta difference was 3.253e-18. The earlier Python rows in outputs/optimization_history.* are retained only as prototype provenance, not as the primary comparator.
 Measured speedups: threads 10 versus 1 were 3.29x for the exact bootstrap
 grid; the package grid was 18.67x faster than the existing Python reference
 (95.032 s) at its comparable worker setting. The validated prototype native
