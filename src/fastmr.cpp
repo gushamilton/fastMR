@@ -148,8 +148,8 @@ double mad_ptr(const double* values, std::size_t count, std::vector<double>& scr
 struct FFTPlan {
   std::size_t n;
   std::vector<std::size_t> bit_reverse;
-  std::vector<std::complex<double>> forward_steps;
-  std::vector<std::complex<double>> inverse_steps;
+  std::vector<std::vector<std::complex<double>>> forward_factors;
+  std::vector<std::vector<std::complex<double>>> inverse_factors;
 
   explicit FFTPlan(std::size_t size) : n(size), bit_reverse(size) {
     for (std::size_t i = 1, j = 0; i < n; ++i) {
@@ -160,8 +160,21 @@ struct FFTPlan {
     }
     for (std::size_t length = 2; length <= n; length <<= 1) {
       const double angle = 2.0 * 3.14159265358979323846 / static_cast<double>(length);
-      forward_steps.emplace_back(std::cos(-angle), std::sin(-angle));
-      inverse_steps.emplace_back(std::cos(angle), std::sin(angle));
+      const std::size_t half = length >> 1;
+      std::vector<std::complex<double>> forward(half);
+      std::vector<std::complex<double>> inverse(half);
+      const std::complex<double> forward_step(std::cos(-angle), std::sin(-angle));
+      const std::complex<double> inverse_step(std::cos(angle), std::sin(angle));
+      std::complex<double> forward_factor(1.0, 0.0);
+      std::complex<double> inverse_factor(1.0, 0.0);
+      for (std::size_t i = 0; i < half; ++i) {
+        forward[i] = forward_factor;
+        inverse[i] = inverse_factor;
+        forward_factor *= forward_step;
+        inverse_factor *= inverse_step;
+      }
+      forward_factors.emplace_back(std::move(forward));
+      inverse_factors.emplace_back(std::move(inverse));
     }
   }
 };
@@ -182,17 +195,15 @@ void fft_inplace(std::vector<std::complex<double>>& values, bool inverse) {
     if (i < j) std::swap(values[i], values[j]);
   }
   for (std::size_t stage = 0, length = 2; length <= n; ++stage, length <<= 1) {
-    const std::complex<double> step = inverse ? plan.inverse_steps[stage]
-                                              : plan.forward_steps[stage];
+    const std::vector<std::complex<double>>& factors = inverse
+      ? plan.inverse_factors[stage] : plan.forward_factors[stage];
     for (std::size_t start = 0; start < n; start += length) {
-      std::complex<double> factor(1.0, 0.0);
       const std::size_t half = length >> 1;
       for (std::size_t i = 0; i < half; ++i) {
         const std::complex<double> even = values[start + i];
-        const std::complex<double> odd = factor * values[start + i + half];
+        const std::complex<double> odd = factors[i] * values[start + i + half];
         values[start + i] = even + odd;
         values[start + i + half] = even - odd;
-        factor *= step;
       }
     }
   }

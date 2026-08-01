@@ -10,6 +10,9 @@
 * Reused exact mode-kernel FFT workspaces/plans and median-selection storage
   across bootstrap draws, reducing the 50x50 mode grid by about 7-8% without
   changing the native density semantics.
+* Cached per-stage FFT twiddle factors in the exact mode transform. The
+  50x50/nboot=100 mode grid is now 1.86-1.89x faster than the previous
+  workspace implementation, with native parity unchanged.
 * Added a batched BLAS IVW grid path for `ivw`, `ivw_fe`, and `ivw_mre`, plus
   one-pass flattening of grid results. On the Mac mini this makes a 50x50
   IVW grid about 5.6x faster than the prior scalar fastMR path and about

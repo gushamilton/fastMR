@@ -29,9 +29,9 @@ modified.
   The mode implementation matches native R `stats::density` semantics with the
   same weighted binning, extended FFT range, interpolation, and 512-point grid;
   no approximate mode estimate is routed through the default API. Its exact
-  kernel reuses per-worker FFT buffers/plans and median selection storage across
-  bootstrap draws. Seeded bootstraps use R RNG draw order and preserve the
-  caller's RNG state.
+  kernel reuses per-worker FFT buffers/plans, cached per-stage twiddle factors,
+  and median selection storage across bootstrap draws. Seeded bootstraps use R
+  RNG draw order and preserve the caller's RNG state.
 * Basic multivariable IVW and optional `arrow::read_parquet()` wrappers. Arrow
   remains in Suggests and has a targeted error when unavailable.
 * Simple median, `fast_harmonise_data()` for local allele alignment, and
@@ -112,21 +112,22 @@ delta was `2.08e-14`, with zero scalar-gate failures; serial-versus-five-thread
 results were bitwise identical in all 100 panels.
 
 The latest exact-mode benchmark is recorded in
-`outputs/mode_optimization_benchmark.csv` and `.md`: reusable FFT workspaces,
-cached 1,024-point plans, and `nth_element` median selection reduced simple
-mode from the measured 1.886 seconds to 1.760 seconds and weighted mode from
-1.910 to 1.770 seconds on the 2,500-pair grid (7.2-7.9% faster). The native
-single-pair parity audit in `outputs/native_mode_parity.csv` covered 24 method
-panels, with maximum beta, SE, and p-value deltas of `6.44e-15`, `4.54e-13`,
-and `8.09e-14`; the mode grid serial-versus-five-thread delta was exactly 0.
+`outputs/mode_optimization_benchmark.csv` and `.md`: cached FFT plans,
+per-stage twiddle factors, reusable workspaces, and `nth_element` median
+selection reduced simple mode from the previous 1.886 seconds to 1.012
+seconds and weighted mode from 1.910 to 1.011 seconds on the 2,500-pair grid
+(1.86-1.89x faster). The native single-pair parity audit in
+`outputs/native_mode_parity.csv` covered 24 method panels, with maximum beta,
+SE, and p-value deltas of `6.44e-15`, `4.54e-13`, and `8.09e-14`; the mode grid
+serial-versus-five-thread delta was exactly 0.
 
 ## Implementation-versus-thread scaling
 
 The direct `system.time()` scaling run is recorded in
 `outputs/iteration_scaling.csv` and `.md`. On the 2,500-pair IL6 grid with all
-five main methods, `nboot=0` took 0.564 seconds at one thread and 0.435 seconds
-at ten threads. At `nboot=100`, one thread took 15.496 seconds and ten threads
-took 2.974 seconds (5.21x thread scaling). Against the prior native
+five main methods, `nboot=0` took 0.478 seconds at one thread and 0.442 seconds
+at ten threads. At `nboot=100`, one thread took 8.426 seconds and ten threads
+took 2.017 seconds (4.18x thread scaling). Against the prior native
 TwoSampleMR reference of 338.919 seconds, this is approximately 21.9x faster
 serially and 114.0x faster at ten threads; the remaining gain is implementation
 and shared-grid work, not just threading.
@@ -197,10 +198,10 @@ SE deltas below `3.1e-18`, and maximum p-value deltas below `8e-16`.
 
 `outputs/native_tsmr_mode_benchmark.csv` and `.md` are the latest native
 TwoSampleMR comparisons for simple and weighted mode across the same five
-shapes. Speedups were 73.58-80.66x at five fastMR threads. Point estimates
-matched to below `2.7e-16`; bootstrap SE and p-value differences are expected
-Monte Carlo differences because native runs independent per-pair streams while
-fastMR shares the grid bootstrap layout.
+shapes. Speedups were 112.4-132.3x at five fastMR threads after the twiddle
+cache. Point estimates matched to below `2.7e-16`; bootstrap SE and p-value
+differences are expected Monte Carlo differences because native runs
+independent per-pair streams while fastMR shares the grid bootstrap layout.
 
 Penalised weighted median now follows native TwoSampleMR 0.7.9 semantics,
 including its chi-square penalty, configurable `penk` multiplier, and two

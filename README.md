@@ -57,9 +57,10 @@ compact native return layout avoids allocating one nested result list per
 pair. The mixed-method path remains available when other estimators are
 requested.
 
-The exact simple/weighted mode kernel also reuses its FFT workspaces and plan
-across bootstrap draws. This reduces allocation and setup cost while retaining
-the native density-grid semantics.
+The exact simple/weighted mode kernel reuses its FFT workspaces, cached FFT
+plans, and per-stage twiddle factors across bootstrap draws. This reduces
+allocation and transform setup cost while retaining the native density-grid
+semantics.
 
 Penalised weighted median follows TwoSampleMR's chi-square down-weighting and
 two-stream bootstrap semantics, with `penk = 20` by default.
