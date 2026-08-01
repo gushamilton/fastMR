@@ -1,0 +1,8 @@
+useDynLib(fastMR, .registration = TRUE)
+importFrom(Rcpp, evalCpp)
+export(fast_mr)
+export(fast_mr_grid)
+export(fast_mr_parquet)
+export(fast_read_parquet)
+export(fast_mr_multivariable_ivw)
+export(fastmr_method_registry)

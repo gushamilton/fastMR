@@ -1,0 +1,7 @@
+CXX_STD = CXX17
+
+# Apple Clang and many CRAN toolchains leave this empty; the C++ source then
+# uses its portable serial/std::thread path. On toolchains with OpenMP, R's
+# standard flags enable the bounded OpenMP loop.
+PKG_CXXFLAGS = $(SHLIB_OPENMP_CXXFLAGS)
+PKG_LIBS = $(SHLIB_OPENMP_CXXFLAGS)

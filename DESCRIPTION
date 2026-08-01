@@ -1,0 +1,27 @@
+Package: fastMR
+Title: Exact and Fast Summary-Statistics Mendelian Randomization
+Version: 0.1.0
+Authors@R: person("Fergus", "Hamilton", email = "fergushamilton@users.noreply.github.com", role = c("aut", "cre"))
+Author: Fergus Hamilton [aut, cre]
+Maintainer: Fergus Hamilton <fergushamilton@users.noreply.github.com>
+Description: Exact summary-statistics Mendelian randomization methods with a
+    registered C++ shared-grid backend. The package provides a small,
+    dependency-light R interface for TwoSampleMR-style tidy data, including
+    optional Arrow Parquet input.
+License: MIT + file LICENSE
+URL: https://github.com/fergushamilton/fastMR
+BugReports: https://github.com/fergushamilton/fastMR/issues
+Encoding: UTF-8
+Roxygen: list(markdown = TRUE)
+RoxygenNote: 7.3.3
+Depends:
+    R (>= 4.1.0)
+Imports:
+    Rcpp
+LinkingTo:
+    Rcpp
+Suggests:
+    arrow,
+    testthat (>= 3.0.0)
+Config/testthat/edition: 3
+SystemRequirements: C++17

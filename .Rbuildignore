@@ -1,0 +1,7 @@
+^\.local$
+^\.git$
+^fastMR\.Rcheck$
+^benchmarks$
+^outputs$
+^HANDOFF\.md$
+^.*\.tar\.gz$

@@ -1,0 +1,11 @@
+{
+  "excluded_missing_crp_exposure": 2,
+  "excluded_missing_il6": 16,
+  "filter": "instrument_set == primary_CRP; non-missing IL6 beta/se/p and CRP beta/se",
+  "mapping": "snp->SNP; CRP std beta/se->exposure; IL6 std beta/se->outcome; alleles/EAF/p-values retained",
+  "primary_rows": 100,
+  "source": "/Users/fergushamilton/projects/crp-il6-cad-mr/outputs/data/associations.tsv",
+  "source_rows": 223,
+  "source_sha256": "63bc801de7a4f0e8920aae90a4f24ccca10fa109621c2f641974e0939d5a1f44",
+  "written_rows": 82
+}
