@@ -6,9 +6,10 @@ registered C++17 backend for the shared exposure/outcome grid that dominates
 large MR scans.
 
 The first release includes IVW (under-dispersion-corrected, fixed-effects, and
-multiplicative random-effects variants), MR-Egger, weighted median, simple
-mode, weighted mode, Wald ratio, and basic multivariable IVW. The default
-methods are exact; there is no approximate mode estimator in the default API.
+multiplicative random-effects variants), MR-Egger, simple and weighted median,
+simple mode, weighted mode, Wald ratio, and basic multivariable IVW. The
+default methods are exact; there is no approximate mode estimator in the
+default API.
 
 ## Quick start
 
@@ -46,6 +47,17 @@ pairs, exposure denominators and outcome numerators are generated once per
 grid side, and worker count is bounded by the number of pairs. If the build
 toolchain has no OpenMP, the same kernel uses a serial or `std::thread`
 fallback; no nested thread pools are created.
+
+For a local preprocessing path, harmonise alleles without a network dependency
+and then clump with either a supplied LD matrix or a local PLINK reference:
+
+```r
+harmonised <- fast_harmonise_data(exposure_dat, outcome_dat, action = 2)
+independent <- fast_clump_data(harmonised, bfile = "reference/eur")
+```
+
+The PLINK path delegates LD calculation to the installed binary; the matrix
+path is useful when the same LD panel is reused across many exposure grids.
 
 ## Parquet
 

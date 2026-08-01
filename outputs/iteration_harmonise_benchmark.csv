@@ -1,0 +1,3 @@
+"component","rows","seconds","speedup","max_beta_delta","keep_mismatches"
+"fast_harmonise",20000,0.015,7.13333333333334,0,0
+"native_harmonise",20000,0.107,1,NA,NA

@@ -22,6 +22,15 @@ test_that("dispatcher accepts common TwoSampleMR method spellings", {
   expect_true(all(c("code", "method", "description") %in% names(fastmr_method_registry())))
 })
 
+test_that("simple median is available through the native kernel", {
+  d <- il6_fixture()[1:8, ]
+  result <- fast_mr(d, methods = "mr_simple_median", nboot = 0)
+  expect_equal(result$method_code, "simple_median")
+  expect_equal(result$nsnp, 8)
+  expect_true(is.finite(result$b))
+  expect_true(is.na(result$ratio_se_mean))
+})
+
 test_that("grouping preserves tidy pair metadata", {
   d <- il6_fixture()[1:8, ]
   d$id.exposure <- rep(c("A", "B"), each = 4)

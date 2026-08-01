@@ -505,11 +505,16 @@ Result compute_egger(const Prepared& p) {
   return result;
 }
 
-Result compute_weighted_median(const Prepared& p, int nboot) {
+Result compute_median(const Prepared& p, const std::string& method,
+                      int nboot, bool weighted) {
   const int n = static_cast<int>(p.ratio.size());
-  if (n < 3) return empty_result("weighted_median", n);
+  if (n < 3) return empty_result(method, n);
   std::vector<double> weights(n);
-  for (int i = 0; i < n; ++i) weights[i] = 1.0 / (p.ratio_se[i] * p.ratio_se[i]);
+  if (weighted) {
+    for (int i = 0; i < n; ++i) weights[i] = 1.0 / (p.ratio_se[i] * p.ratio_se[i]);
+  } else {
+    std::fill(weights.begin(), weights.end(), 1.0);
+  }
   const double beta = weighted_median_point(p.ratio, weights);
   double se = NA_VALUE;
   if (nboot > 0 && !p.bootstrap.empty()) {
@@ -521,13 +526,15 @@ Result compute_weighted_median(const Prepared& p, int nboot) {
     }
     se = sample_std(estimates);
   }
-  Result result = empty_result("weighted_median", n);
+  Result result = empty_result(method, n);
   result.beta = beta;
   result.se = se;
   result.pval = z_pvalue(safe_statistic(beta, se));
-  result.ratio_se_mean = true;
-  result.ratio_se_mean_value = std::accumulate(p.ratio_se.begin(), p.ratio_se.end(), 0.0) /
-                               static_cast<double>(p.ratio_se.size());
+  if (weighted) {
+    result.ratio_se_mean = true;
+    result.ratio_se_mean_value = std::accumulate(p.ratio_se.begin(), p.ratio_se.end(), 0.0) /
+                                 static_cast<double>(p.ratio_se.size());
+  }
   result.bootstrap = true;
   result.bootstrap_value = nboot;
   return result;
@@ -678,7 +685,7 @@ std::vector<Result> compute_pair(Prepared p,
     bool needs_median = false;
     bool needs_mode = false;
     for (const std::string& method : methods) {
-      needs_median = needs_median || method == "weighted_median";
+      needs_median = needs_median || method == "simple_median" || method == "weighted_median";
       needs_mode = needs_mode || method == "simple_mode" || method == "weighted_mode";
     }
     if (needs_median) make_bootstrap(p, nboot, seed);
@@ -701,8 +708,8 @@ std::vector<Result> compute_pair(Prepared p,
       result[i] = compute_ivw(p, method);
     } else if (method == "egger") {
       result[i] = compute_egger(p);
-    } else if (method == "weighted_median") {
-      result[i] = compute_weighted_median(p, nboot);
+    } else if (method == "simple_median" || method == "weighted_median") {
+      result[i] = compute_median(p, method, nboot, method == "weighted_median");
     } else if (method == "simple_mode" || method == "weighted_mode") {
       result[i] = compute_mode(p, method, nboot, phi);
     } else if (method == "wald_ratio") {
@@ -743,7 +750,7 @@ Rcpp::List result_to_list(const Result& result) {
 
 std::vector<std::string> parse_methods(Rcpp::CharacterVector methods) {
   const std::vector<std::string> allowed = {
-    "ivw", "ivw_fe", "ivw_mre", "egger", "weighted_median",
+    "ivw", "ivw_fe", "ivw_mre", "egger", "simple_median", "weighted_median",
     "simple_mode", "weighted_mode", "wald_ratio"
   };
   std::vector<std::string> parsed;
@@ -975,7 +982,7 @@ Rcpp::List fastmr_grid_native(Rcpp::NumericMatrix exposure_beta,
   bool needs_median = false;
   bool needs_mode = false;
   for (const std::string& method : parsed_methods) {
-    needs_median = needs_median || method == "weighted_median";
+    needs_median = needs_median || method == "simple_median" || method == "weighted_median";
     needs_mode = needs_mode || method == "simple_mode" || method == "weighted_mode";
   }
   fill_grid_bootstrap_layout(grid, nboot, seed, needs_median, needs_mode);

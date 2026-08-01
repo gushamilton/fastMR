@@ -26,6 +26,9 @@ modified.
   bootstraps use R RNG draw order and preserve the caller's RNG state.
 * Basic multivariable IVW and optional `arrow::read_parquet()` wrappers. Arrow
   remains in Suggests and has a targeted error when unavailable.
+* Simple median, `fast_harmonise_data()` for local allele alignment, and
+  `fast_clump_data()` for either an in-memory LD matrix or a local PLINK
+  reference panel. The preprocessing layer has no mandatory new dependency.
 
 The 82-row IL6/CRP fixture and provenance are in `inst/extdata/`. The C++
 kernel is a direct R port of the validated shared-grid implementation in the
@@ -86,6 +89,32 @@ their seeded standard errors need not be bitwise identical to NumPy or
 TwoSampleMR because those implementations use different random-number
 streams.
 
+## Implementation-versus-thread scaling
+
+The direct `system.time()` scaling run is recorded in
+`outputs/iteration_scaling.csv` and `.md`. On the 2,500-pair IL6 grid with all
+five main methods, `nboot=0` took 2.428 seconds at one thread and 2.333 seconds
+at ten threads: the deterministic kernel is already implementation-bound.
+At `nboot=100`, one thread took 18.897 seconds and ten threads took 5.297
+seconds (3.57x thread scaling). Against the prior native TwoSampleMR reference
+of 338.919 seconds, this is approximately 17.9x faster serially and 64.0x
+faster at ten threads; the remaining gain is implementation and shared-grid
+work, not just threading.
+
+The local harmonisation path processed 20,000 synthetic strand/complement/
+palindrome cases in 0.015 seconds versus 0.107 seconds for native
+`TwoSampleMR::harmonise_data()` (7.13x), with zero beta, allele-frequency, or
+`mr_keep` mismatches. Local LD-matrix clumping retained the expected index SNPs
+from a 1,500-variant test panel in about 0.038 seconds. The PLINK path is a
+direct local `system2()` delegation and was not timed on this Mini because no
+PLINK executable is installed there.
+
+The newly added Simple median is benchmarked separately in
+`outputs/native_tsmr_simple_median_benchmark.csv` and `.md`: across the same
+five grid shapes it ran 12.17-13.04x faster than native TwoSampleMR at five
+threads, with a maximum beta difference of `3.30e-17`. Its bootstrap SE and
+p-value differences are Monte Carlo differences from independent streams.
+
 ## Per-method shape benchmarks
 
 `outputs/native_tsmr_method_benchmark.csv` and `.md` compare each default MR
@@ -113,6 +142,8 @@ method-only calls; on the balanced 50x50 grid this reduced IVW and Egger to
 ## Remaining limitations
 
 The current package is intentionally local-summary-statistics only: it does
-not implement OpenGWAS extraction, harmonisation, clumping, or the broader
-TwoSampleMR method catalogue. The package URL is a planned destination only;
-creating or pushing a remote was deliberately left to the owner.
+not implement OpenGWAS extraction, proxy lookup, or the broader TwoSampleMR
+method catalogue. The package URL is a planned destination only; creating or
+pushing a remote was deliberately left to the owner. Harmonisation currently
+targets common bi-allelic SNPs; indel recoding and proxy handling remain out of
+scope for the local fast path.

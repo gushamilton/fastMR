@@ -32,3 +32,14 @@ test_that("grid returns every method for every pair", {
   expect_equal(nrow(result), 12)
   expect_equal(as.vector(table(result$method_code)), c(4, 4, 4))
 })
+
+test_that("simple median grid results are thread deterministic", {
+  g <- grid_fixture(2, 2)
+  a <- fast_mr_grid(g$exposure_beta, g$outcome_beta, g$exposure_se, g$outcome_se,
+                    methods = c("simple_median", "weighted_median"),
+                    nboot = 5, seed = 20260804, threads = 1)
+  b <- fast_mr_grid(g$exposure_beta, g$outcome_beta, g$exposure_se, g$outcome_se,
+                    methods = c("simple_median", "weighted_median"),
+                    nboot = 5, seed = 20260804, threads = 5)
+  expect_equal(a, b, tolerance = 0)
+})
