@@ -44,6 +44,23 @@ test_that("simple median grid results are thread deterministic", {
   expect_equal(a, b, tolerance = 0)
 })
 
+test_that("combined median grid reuses the shared ratio ordering", {
+  g <- grid_fixture(2, 3)
+  both <- fast_mr_grid(g$exposure_beta, g$outcome_beta, g$exposure_se,
+                       g$outcome_se, methods = c("simple_median", "weighted_median"),
+                       nboot = 9, seed = 20260806, threads = 5)
+  simple <- fast_mr_grid(g$exposure_beta, g$outcome_beta, g$exposure_se,
+                         g$outcome_se, methods = "simple_median",
+                         nboot = 9, seed = 20260806, threads = 5)
+  weighted <- fast_mr_grid(g$exposure_beta, g$outcome_beta, g$exposure_se,
+                           g$outcome_se, methods = "weighted_median",
+                           nboot = 9, seed = 20260806, threads = 5)
+  expect_equal(both$b[both$method_code == "simple_median"], simple$b, tolerance = 0)
+  expect_equal(both$se[both$method_code == "simple_median"], simple$se, tolerance = 0)
+  expect_equal(both$b[both$method_code == "weighted_median"], weighted$b, tolerance = 0)
+  expect_equal(both$se[both$method_code == "weighted_median"], weighted$se, tolerance = 1e-15)
+})
+
 test_that("MR-Egger bootstrap grid results are thread deterministic", {
   g <- grid_fixture(2, 2)
   a <- fast_mr_grid(g$exposure_beta, g$outcome_beta, g$exposure_se, g$outcome_se,

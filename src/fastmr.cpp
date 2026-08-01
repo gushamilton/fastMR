@@ -91,14 +91,22 @@ double mad(const std::vector<double>& values) {
   return 1.4826 * result;
 }
 
+double weighted_median_point_ptr(const double* values, const double* weights,
+                                 std::size_t count, std::vector<std::size_t>& order);
+
 double weighted_median_point(const std::vector<double>& values,
                              const std::vector<double>& weights) {
   if (values.empty() || values.size() != weights.size()) return NA_VALUE;
-  std::vector<std::size_t> order(values.size());
-  std::iota(order.begin(), order.end(), static_cast<std::size_t>(0));
-  std::stable_sort(order.begin(), order.end(), [&](std::size_t a, std::size_t b) {
-    return values[a] < values[b];
-  });
+  std::vector<std::size_t> order;
+  return weighted_median_point_ptr(values.data(), weights.data(), values.size(), order);
+}
+
+double weighted_median_ordered(const double* values, const double* weights,
+                               std::size_t count,
+                               const std::vector<std::size_t>& order) {
+  if (count == 0 || values == nullptr || weights == nullptr || order.size() != count) {
+    return NA_VALUE;
+  }
   double total = 0.0;
   for (std::size_t index : order) total += weights[index];
   if (!std::isfinite(total) || total <= 0.0) return NA_VALUE;
@@ -122,6 +130,17 @@ double weighted_median_point(const std::vector<double>& values,
   return values[order[last_below]] +
          (values[order[last_below + 1]] - values[order[last_below]]) *
          (0.5 - left) / gap;
+}
+
+double weighted_median_point_ptr(const double* values, const double* weights,
+                                 std::size_t count, std::vector<std::size_t>& order) {
+  if (count == 0 || values == nullptr || weights == nullptr) return NA_VALUE;
+  order.resize(count);
+  std::iota(order.begin(), order.end(), static_cast<std::size_t>(0));
+  std::stable_sort(order.begin(), order.end(), [&](std::size_t a, std::size_t b) {
+    return values[a] < values[b];
+  });
+  return weighted_median_ordered(values, weights, count, order);
 }
 
 double sample_std_ptr(const double* values, std::size_t count) {
@@ -713,14 +732,15 @@ Result compute_median(const Prepared& p, const std::string& method,
   } else {
     std::fill(weights.begin(), weights.end(), 1.0);
   }
-  const double beta = weighted_median_point(p.ratio, weights);
+  std::vector<std::size_t> order;
+  const double beta = weighted_median_point_ptr(
+    p.ratio.data(), weights.data(), p.ratio.size(), order);
   double se = NA_VALUE;
   if (nboot > 0 && !p.bootstrap.empty()) {
     std::vector<double> estimates(nboot);
     for (int draw = 0; draw < nboot; ++draw) {
-      std::vector<double> row(p.bootstrap.begin() + static_cast<std::size_t>(draw) * n,
-                              p.bootstrap.begin() + static_cast<std::size_t>(draw + 1) * n);
-      estimates[draw] = weighted_median_point(row, weights);
+      const double* row = p.bootstrap.data() + static_cast<std::size_t>(draw) * n;
+      estimates[draw] = weighted_median_point_ptr(row, weights.data(), n, order);
     }
     se = sample_std(estimates);
   }
@@ -738,12 +758,66 @@ Result compute_median(const Prepared& p, const std::string& method,
   return result;
 }
 
+void compute_both_medians(const Prepared& p, int nboot,
+                          Result& simple, Result& weighted) {
+  const int n = static_cast<int>(p.ratio.size());
+  if (n < 3) {
+    simple = empty_result("simple_median", n);
+    weighted = empty_result("weighted_median", n);
+    return;
+  }
+  std::vector<double> simple_weights(n, 1.0);
+  std::vector<double> weighted_weights(n);
+  for (int i = 0; i < n; ++i) {
+    weighted_weights[i] = 1.0 / (p.ratio_se[i] * p.ratio_se[i]);
+  }
+  std::vector<std::size_t> order;
+  const double simple_beta = weighted_median_point_ptr(
+    p.ratio.data(), simple_weights.data(), p.ratio.size(), order);
+  const double weighted_beta = weighted_median_ordered(
+    p.ratio.data(), weighted_weights.data(), p.ratio.size(), order);
+  double simple_se = NA_VALUE;
+  double weighted_se = NA_VALUE;
+  if (nboot > 0 && !p.bootstrap.empty()) {
+    std::vector<double> simple_estimates(nboot), weighted_estimates(nboot);
+    for (int draw = 0; draw < nboot; ++draw) {
+      const double* row = p.bootstrap.data() + static_cast<std::size_t>(draw) * n;
+      // Both estimators sort the same bootstrap ratios; only their weights
+      // differ, so reuse the permutation for the second weighted pass.
+      const double simple_value = weighted_median_point_ptr(
+        row, simple_weights.data(), n, order);
+      simple_estimates[draw] = simple_value;
+      weighted_estimates[draw] = weighted_median_ordered(
+        row, weighted_weights.data(), n, order);
+    }
+    simple_se = sample_std(simple_estimates);
+    weighted_se = sample_std(weighted_estimates);
+  }
+  simple = empty_result("simple_median", n);
+  simple.beta = simple_beta;
+  simple.se = simple_se;
+  simple.pval = z_pvalue(safe_statistic(simple_beta, simple_se));
+  simple.bootstrap = true;
+  simple.bootstrap_value = nboot;
+  weighted = empty_result("weighted_median", n);
+  weighted.beta = weighted_beta;
+  weighted.se = weighted_se;
+  weighted.pval = z_pvalue(safe_statistic(weighted_beta, weighted_se));
+  weighted.ratio_se_mean = true;
+  weighted.ratio_se_mean_value = std::accumulate(
+    p.ratio_se.begin(), p.ratio_se.end(), 0.0) / static_cast<double>(p.ratio_se.size());
+  weighted.bootstrap = true;
+  weighted.bootstrap_value = nboot;
+}
+
 Result compute_penalised_median(const Prepared& p, int nboot, double penk) {
   const int n = static_cast<int>(p.ratio.size());
   if (n < 3) return empty_result("penalised_weighted_median", n);
   std::vector<double> weights(n), penalised_weights(n);
+  std::vector<std::size_t> order;
   for (int i = 0; i < n; ++i) weights[i] = 1.0 / (p.ratio_se[i] * p.ratio_se[i]);
-  const double weighted_beta = weighted_median_point(p.ratio, weights);
+  const double weighted_beta = weighted_median_point_ptr(
+    p.ratio.data(), weights.data(), p.ratio.size(), order);
   for (int i = 0; i < n; ++i) {
     const double statistic = weights[i] * (p.ratio[i] - weighted_beta) *
                              (p.ratio[i] - weighted_beta);
@@ -758,8 +832,8 @@ Result compute_penalised_median(const Prepared& p, int nboot, double penk) {
     std::vector<double> estimates(nboot);
     for (int draw = 0; draw < nboot; ++draw) {
       const double* row = bootstrap.data() + static_cast<std::size_t>(draw) * n;
-      estimates[draw] = weighted_median_point(
-        std::vector<double>(row, row + n), penalised_weights);
+      estimates[draw] = weighted_median_point_ptr(
+        row, penalised_weights.data(), n, order);
     }
     se = sample_std(estimates);
   }
@@ -963,13 +1037,27 @@ std::vector<Result> compute_pair(Prepared p,
   bool has_weighted = false;
   std::size_t simple_index = 0;
   std::size_t weighted_index = 0;
+  bool has_simple_median = false;
+  bool has_weighted_median = false;
+  std::size_t simple_median_index = 0;
+  std::size_t weighted_median_index = 0;
   for (std::size_t i = 0; i < methods.size(); ++i) {
     if (methods[i] == "simple_mode") { has_simple = true; simple_index = i; }
     if (methods[i] == "weighted_mode") { has_weighted = true; weighted_index = i; }
+    if (methods[i] == "simple_median") {
+      has_simple_median = true;
+      simple_median_index = i;
+    }
+    if (methods[i] == "weighted_median") {
+      has_weighted_median = true;
+      weighted_median_index = i;
+    }
   }
   for (std::size_t i = 0; i < methods.size(); ++i) {
     const std::string& method = methods[i];
     if ((method == "simple_mode" || method == "weighted_mode") && has_simple && has_weighted) continue;
+    if ((method == "simple_median" || method == "weighted_median") &&
+        has_simple_median && has_weighted_median) continue;
     if (method == "ivw" || method == "ivw_fe" || method == "ivw_mre") {
       result[i] = compute_ivw(p, method);
     } else if (method == "uwr") {
@@ -992,6 +1080,9 @@ std::vector<Result> compute_pair(Prepared p,
   }
   if (has_simple && has_weighted) {
     compute_both_modes(p, nboot, phi, result[simple_index], result[weighted_index]);
+  }
+  if (has_simple_median && has_weighted_median) {
+    compute_both_medians(p, nboot, result[simple_median_index], result[weighted_median_index]);
   }
   return result;
 }
@@ -1670,6 +1761,23 @@ Rcpp::List fastmr_grid_native(Rcpp::NumericMatrix exposure_beta,
   if (only_ivw_methods(parsed_methods)) {
     return compute_ivw_grid_compact(grid, parsed_methods);
   }
+  std::vector<std::string> ivw_methods;
+  std::vector<std::string> other_methods;
+  ivw_methods.reserve(parsed_methods.size());
+  other_methods.reserve(parsed_methods.size());
+  for (std::size_t i = 0; i < parsed_methods.size(); ++i) {
+    const std::string& method = parsed_methods[i];
+    if (method == "ivw" || method == "ivw_fe" || method == "ivw_mre") {
+      ivw_methods.push_back(method);
+    } else {
+      other_methods.push_back(method);
+    }
+  }
+  // Compute every IVW flavour through the same BLAS batch used by an IVW-only
+  // request. The remaining methods still run pairwise, but never redo the
+  // dominant cross-product for the IVW rows.
+  std::vector<std::vector<Result>> ivw_results;
+  if (!ivw_methods.empty()) ivw_results = compute_ivw_grid_blas(grid, ivw_methods);
   bool needs_median = false;
   bool needs_penalised = false;
   bool needs_mode = false;
@@ -1690,16 +1798,45 @@ Rcpp::List fastmr_grid_native(Rcpp::NumericMatrix exposure_beta,
   for (int index = 0; index < static_cast<int>(pair_count); ++index) {
     const int exposure = index / grid.outcome_count;
     const int outcome = index % grid.outcome_count;
-    results[static_cast<std::size_t>(index)] = compute_pair(
-      pair_from_grid(grid, exposure, outcome, nboot), parsed_methods, nboot,
+    const std::size_t pair = static_cast<std::size_t>(index);
+    std::vector<Result> other_results = compute_pair(
+      pair_from_grid(grid, exposure, outcome, nboot), other_methods, nboot,
       R_NilValue, false, phi, penk);
+    std::vector<Result> full_results(parsed_methods.size());
+    std::size_t other_index = 0;
+    std::size_t ivw_index = 0;
+    for (std::size_t method_index = 0; method_index < parsed_methods.size(); ++method_index) {
+      if (parsed_methods[method_index] == "ivw" ||
+          parsed_methods[method_index] == "ivw_fe" ||
+          parsed_methods[method_index] == "ivw_mre") {
+        full_results[method_index] = ivw_results[pair][ivw_index++];
+      } else {
+        full_results[method_index] = std::move(other_results[other_index++]);
+      }
+    }
+    results[pair] = std::move(full_results);
   }
 #else
   if (thread_count == 1) {
     for (std::size_t index = 0; index < pair_count; ++index) {
       const int exposure = static_cast<int>(index / static_cast<std::size_t>(grid.outcome_count));
       const int outcome = static_cast<int>(index % static_cast<std::size_t>(grid.outcome_count));
-      results[index] = compute_pair(pair_from_grid(grid, exposure, outcome, nboot), parsed_methods, nboot, R_NilValue, false, phi, penk);
+      std::vector<Result> other_results = compute_pair(
+        pair_from_grid(grid, exposure, outcome, nboot), other_methods, nboot,
+        R_NilValue, false, phi, penk);
+      std::vector<Result> full_results(parsed_methods.size());
+      std::size_t other_index = 0;
+      std::size_t ivw_index = 0;
+      for (std::size_t method_index = 0; method_index < parsed_methods.size(); ++method_index) {
+        if (parsed_methods[method_index] == "ivw" ||
+            parsed_methods[method_index] == "ivw_fe" ||
+            parsed_methods[method_index] == "ivw_mre") {
+          full_results[method_index] = ivw_results[index][ivw_index++];
+        } else {
+          full_results[method_index] = std::move(other_results[other_index++]);
+        }
+      }
+      results[index] = std::move(full_results);
     }
   } else {
     std::atomic<std::size_t> next(0);
@@ -1712,7 +1849,22 @@ Rcpp::List fastmr_grid_native(Rcpp::NumericMatrix exposure_beta,
           if (index >= pair_count) break;
           const int exposure = static_cast<int>(index / static_cast<std::size_t>(grid.outcome_count));
           const int outcome = static_cast<int>(index % static_cast<std::size_t>(grid.outcome_count));
-          results[index] = compute_pair(pair_from_grid(grid, exposure, outcome, nboot), parsed_methods, nboot, R_NilValue, false, phi, penk);
+          std::vector<Result> other_results = compute_pair(
+            pair_from_grid(grid, exposure, outcome, nboot), other_methods, nboot,
+            R_NilValue, false, phi, penk);
+          std::vector<Result> full_results(parsed_methods.size());
+          std::size_t other_index = 0;
+          std::size_t ivw_index = 0;
+          for (std::size_t method_index = 0; method_index < parsed_methods.size(); ++method_index) {
+            if (parsed_methods[method_index] == "ivw" ||
+                parsed_methods[method_index] == "ivw_fe" ||
+                parsed_methods[method_index] == "ivw_mre") {
+              full_results[method_index] = ivw_results[index][ivw_index++];
+            } else {
+              full_results[method_index] = std::move(other_results[other_index++]);
+            }
+          }
+          results[index] = std::move(full_results);
         }
       });
     }
