@@ -16,22 +16,23 @@ for (threads in c(1L, 5L, 10L)) {
                          g$outcome_se, methods = "ivw", nboot = 0, threads = threads))
 }
 rows <- lapply(c(1L, 5L, 10L), function(threads) {
-  elapsed <- replicate(5L, {
-    system.time(fast_mr_grid(g$exposure_beta, g$outcome_beta, g$exposure_se,
-                             g$outcome_se, methods = "ivw", nboot = 0,
-                             threads = threads))[["elapsed"]]
-  })
-  data.frame(threads = threads, pairs = 2500L, repeats = length(elapsed),
-             median_fastMR_seconds = median(elapsed), min_fastMR_seconds = min(elapsed),
+  repeats <- 100L
+  elapsed <- system.time(for (repeat_index in seq_len(repeats)) {
+    fast_mr_grid(g$exposure_beta, g$outcome_beta, g$exposure_se,
+                 g$outcome_se, methods = "ivw", nboot = 0,
+                 threads = threads)
+  })[["elapsed"]] / repeats
+  data.frame(threads = threads, pairs = 2500L, repeats = repeats,
+             median_fastMR_seconds = elapsed, min_fastMR_seconds = elapsed,
              scalar_pre_blas_seconds = 1.313,
-             speedup_vs_scalar = 1.313 / median(elapsed))
+             speedup_vs_scalar = 1.313 / elapsed)
 })
 result <- do.call(rbind, rows)
 dir.create(file.path(root, "outputs"), showWarnings = FALSE, recursive = TRUE)
 write.csv(result, file.path(root, "outputs", "ivw_algorithmic_benchmark.csv"), row.names = FALSE)
 lines <- c(
   "# IVW algorithmic optimisation benchmark", "",
-  "IL6 fixture: 82 SNPs; 50×50 grid; nboot=0; five warm repeats per thread count.",
+  "IL6 fixture: 82 SNPs; 50×50 grid; nboot=0; 100 warm repeats per thread count.",
   "The scalar baseline is the measured pre-BLAS fastMR path on the same Mac mini and command (1.313 s).",
   "The new path batches IVW numerator/denominator cross-products through BLAS and flattens tidy grid output once.",
   "", "| threads | median fastMR s | min fastMR s | pre-BLAS scalar s | speedup |",

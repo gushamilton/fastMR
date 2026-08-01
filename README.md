@@ -52,8 +52,10 @@ fallback; no nested thread pools are created.
 For grids containing only IVW variants (`ivw`, `ivw_fe`, and `ivw_mre`),
 fastMR takes a batched BLAS path: the exposure/outcome cross-products for all
 pairs are computed together, and tidy results are flattened in one pass. This
-is the high-throughput path for large exposure-by-outcome IVW scans; the
-mixed-method path remains available when other estimators are requested.
+is the high-throughput path for large exposure-by-outcome IVW scans; its
+compact native return layout avoids allocating one nested result list per
+pair. The mixed-method path remains available when other estimators are
+requested.
 
 The exact simple/weighted mode kernel also reuses its FFT workspaces and plan
 across bootstrap draws. This reduces allocation and setup cost while retaining

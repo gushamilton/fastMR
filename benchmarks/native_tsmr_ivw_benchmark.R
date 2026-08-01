@@ -55,17 +55,21 @@ for (k in seq_len(nrow(scenarios))) {
   invisible(fast_mr_grid(g$exposure_beta, g$outcome_beta, g$exposure_se,
                          g$outcome_se, methods = "ivw", nboot = nboot,
                          seed = seed, threads = threads))
+  fast_repeats <- if (pairs >= 1000L) 20L else 100L
   started <- proc.time()[["elapsed"]]
-  fast <- fast_mr_grid(g$exposure_beta, g$outcome_beta, g$exposure_se,
-                       g$outcome_se, methods = "ivw", nboot = nboot,
-                       seed = seed, threads = threads)
-  fast_seconds <- proc.time()[["elapsed"]] - started
+  for (repeat_index in seq_len(fast_repeats)) {
+    fast <- fast_mr_grid(g$exposure_beta, g$outcome_beta, g$exposure_se,
+                         g$outcome_se, methods = "ivw", nboot = nboot,
+                         seed = seed, threads = threads)
+  }
+  fast_seconds <- (proc.time()[["elapsed"]] - started) / fast_repeats
   set.seed(seed)
   started <- proc.time()[["elapsed"]]
   native <- run_native(g, s$exposures, s$outcomes, params)
   native_seconds <- proc.time()[["elapsed"]] - started
   rows[[k]] <- data.frame(
-    scenario = s$scenario, pairs = pairs, fastMR_seconds = fast_seconds,
+    scenario = s$scenario, pairs = pairs, fast_repeats = fast_repeats,
+    fastMR_seconds = fast_seconds,
     TwoSampleMR_seconds = native_seconds, speedup = native_seconds / fast_seconds,
     max_abs_beta_difference = max(abs(fast$b - native$b), na.rm = TRUE),
     max_abs_se_difference = max(abs(fast$se - native$se), na.rm = TRUE),
@@ -78,7 +82,7 @@ dir.create(file.path(root, "outputs"), showWarnings = FALSE, recursive = TRUE)
 write.csv(result, file.path(root, "outputs", "native_tsmr_ivw_benchmark.csv"), row.names = FALSE)
 lines <- c(
   "# Native TwoSampleMR IVW benchmark", "",
-  sprintf("IL6 fixture: %d SNPs; nboot=%d; fastMR threads=%d; seed=%d.",
+  sprintf("IL6 fixture: %d SNPs; nboot=%d; fastMR threads=%d; seed=%d; fastMR timings averaged over 20-100 repeats.",
           nrow(d), nboot, threads, seed), "",
   "| scenario | pairs | fastMR s | TwoSampleMR s | speedup | max beta delta | max SE delta |",
   "|---|---:|---:|---:|---:|---:|---:|"

@@ -172,8 +172,50 @@ fastmr_tidy_native <- function(native_results, methods, id.exposure = "", id.out
   out
 }
 
+fastmr_tidy_ivw_compact <- function(native_results, methods, exposure_labels, outcome_labels) {
+  method_codes <- as.character(native_results$methods)
+  method_count <- length(method_codes)
+  pair_count <- length(exposure_labels) * length(outcome_labels)
+  total <- method_count * pair_count
+  pair_index <- rep(seq_len(pair_count), each = method_count)
+  exposure_index <- ((pair_index - 1L) %/% length(outcome_labels)) + 1L
+  outcome_index <- ((pair_index - 1L) %% length(outcome_labels)) + 1L
+  registry <- fastmr_method_registry()
+  code <- rep(method_codes, times = pair_count)
+  values <- function(name) as.vector(native_results[[name]])
+  out <- data.frame(
+    id.exposure = exposure_labels[exposure_index],
+    id.outcome = outcome_labels[outcome_index],
+    method = registry$method[match(code, registry$code)],
+    method_code = code,
+    nsnp = rep(as.numeric(native_results$n)[1L], total),
+    b = values("beta"),
+    se = values("se"),
+    pval = values("pval"),
+    Q = values("Q"),
+    Q_df = values("Q_df"),
+    Q_pval = values("Q_pval"),
+    sigma = values("sigma"),
+    intercept = rep(NA_real_, total),
+    intercept_se = rep(NA_real_, total),
+    intercept_pval = rep(NA_real_, total),
+    ratio_se_mean = rep(NA_real_, total),
+    bootstrap = rep(NA_real_, total),
+    phi = rep(NA_real_, total),
+    flipped = rep(NA_real_, total),
+    se_exposure_mean = rep(NA_real_, total),
+    exposure_index = exposure_index,
+    outcome_index = outcome_index,
+    stringsAsFactors = FALSE
+  )
+  out
+}
+
 fastmr_tidy_grid_native <- function(native_results, methods, exposure_labels, outcome_labels) {
   if (!length(native_results)) return(fastmr_tidy_native(list(), methods))
+  if (inherits(native_results, "fastmr_ivw_compact")) {
+    return(fastmr_tidy_ivw_compact(native_results, methods, exposure_labels, outcome_labels))
+  }
   flat <- unlist(native_results, recursive = FALSE, use.names = FALSE)
   method_count <- length(methods)
   pair_index <- rep(seq_along(native_results), each = method_count)

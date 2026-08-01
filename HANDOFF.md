@@ -21,8 +21,8 @@ modified.
   other toolchains retain OpenMP automatically when R exposes them.
 * IVW-only grids (`ivw`, `ivw_fe`, `ivw_mre`) use a batched BLAS kernel for
   numerator/denominator cross-products across all exposure/outcome pairs.
-  Grid result tidying is also flattened into one data-frame construction rather
-  than one data frame per pair.
+  The native result is now a compact method-by-pair numeric layout, avoiding
+  one nested result list per pair; R still returns the same tidy data frame.
 * Exact default methods: IVW, fixed-effects IVW, multiplicative random-effects
   IVW, MR-Egger, weighted median, penalised weighted median, simple mode,
   weighted mode, and Wald ratio.
@@ -99,10 +99,11 @@ streams.
 
 The IVW-specific algorithmic benchmark is recorded in
 `outputs/ivw_algorithmic_benchmark.csv` and `.md`. On the same 2,500-pair
-fixture, the new BLAS plus one-pass tidy path took a median 0.235-0.237 seconds
-over five warm repeats at 1, 5, and 10 requested threads, versus 1.313 seconds
-for the measured pre-BLAS scalar fastMR path: 5.54-5.59x faster. The
-implementation gain is therefore present before thread scaling.
+fixture, the compact BLAS plus direct tidy path averaged 0.00088 seconds over
+100 warm calls at 1, 5, and 10 requested threads, versus 1.313 seconds for the
+measured pre-BLAS scalar fastMR path: 1,492x faster. This is an implementation
+and allocation reduction, not a thread-count claim; the small grid is already
+below the useful parallel crossover.
 
 The 100-panel adversarial IVW gate is recorded in
 `outputs/adversarial_ivw_threads.csv`. It included zero, negative, near-zero,
@@ -190,9 +191,9 @@ estimating the cost of requesting all five methods together.
 
 `outputs/native_tsmr_ivw_benchmark.csv` and `.md` compare the new IVW-only
 path with native TwoSampleMR across the same five grid shapes. At five
-requested threads, speedups were 54.93-60.67x, with maximum beta deltas below
-`3.3e-18`, maximum SE deltas below `3.1e-18`, and maximum p-value deltas below
-`8e-16`.
+requested threads, speedups were 1,867-14,682x after averaging the fastMR
+side over 20-100 warm calls, with maximum beta deltas below `3.3e-18`, maximum
+SE deltas below `3.1e-18`, and maximum p-value deltas below `8e-16`.
 
 `outputs/native_tsmr_mode_benchmark.csv` and `.md` are the latest native
 TwoSampleMR comparisons for simple and weighted mode across the same five

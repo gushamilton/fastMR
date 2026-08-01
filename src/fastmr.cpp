@@ -1206,6 +1206,137 @@ std::vector<std::vector<Result>> compute_ivw_grid_blas(
   return results;
 }
 
+Rcpp::List compute_ivw_grid_compact(const GridData& grid,
+                                    const std::vector<std::string>& methods) {
+  const int exposure_count = grid.exposure_count;
+  const int outcome_count = grid.outcome_count;
+  const int snp_count = grid.snp_count;
+  const std::size_t pair_count = static_cast<std::size_t>(exposure_count) *
+                                 static_cast<std::size_t>(outcome_count);
+  const int method_count = static_cast<int>(methods.size());
+  Rcpp::NumericMatrix beta(method_count, pair_count);
+  Rcpp::NumericMatrix se(method_count, pair_count);
+  Rcpp::NumericMatrix pval(method_count, pair_count);
+  Rcpp::NumericMatrix q(method_count, pair_count);
+  Rcpp::NumericMatrix q_df(method_count, pair_count);
+  Rcpp::NumericMatrix q_pval(method_count, pair_count);
+  Rcpp::NumericMatrix sigma(method_count, pair_count);
+  std::fill(beta.begin(), beta.end(), NA_VALUE);
+  std::fill(se.begin(), se.end(), NA_VALUE);
+  std::fill(pval.begin(), pval.end(), NA_VALUE);
+  std::fill(q.begin(), q.end(), NA_VALUE);
+  std::fill(q_df.begin(), q_df.end(), NA_VALUE);
+  std::fill(q_pval.begin(), q_pval.end(), NA_VALUE);
+  std::fill(sigma.begin(), sigma.end(), NA_VALUE);
+
+  if (snp_count >= 2) {
+    const std::size_t exp_size = static_cast<std::size_t>(snp_count) * exposure_count;
+    const std::size_t out_size = static_cast<std::size_t>(snp_count) * outcome_count;
+    std::vector<double> exp_squared(exp_size);
+    std::vector<double> out_weight(out_size);
+    std::vector<double> out_weighted(out_size);
+    std::vector<double> out_y2(static_cast<std::size_t>(outcome_count), 0.0);
+    for (int exposure = 0; exposure < exposure_count; ++exposure) {
+      const std::size_t offset = static_cast<std::size_t>(exposure) * snp_count;
+      for (int snp = 0; snp < snp_count; ++snp) {
+        const double x = grid.exp_beta[offset + static_cast<std::size_t>(snp)];
+        exp_squared[offset + static_cast<std::size_t>(snp)] = x * x;
+      }
+    }
+    for (int outcome = 0; outcome < outcome_count; ++outcome) {
+      const std::size_t offset = static_cast<std::size_t>(outcome) * snp_count;
+      double y2 = 0.0;
+      for (int snp = 0; snp < snp_count; ++snp) {
+        const std::size_t index = offset + static_cast<std::size_t>(snp);
+        const double weight = 1.0 / (grid.out_se[index] * grid.out_se[index]);
+        const double y = grid.out_beta[index];
+        out_weight[index] = weight;
+        out_weighted[index] = weight * y;
+        y2 += weight * y * y;
+      }
+      out_y2[static_cast<std::size_t>(outcome)] = y2;
+    }
+
+    std::vector<double> numerator(pair_count, 0.0);
+    std::vector<double> denominator(pair_count, 0.0);
+    const char transposed = 'T';
+    const char normal = 'N';
+    const int m = exposure_count;
+    const int n = outcome_count;
+    const int k = snp_count;
+    const int lda = snp_count;
+    const int ldb = snp_count;
+    const int ldc = exposure_count;
+    const double alpha = 1.0;
+    const double beta_zero = 0.0;
+    F77_CALL(dgemm)(&transposed, &normal, &m, &n, &k, &alpha,
+                    grid.exp_beta.data(), &lda, out_weighted.data(), &ldb,
+                    &beta_zero, numerator.data(), &ldc FCONE FCONE);
+    F77_CALL(dgemm)(&transposed, &normal, &m, &n, &k, &alpha,
+                    exp_squared.data(), &lda, out_weight.data(), &ldb,
+                    &beta_zero, denominator.data(), &ldc FCONE FCONE);
+
+    for (int exposure = 0; exposure < exposure_count; ++exposure) {
+      for (int outcome = 0; outcome < outcome_count; ++outcome) {
+        const std::size_t pair = static_cast<std::size_t>(exposure) * outcome_count + outcome;
+        const std::size_t matrix_index = static_cast<std::size_t>(exposure) +
+                                         static_cast<std::size_t>(exposure_count) * outcome;
+        const double den = denominator[matrix_index];
+        const double num = numerator[matrix_index];
+        const double beta_value = den > 0.0 && std::isfinite(den) ? num / den : NA_VALUE;
+        double rss = NA_VALUE;
+        double sigma_value = NA_VALUE;
+        double base_se = NA_VALUE;
+        if (std::isfinite(beta_value)) {
+          const double y2 = out_y2[static_cast<std::size_t>(outcome)];
+          rss = y2 - 2.0 * beta_value * num + beta_value * beta_value * den;
+          if (rss < 0.0 && rss > -1e-12 * std::max(1.0, y2)) rss = 0.0;
+          if (rss >= 0.0 && std::isfinite(rss)) {
+            sigma_value = std::sqrt(rss / static_cast<double>(snp_count - 1));
+            base_se = std::sqrt(1.0 / den);
+          }
+        }
+        const double residual_se = std::isfinite(sigma_value) && std::isfinite(base_se)
+          ? base_se * sigma_value : NA_VALUE;
+        for (int method_index = 0; method_index < method_count; ++method_index) {
+          const std::string& method = methods[static_cast<std::size_t>(method_index)];
+          double method_se = residual_se;
+          if (method == "ivw") {
+            method_se = sigma_value > 0.0 && std::isfinite(sigma_value)
+              ? residual_se / std::min(1.0, sigma_value) : residual_se;
+          } else if (method == "ivw_fe") {
+            method_se = sigma_value > 0.0 && std::isfinite(sigma_value)
+              ? residual_se / sigma_value : NA_VALUE;
+          }
+          beta(method_index, pair) = beta_value;
+          se(method_index, pair) = method_se;
+          pval(method_index, pair) = z_pvalue(safe_statistic(beta_value, method_se));
+          q(method_index, pair) = rss;
+          q_df(method_index, pair) = snp_count - 1;
+          q_pval(method_index, pair) = chi_square_pvalue(rss, snp_count - 1);
+          sigma(method_index, pair) = sigma_value;
+        }
+      }
+    }
+  }
+
+  Rcpp::CharacterVector method_codes(method_count);
+  for (int i = 0; i < method_count; ++i) method_codes[i] = methods[static_cast<std::size_t>(i)];
+  Rcpp::List output = Rcpp::List::create(
+    Rcpp::_["methods"] = method_codes,
+    Rcpp::_["n"] = snp_count,
+    Rcpp::_["beta"] = beta,
+    Rcpp::_["se"] = se,
+    Rcpp::_["pval"] = pval,
+    Rcpp::_["Q"] = q,
+    Rcpp::_["Q_df"] = q_df,
+    Rcpp::_["Q_pval"] = q_pval,
+    Rcpp::_["sigma"] = sigma
+  );
+  output.attr("class") = "fastmr_ivw_compact";
+  return output;
+}
+
 GridData copy_grid(Rcpp::NumericMatrix exp_beta, Rcpp::NumericMatrix out_beta,
                   Rcpp::NumericMatrix exp_se, Rcpp::NumericMatrix out_se) {
   validate_grid_shapes(exp_beta, out_beta, exp_se, out_se);
@@ -1450,10 +1581,7 @@ Rcpp::List fastmr_grid_native(Rcpp::NumericMatrix exposure_beta,
   const std::size_t pair_count = static_cast<std::size_t>(grid.exposure_count) *
                                  static_cast<std::size_t>(grid.outcome_count);
   if (only_ivw_methods(parsed_methods)) {
-    const std::vector<std::vector<Result>> results = compute_ivw_grid_blas(grid, parsed_methods);
-    Rcpp::List output(pair_count);
-    for (std::size_t i = 0; i < pair_count; ++i) output[i] = results_to_list(results[i]);
-    return output;
+    return compute_ivw_grid_compact(grid, parsed_methods);
   }
   bool needs_median = false;
   bool needs_penalised = false;

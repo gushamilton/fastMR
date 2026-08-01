@@ -1,5 +1,9 @@
 # fastMR 0.1.0
 
+* Added a compact all-IVW grid return path after the BLAS cross-products. On
+  the Mac mini, the 50x50 one-method grid averages 0.00088 seconds over 100
+  warm calls, 1,492x faster than the measured pre-BLAS scalar path; native
+  TwoSampleMR shape speedups are 1,867-14,682x with machine-precision parity.
 * Added native-compatible penalised weighted median with configurable `penk`
   and exact two-stream bootstrap parity; its five-shape benchmark reaches
   122-160x speedups over native TwoSampleMR.
