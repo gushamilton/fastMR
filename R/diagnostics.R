@@ -134,10 +134,11 @@ fastmr_wald_rows <- function(group, rows) {
   prepared <- fastmr_prepare_vectors(rows)
   x <- prepared$beta.exposure
   y <- prepared$beta.outcome
-  sx <- prepared$se.exposure
   sy <- prepared$se.outcome
   beta <- y / x
-  se <- sqrt((sy / x)^2 + (y * sx / (x * x))^2)
+  # Match both TwoSampleMR::mr_wald_ratio() and fastMR's native Wald path:
+  # the standard error treats the exposure estimate as fixed.
+  se <- sy / abs(x)
   p <- rep(NA_real_, length(beta))
   valid <- is.finite(beta) & is.finite(se) & se > 0
   p[valid] <- 2 * stats::pnorm(abs(beta[valid] / se[valid]), lower.tail = FALSE)
