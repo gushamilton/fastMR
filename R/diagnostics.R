@@ -130,18 +130,27 @@ fastmr_diagnostic_sample_size <- function(data) {
   if (length(value) && is.finite(value)) value else NA_real_
 }
 
-fastmr_single_row <- function(group, row, method, threads) {
-  result <- fast_mr(row, methods = method, nboot = 0, threads = threads)
+fastmr_wald_rows <- function(group, rows) {
+  prepared <- fastmr_prepare_vectors(rows)
+  x <- prepared$beta.exposure
+  y <- prepared$beta.outcome
+  sx <- prepared$se.exposure
+  sy <- prepared$se.outcome
+  beta <- y / x
+  se <- sqrt((sy / x)^2 + (y * sx / (x * x))^2)
+  p <- rep(NA_real_, length(beta))
+  valid <- is.finite(beta) & is.finite(se) & se > 0
+  p[valid] <- 2 * stats::pnorm(abs(beta[valid] / se[valid]), lower.tail = FALSE)
   data.frame(
-    exposure = group$exposure,
-    outcome = group$outcome,
-    id.exposure = group$id.exposure,
-    id.outcome = group$id.outcome,
-    samplesize = fastmr_diagnostic_sample_size(row),
-    SNP = as.character(row$SNP[[1L]]),
-    b = fastmr_scalar(result, "b"),
-    se = fastmr_scalar(result, "se"),
-    p = fastmr_scalar(result, "pval"),
+    exposure = rep(group$exposure, length(beta)),
+    outcome = rep(group$outcome, length(beta)),
+    id.exposure = rep(group$id.exposure, length(beta)),
+    id.outcome = rep(group$id.outcome, length(beta)),
+    samplesize = rep(fastmr_diagnostic_sample_size(rows), length(beta)),
+    SNP = as.character(rows$SNP),
+    b = beta,
+    se = se,
+    p = p,
     stringsAsFactors = FALSE
   )
 }
@@ -170,10 +179,12 @@ fast_mr_singlesnp <- function(data, single_method = "wald_ratio",
     snp <- as.character(group$data$SNP)
     snp[is.na(snp)] <- ""
     selected <- which(keep & !duplicated(snp))
-    for (index in selected) {
+    if (length(selected)) {
+      single_rows <- fastmr_wald_rows(group, group$data[selected, , drop = FALSE])
+      for (index in seq_len(nrow(single_rows))) {
       k <- k + 1L
-      rows[[k]] <- fastmr_single_row(group, group$data[index, , drop = FALSE],
-                                     single_method, threads)
+        rows[[k]] <- single_rows[index, , drop = FALSE]
+      }
     }
     aggregate <- fast_mr(group$data, methods = all_method, nboot = 0,
                          threads = threads)
@@ -198,6 +209,67 @@ fast_mr_singlesnp <- function(data, single_method = "wald_ratio",
   do.call(rbind, rows)
 }
 
+fastmr_leaveoneout_regression <- function(group, method) {
+  keep <- fastmr_diagnostic_keep(group$data)
+  snp <- as.character(group$data$SNP)
+  snp[is.na(snp)] <- ""
+  selected <- which(keep & !duplicated(snp))
+  rows <- group$data[selected, , drop = FALSE]
+  prepared <- fastmr_prepare_vectors(rows)
+  n <- nrow(rows)
+  if (n == 0L) return(data.frame())
+  x <- prepared$beta.exposure
+  y <- prepared$beta.outcome
+  sx <- prepared$se.exposure
+  sy <- prepared$se.outcome
+  if (method == "uwr") {
+    w <- rep(1, n)
+  } else {
+    w <- 1 / (sy * sy)
+  }
+  sum_w <- sum(w)
+  sum_wx <- sum(w * x)
+  sum_wxx <- sum(w * x * x)
+  sum_wy <- sum(w * y)
+  sum_wxy <- sum(w * x * y)
+  sum_wyy <- sum(w * y * y)
+  denominator <- sum_wxx - w * x * x
+  numerator <- sum_wxy - w * x * y
+  y_sum <- sum_wyy - w * y * y
+  beta <- rep(NA_real_, n)
+  se <- rep(NA_real_, n)
+  p <- rep(NA_real_, n)
+  valid <- n > 2L & is.finite(denominator) & denominator > 0
+  beta[valid] <- numerator[valid] / denominator[valid]
+  rss <- y_sum - numerator * numerator / denominator
+  df <- n - 2L
+  sigma <- sqrt(pmax(0, rss / df))
+  base_se <- sqrt(1 / denominator)
+  residual_se <- base_se * sigma
+  if (method == "ivw_fe") {
+    se[valid] <- base_se[valid]
+  } else if (method == "ivw_mre") {
+    se[valid] <- residual_se[valid]
+  } else {
+    correction <- pmin(1, sigma)
+    se[valid] <- residual_se[valid] / correction[valid]
+  }
+  valid_p <- valid & is.finite(beta) & is.finite(se) & se > 0
+  p[valid_p] <- 2 * stats::pnorm(abs(beta[valid_p] / se[valid_p]), lower.tail = FALSE)
+  data.frame(
+    exposure = rep(group$exposure, n),
+    outcome = rep(group$outcome, n),
+    id.exposure = rep(group$id.exposure, n),
+    id.outcome = rep(group$id.outcome, n),
+    samplesize = rep(fastmr_diagnostic_sample_size(rows), n),
+    SNP = snp[selected],
+    b = beta,
+    se = se,
+    p = p,
+    stringsAsFactors = FALSE
+  )
+}
+
 #' Calculate leave-one-SNP-out MR estimates
 #'
 #' @param data A harmonised TwoSampleMR-style data frame.
@@ -218,24 +290,32 @@ fast_mr_leaveoneout <- function(data, method = "ivw", threads = 1) {
     snp <- as.character(group$data$SNP)
     snp[is.na(snp)] <- ""
     selected <- which(keep & !duplicated(snp))
-    for (index in selected) {
-      remaining <- group$data
-      remaining <- remaining[!(as.character(remaining$SNP) == snp[[index]]), , drop = FALSE]
-      result <- fast_mr(remaining, methods = method, nboot = 0,
-                        threads = threads)
+    if (method %in% c("ivw", "ivw_fe", "ivw_mre", "uwr")) {
+      leave_rows <- fastmr_leaveoneout_regression(group, method)
+      for (index in seq_len(nrow(leave_rows))) {
       k <- k + 1L
-      rows[[k]] <- data.frame(
-        exposure = group$exposure,
-        outcome = group$outcome,
-        id.exposure = group$id.exposure,
-        id.outcome = group$id.outcome,
-        samplesize = fastmr_diagnostic_sample_size(remaining),
-        SNP = snp[[index]],
-        b = fastmr_scalar(result, "b"),
-        se = fastmr_scalar(result, "se"),
-        p = fastmr_scalar(result, "pval"),
-        stringsAsFactors = FALSE
-      )
+        rows[[k]] <- leave_rows[index, , drop = FALSE]
+      }
+    } else {
+      for (index in selected) {
+        remaining <- group$data
+        remaining <- remaining[!(as.character(remaining$SNP) == snp[[index]]), , drop = FALSE]
+        result <- fast_mr(remaining, methods = method, nboot = 0,
+                          threads = threads)
+        k <- k + 1L
+        rows[[k]] <- data.frame(
+          exposure = group$exposure,
+          outcome = group$outcome,
+          id.exposure = group$id.exposure,
+          id.outcome = group$id.outcome,
+          samplesize = fastmr_diagnostic_sample_size(remaining),
+          SNP = snp[[index]],
+          b = fastmr_scalar(result, "b"),
+          se = fastmr_scalar(result, "se"),
+          p = fastmr_scalar(result, "pval"),
+          stringsAsFactors = FALSE
+        )
+      }
     }
     result <- fast_mr(group$data, methods = method, nboot = 0,
                       threads = threads)
