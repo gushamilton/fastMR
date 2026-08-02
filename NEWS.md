@@ -1,3 +1,12 @@
+# fastMR 0.1.5
+
+* Added fast heterogeneity, MR-Egger pleiotropy, single-SNP, and leave-one-out
+  utilities with TwoSampleMR-compatible tidy output.
+* Vectorized single-SNP Wald ratios and leave-one-out regression diagnostics;
+  the Mac mini audit matches native TwoSampleMR row-for-row at floating-point
+  precision, with leave-one-out about 2.9x faster and single-SNP about 2x faster
+  on the 82-SNP fixture.
+
 # fastMR 0.1.4
 
 * Added a regression test proving that exact duplicate SNP rows leave all
