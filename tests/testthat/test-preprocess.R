@@ -70,6 +70,20 @@ test_that("action vector applies one native policy per outcome", {
   expect_equal(result$mr_keep, c(TRUE, FALSE, FALSE))
 })
 
+test_that("action length is validated against all merged outcomes", {
+  exposure <- data.frame(SNP = c("rs_valid", "rs_missing"), id.exposure = "E",
+    beta.exposure = c(.2, .3), se.exposure = c(.05, .06), eaf.exposure = c(.2, .3),
+    effect_allele.exposure = c("A", NA), other_allele.exposure = c("G", NA))
+  outcome <- data.frame(SNP = c("rs_valid", "rs_missing"),
+    id.outcome = c("O1", "O2"), beta.outcome = c(.1, .2), se.outcome = c(.04, .05),
+    eaf.outcome = c(.2, .3), effect_allele.outcome = c("A", NA),
+    other_allele.outcome = c("G", NA))
+  result <- fast_harmonise_data(exposure, outcome, action = c(1, 2))
+  expect_equal(result$SNP, "rs_valid")
+  expect_error(fast_harmonise_data(exposure, outcome, action = c(1, 2, 3)),
+               "one value per unique id.outcome")
+})
+
 test_that("local LD-matrix clumping retains the best independent index SNPs", {
   dat <- data.frame(SNP = paste0("rs", 1:4), id.exposure = "E",
                     pval.exposure = c(1e-8, 1e-6, 1e-5, 1e-4),
@@ -79,4 +93,28 @@ test_that("local LD-matrix clumping retains the best independent index SNPs", {
   rownames(ld) <- colnames(ld) <- dat$SNP
   result <- fast_clump_data(dat, clump_kb = 10, clump_r2 = .5, ld_matrix = ld)
   expect_equal(result$SNP, c("rs1", "rs3", "rs4"))
+})
+
+test_that("PLINK clumping passes an explicit clump field and preserves groups", {
+  skip_on_os("windows")
+  plink <- tempfile("fastMR_plink_stub_")
+  writeLines(c(
+    "#!/bin/sh",
+    "input=''",
+    "out=''",
+    "while [ \"$#\" -gt 0 ]; do",
+    "  case \"$1\" in",
+    "    --clump) input=\"$2\"; shift 2;;",
+    "    --out) out=\"$2\"; shift 2;;",
+    "    *) shift;;",
+    "  esac",
+    "done",
+    "printf 'CHR SNP BP P NSIG S05 S01 S001 S0001\n' > \"${out}.clumped\"",
+    "awk 'NR == 2 { print \"1\", $1, 100, $2, 1, 1, 1, 1, 1 }' \"$input\" >> \"${out}.clumped\""
+  ), plink)
+  Sys.chmod(plink, "0755")
+  dat <- data.frame(SNP = c("rs1", "rs2", "rs3"),
+    id.exposure = c("E1", "E1", "E2"), pval.exposure = c(1e-8, 1e-6, 1e-7))
+  result <- fast_clump_data(dat, bfile = "/tmp/panel with spaces", plink_bin = plink)
+  expect_equal(result$SNP, c("rs1", "rs3"))
 })

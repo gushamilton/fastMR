@@ -48,7 +48,33 @@ fast_harmonise_data <- function(exposure_dat, outcome_dat, action = 2,
   if (!"id.exposure" %in% names(exposure_dat)) exposure_dat$id.exposure <- "exposure"
   if (!"id.outcome" %in% names(outcome_dat)) outcome_dat$id.outcome <- "outcome"
 
-  merged <- merge(outcome_dat, exposure_dat, by = "SNP", sort = FALSE)
+  # The usual tidy case has one exposure row per SNP and no non-key column
+  # name collisions. Avoiding base::merge here removes a large allocation and
+  # preserves its sort=FALSE row order; fall back to merge for duplicate SNPs
+  # or colliding columns so the full many-to-many semantics remain intact.
+  exposure_nonkey <- setdiff(names(exposure_dat), "SNP")
+  outcome_nonkey <- setdiff(names(outcome_dat), "SNP")
+  if (!anyDuplicated(exposure_dat$SNP) &&
+      !length(intersect(exposure_nonkey, outcome_nonkey))) {
+    exposure_index <- match(outcome_dat$SNP, exposure_dat$SNP)
+    hit <- !is.na(exposure_index)
+    if (any(hit)) {
+      outcome_hit <- outcome_dat[hit, , drop = FALSE]
+      exposure_hit <- exposure_dat[exposure_index[hit], exposure_nonkey, drop = FALSE]
+      merged <- cbind(data.frame(SNP = outcome_hit$SNP),
+                      outcome_hit[outcome_nonkey], exposure_hit)
+      row.names(merged) <- NULL
+    } else {
+      merged <- merge(outcome_dat, exposure_dat, by = "SNP", sort = FALSE)
+    }
+  } else {
+    merged <- merge(outcome_dat, exposure_dat, by = "SNP", sort = FALSE)
+  }
+  n_outcomes <- length(unique(as.character(merged$id.outcome)))
+  if (length(action) == 1L) action <- rep(action, n_outcomes)
+  if (length(action) != n_outcomes) {
+    stop("action must have length 1 or one value per unique id.outcome", call. = FALSE)
+  }
   if (!nrow(merged)) {
     attr(merged, "log") <- data.frame(candidate_variants = nrow(exposure_dat),
                                        variants_absent_from_reference = nrow(exposure_dat),
@@ -98,12 +124,8 @@ fast_harmonise_data <- function(exposure_dat, outcome_dat, action = 2,
   beta_b <- merged$beta.outcome
   eaf_a <- merged$eaf.exposure
   eaf_b <- merged$eaf.outcome
-  if (length(action) == 1L) action <- rep(action, length(unique(merged$id.outcome)))
-  if (length(action) != length(unique(merged$id.outcome))) {
-    stop("action must have length 1 or one value per unique id.outcome", call. = FALSE)
-  }
-  action_map <- setNames(action, unique(as.character(merged$id.outcome)))
-  row_action <- unname(action_map[as.character(merged$id.outcome)])
+  outcome_levels <- unique(as.character(merged$id.outcome))
+  row_action <- action[match(as.character(merged$id.outcome), outcome_levels)]
   remove <- rep(FALSE, nrow(merged))
   palindromic <- rep(FALSE, nrow(merged))
   ambiguous <- rep(FALSE, nrow(merged))
@@ -305,7 +327,10 @@ fast_clump_data <- function(dat, clump_kb = 10000, clump_r2 = 0.001,
   }
   pval_column <- if ("pval.exposure" %in% names(dat)) "pval.exposure" else if ("pval.outcome" %in% names(dat)) "pval.outcome" else NULL
   if (is.null(pval_column)) {
-    dat$pval.exposure <- clump_p1
+    # Match TwoSampleMR::clump_data()/ieugwasr::ld_clump(): without a
+    # supplied p-value column, every variant receives 0.99, independently of
+    # the index threshold requested by the caller.
+    dat$pval.exposure <- 0.99
     pval_column <- "pval.exposure"
   }
   if (!"id.exposure" %in% names(dat)) dat$id.exposure <- "exposure"
@@ -319,14 +344,32 @@ fast_clump_data <- function(dat, clump_kb = 10000, clump_r2 = 0.001,
       write.table(data.frame(SNP = dat$SNP[index], P = dat[[pval_column]][index]), input,
                   row.names = FALSE, col.names = TRUE, quote = FALSE, sep = "\t")
       on.exit(unlink(c(input, paste0(stem, ".clumped"), paste0(stem, ".log"), paste0(stem, ".nosex"))), add = TRUE)
-      status <- system2(plink_bin, c("--bfile", bfile, "--clump", input,
+      run_error <- NULL
+      run_output <- tryCatch(system2(plink_bin, c(
+        "--bfile", bfile, "--clump", input, "--clump-field", "P",
         "--clump-p1", as.character(clump_p1), "--clump-r2", as.character(clump_r2),
-        "--clump-kb", as.character(clump_kb), "--out", stem), stdout = FALSE, stderr = FALSE)
-      if (!identical(status, 0L) || !file.exists(paste0(stem, ".clumped"))) {
-        stop("PLINK clumping failed for exposure ", unique(dat$id.exposure[index]), call. = FALSE)
+        "--clump-kb", as.character(clump_kb), "--out", stem),
+        stdout = TRUE, stderr = TRUE), error = function(e) {
+          run_error <<- conditionMessage(e)
+          character()
+        })
+      status <- attr(run_output, "status")
+      if (is.null(status)) status <- 0L
+      clumped_file <- paste0(stem, ".clumped")
+      if (!is.null(run_error) || !isTRUE(status == 0L) || !file.exists(clumped_file)) {
+        detail <- c(run_error, if (length(run_output)) utils::tail(run_output, 8L))
+        detail <- detail[nzchar(detail)]
+        suffix <- if (length(detail)) paste0(": ", paste(detail, collapse = " | ")) else ""
+        stop("PLINK clumping failed for exposure ",
+             unique(dat$id.exposure[index]), suffix, call. = FALSE)
       }
-      clumped <- tryCatch(read.table(paste0(stem, ".clumped"), header = TRUE, stringsAsFactors = FALSE),
-                          error = function(e) data.frame(SNP = character()))
+      clumped <- tryCatch(read.table(clumped_file, header = TRUE,
+                                     stringsAsFactors = FALSE, check.names = FALSE),
+                          error = function(e) stop("could not read PLINK .clumped output: ",
+                                                    conditionMessage(e), call. = FALSE))
+      if (!"SNP" %in% names(clumped)) {
+        stop("PLINK .clumped output is missing its SNP column", call. = FALSE)
+      }
       index[dat$SNP[index] %in% clumped$SNP]
     })
     return(dat[sort(unlist(pieces, use.names = FALSE)), , drop = FALSE])
@@ -346,17 +389,20 @@ fast_clump_data <- function(dat, clump_kb = 10000, clump_r2 = 0.001,
   for (group in split(seq_len(nrow(dat)), dat$id.exposure, drop = TRUE)) {
     candidates <- group[!is.na(positions[group]) & is.finite(p[group]) & p[group] <= clump_p1]
     candidates <- candidates[order(p[candidates], as.character(dat$SNP[candidates]))]
-    selected <- integer()
-    for (i in candidates) {
-      if (!length(selected)) {
-        keep[i] <- TRUE; selected <- c(selected, i); next
-      }
-      same_chr <- is.na(chr[i]) | is.na(chr[selected]) | chr[i] == chr[selected]
-      close <- is.na(bp[i]) | is.na(bp[selected]) | abs(bp[i] - bp[selected]) <= clump_kb * 1000
-      r2 <- ld_matrix[positions[i], positions[selected]]^2
-      if (!any(same_chr & close & is.finite(r2) & r2 >= clump_r2)) {
-        keep[i] <- TRUE; selected <- c(selected, i)
-      }
+    blocked <- logical(length(candidates))
+    for (j in seq_along(candidates)) {
+      if (blocked[j]) next
+      i <- candidates[j]
+      keep[i] <- TRUE
+      remaining <- seq.int(j + 1L, length(candidates))
+      if (!length(remaining)) next
+      remaining_idx <- candidates[remaining]
+      same_chr <- is.na(chr[i]) | is.na(chr[remaining_idx]) | chr[i] == chr[remaining_idx]
+      close <- is.na(bp[i]) | is.na(bp[remaining_idx]) |
+        abs(bp[i] - bp[remaining_idx]) <= clump_kb * 1000
+      r2 <- ld_matrix[positions[i], positions[remaining_idx]]^2
+      blocked[remaining] <- blocked[remaining] |
+        (same_chr & close & is.finite(r2) & r2 >= clump_r2)
     }
   }
   dat[keep, , drop = FALSE]
