@@ -172,27 +172,24 @@ fast_mr_singlesnp <- function(data, single_method = "wald_ratio",
     stop("single_method must be the wald_ratio method", call. = FALSE)
   }
   groups <- fastmr_diagnostic_groups(data)
-  rows <- list()
-  k <- 0L
+  group_rows <- vector("list", length(groups))
   registry <- fastmr_method_registry()
-  for (group in groups) {
+  for (group_index in seq_along(groups)) {
+    group <- groups[[group_index]]
     keep <- fastmr_diagnostic_keep(group$data)
     snp <- as.character(group$data$SNP)
     snp[is.na(snp)] <- ""
     selected <- which(keep & !duplicated(snp))
+    single_rows <- data.frame()
     if (length(selected)) {
       single_rows <- fastmr_wald_rows(group, group$data[selected, , drop = FALSE])
-      for (index in seq_len(nrow(single_rows))) {
-      k <- k + 1L
-        rows[[k]] <- single_rows[index, , drop = FALSE]
-      }
     }
     aggregate <- fast_mr(group$data, methods = all_method, nboot = 0,
                          threads = threads)
+    aggregate_rows <- vector("list", length(all_method))
     for (method in all_method) {
-      k <- k + 1L
       result <- aggregate[aggregate$method_code == method, , drop = FALSE]
-      rows[[k]] <- data.frame(
+      aggregate_rows[[match(method, all_method)]] <- data.frame(
         exposure = group$exposure,
         outcome = group$outcome,
         id.exposure = group$id.exposure,
@@ -205,9 +202,10 @@ fast_mr_singlesnp <- function(data, single_method = "wald_ratio",
         stringsAsFactors = FALSE
       )
     }
+    group_rows[[group_index]] <- rbind(single_rows, do.call(rbind, aggregate_rows))
   }
-  if (!length(rows)) return(data.frame())
-  do.call(rbind, rows)
+  if (!length(group_rows)) return(data.frame())
+  do.call(rbind, group_rows)
 }
 
 fastmr_leaveoneout_regression <- function(group, method) {
