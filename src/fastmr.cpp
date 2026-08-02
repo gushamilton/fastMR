@@ -26,24 +26,33 @@ namespace {
 
 constexpr int MODE_GRID_SIZE = 512;
 const double NA_VALUE = std::numeric_limits<double>::quiet_NaN();
+std::atomic<bool> defer_r_math(false);
 
 double finite_or_na(double x) {
   return std::isfinite(x) ? x : NA_VALUE;
 }
 
 double z_pvalue(double statistic) {
+  if (defer_r_math.load(std::memory_order_relaxed)) return NA_VALUE;
   if (!std::isfinite(statistic)) return NA_VALUE;
   return 2.0 * R::pnorm5(std::abs(statistic), 0.0, 1.0, false, false);
 }
 
 double t_pvalue(double statistic, int df) {
+  if (defer_r_math.load(std::memory_order_relaxed)) return NA_VALUE;
   if (!std::isfinite(statistic) || df <= 0) return NA_VALUE;
   return 2.0 * R::pt(std::abs(statistic), static_cast<double>(df), false, false);
 }
 
 double chi_square_pvalue(double q, int df) {
+  if (defer_r_math.load(std::memory_order_relaxed)) return NA_VALUE;
   if (!std::isfinite(q) || df <= 0) return NA_VALUE;
   return R::pchisq(q, static_cast<double>(df), false, false);
+}
+
+double chi_square1_survival(double q) {
+  if (!std::isfinite(q) || q < 0.0) return NA_VALUE;
+  return std::erfc(std::sqrt(0.5 * q));
 }
 
 double safe_statistic(double numerator, double denominator) {
@@ -457,6 +466,33 @@ Result empty_result(const std::string& method, int n) {
   return result;
 }
 
+void populate_result_pvalues(Result& result) {
+  if (result.method == "egger_bootstrap") {
+    return;
+  }
+  if (result.method == "sign") {
+    if (std::isfinite(result.beta) && result.n > 0) {
+      const int concordant = static_cast<int>(std::llround(
+        0.5 * (result.beta + 1.0) * static_cast<double>(result.n)));
+      const int lower = std::min(concordant, result.n - concordant);
+      double pval = 2.0 * R::pbinom(static_cast<double>(lower),
+                                    static_cast<double>(result.n), 0.5, true, false);
+      result.pval = std::min(1.0, pval);
+    }
+  } else if (result.method == "egger") {
+    result.pval = t_pvalue(safe_statistic(result.beta, result.se), result.n - 2);
+  } else if (result.method == "simple_mode" || result.method == "weighted_mode") {
+    result.pval = t_pvalue(safe_statistic(result.beta, result.se), result.n - 1);
+  } else {
+    result.pval = z_pvalue(safe_statistic(result.beta, result.se));
+  }
+  if (result.q) result.q_pval = chi_square_pvalue(result.q_value, result.q_df);
+  if (result.intercept) {
+    result.intercept_pval = t_pvalue(
+      safe_statistic(result.intercept_value, result.intercept_se), result.n - 2);
+  }
+}
+
 struct Prepared {
   std::vector<double> x;
   std::vector<double> y;
@@ -578,8 +614,10 @@ Result compute_sign(const Prepared& p) {
   if (n < 6) return empty_result("sign", n);
   const double beta = (2.0 * static_cast<double>(concordant) / static_cast<double>(n)) - 1.0;
   const int lower = std::min(concordant, n - concordant);
-  double pval = 2.0 * R::pbinom(static_cast<double>(lower), static_cast<double>(n), 0.5, true, false);
-  pval = std::min(1.0, pval);
+  double pval = defer_r_math.load(std::memory_order_relaxed)
+    ? NA_VALUE
+    : 2.0 * R::pbinom(static_cast<double>(lower), static_cast<double>(n), 0.5, true, false);
+  if (std::isfinite(pval)) pval = std::min(1.0, pval);
   Result result = empty_result("sign", n);
   result.beta = beta;
   result.pval = pval;
@@ -823,7 +861,7 @@ Result compute_penalised_median(const Prepared& p, int nboot, double penk) {
   for (int i = 0; i < n; ++i) {
     const double statistic = weights[i] * (p.ratio[i] - weighted_beta) *
                              (p.ratio[i] - weighted_beta);
-    const double penalty = R::pchisq(statistic, 1.0, false, false);
+    const double penalty = chi_square1_survival(statistic);
     penalised_weights[i] = weights[i] * std::min(1.0, penalty * penk);
   }
   const double beta = weighted_median_point_ptr(
@@ -876,7 +914,7 @@ Result compute_mode(const Prepared& p, const std::string& method, int nboot, dou
   result.bootstrap = true;
   result.bootstrap_value = nboot;
   result.phi = true;
-  result.phi_value = 1.0;
+  result.phi_value = phi;
   return result;
 }
 
@@ -942,7 +980,7 @@ Result compute_wald(const Prepared& p) {
 void make_bootstrap(Prepared& p, int nboot, SEXP seed,
                     bool needs_median, bool needs_egger,
                     bool needs_penalised) {
-  if (nboot <= 0 || p.ratio.size() < 3 ||
+  if (nboot <= 0 || p.x.size() < 3 ||
       (!needs_median && !needs_egger && !needs_penalised)) return;
   (void) seed;
   const std::size_t n = p.ratio.size();
@@ -1797,6 +1835,7 @@ Rcpp::List fastmr_grid_native(Rcpp::NumericMatrix exposure_beta,
   fill_grid_bootstrap_layout(grid, nboot, seed, needs_median, needs_mode, needs_egger, needs_penalised);
   std::vector<Result> results(pair_count * parsed_methods.size());
   const int thread_count = bounded_threads(threads, pair_count);
+  defer_r_math.store(true, std::memory_order_relaxed);
 
 #ifdef _OPENMP
 #pragma omp parallel for schedule(static) num_threads(thread_count)
@@ -1880,5 +1919,7 @@ Rcpp::List fastmr_grid_native(Rcpp::NumericMatrix exposure_beta,
   }
 #endif
 
+  defer_r_math.store(false, std::memory_order_relaxed);
+  for (Result& result : results) populate_result_pvalues(result);
   return results_to_compact_grid(results, parsed_methods);
 }

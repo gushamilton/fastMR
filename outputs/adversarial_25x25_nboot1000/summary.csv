@@ -1,0 +1,2 @@
+"exposures","outcomes","snps","pairs","methods","nboot","fast_threads","expected_rows","fast_rows","native_rows","fast_parallel_seconds","fast_serial_seconds","native_seconds","speedup_vs_native","max_thread_repro_delta","max_native_point_beta_delta","edge_checks","edge_checks_passed"
+25,25,82,625,5,1000,10,3125,3125,3125,3.63,20.177,824.585,227.158402203857,0,4.52615722679184e-12,7,7

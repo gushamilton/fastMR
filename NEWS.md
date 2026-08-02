@@ -1,3 +1,15 @@
+# fastMR 0.1.2
+
+* Added the original `MR` monogram logo and a reproducible adversarial
+  25 × 25, `nboot = 1,000` validation run against native TwoSampleMR.
+* Hardened the public API against duplicate methods/SNPs, malformed kept
+  rows, ambiguous grouped IDs, mismatched named grid columns, and standalone
+  mode-`phi` reporting. Grid Egger bootstrap now retains exact-zero exposure
+  effects.
+* Removed R probability-API calls from parallel workers; threaded grids now
+  perform native numerical work in parallel and populate R p-values safely on
+  the main thread.
+
 # fastMR 0.1.1
 
 * Refreshed the package identity with a distinctive R-inspired swoosh logo

@@ -1,7 +1,7 @@
 #' Run exact summary-statistics Mendelian randomization
 #'
 #' @param data A data frame with `beta.exposure`, `beta.outcome`,
-#'   `se.exposure`, `se.outcome`, and optionally `SNP`, `id.exposure`, and
+#'   `se.exposure`, `se.outcome`, and `SNP`, with optional `id.exposure` and
 #'   `id.outcome` columns.
 #' @param methods Character vector of method codes. See
 #'   [fastmr_method_registry()].
@@ -32,17 +32,31 @@ fast_mr <- function(data,
   if (length(penk) != 1L || !is.finite(penk) || penk <= 0) stop("penk must be positive and finite", call. = FALSE)
   prepared <- fastmr_prepare_vectors(data)
   n <- nrow(prepared)
+  keep <- if ("mr_keep" %in% names(data)) !is.na(data$mr_keep) & as.logical(data$mr_keep) else rep(TRUE, n)
+  valid <- is.finite(prepared$beta.exposure) & is.finite(prepared$beta.outcome) &
+    is.finite(prepared$se.exposure) & is.finite(prepared$se.outcome) &
+    prepared$se.exposure > 0 & prepared$se.outcome > 0
+  if (any(keep & !valid)) {
+    stop("kept rows must have finite beta values and positive standard errors", call. = FALSE)
+  }
+  snp <- as.character(data$SNP)
+  snp[is.na(snp)] <- ""
+  if (any(keep & !nzchar(snp))) stop("kept rows must have non-empty SNP identifiers", call. = FALSE)
   id.exp <- if ("id.exposure" %in% names(data)) as.character(data$id.exposure) else rep("", n)
   id.out <- if ("id.outcome" %in% names(data)) as.character(data$id.outcome) else rep("", n)
   id.exp[is.na(id.exp)] <- ""
   id.out[is.na(id.out)] <- ""
-  keys <- paste(id.exp, id.out, sep = "\r")
-  groups <- unique(keys)
-  rows <- vector("list", length(groups))
-  keep <- if ("mr_keep" %in% names(data)) !is.na(data$mr_keep) & as.logical(data$mr_keep) else rep(TRUE, n)
-  for (i in seq_along(groups)) {
-    index <- which(keys == groups[[i]] & keep)
-    representative <- which(keys == groups[[i]])[[1L]]
+  groups <- unique(data.frame(id.exposure = id.exp, id.outcome = id.out,
+                              stringsAsFactors = FALSE))
+  rows <- vector("list", nrow(groups))
+  for (i in seq_len(nrow(groups))) {
+    group_index <- which(id.exp == groups$id.exposure[[i]] &
+                         id.out == groups$id.outcome[[i]])
+    index <- group_index[keep[group_index]]
+    if (anyDuplicated(snp[index])) {
+      stop("each exposure/outcome group must contain unique SNP identifiers", call. = FALSE)
+    }
+    representative <- group_index[[1L]]
     native <- fastmr_native_call(
       fastmr_run_native,
       list(
@@ -53,7 +67,7 @@ fast_mr <- function(data,
         methods = methods, nboot = controls[["nboot"]], seed = NULL,
         threads = controls[["threads"]], phi = phi, penk = penk
       ),
-      controls[["seed"]]
+      if (is.null(controls[["seed"]])) NULL else controls[["seed"]] + i - 1L
     )
     label.exp <- if ("exposure" %in% names(data)) as.character(data$exposure[representative]) else id.exp[representative]
     label.out <- if ("outcome" %in% names(data)) as.character(data$outcome[representative]) else id.out[representative]
@@ -103,6 +117,12 @@ fast_mr_grid <- function(exposure_beta, outcome_beta, exposure_se, outcome_se,
       any(!is.finite(arrays$exposure_se)) || any(!is.finite(arrays$outcome_se)) ||
       any(arrays$exposure_se <= 0) || any(arrays$outcome_se <= 0)) {
     stop("grid inputs must be non-empty with finite beta values and positive standard errors", call. = FALSE)
+  }
+  exp.snps <- colnames(arrays$exposure_beta)
+  out.snps <- colnames(arrays$outcome_beta)
+  if (xor(is.null(exp.snps), is.null(out.snps)) ||
+      (!is.null(exp.snps) && !identical(exp.snps, out.snps))) {
+    stop("exposure and outcome matrices must use the same SNP column names and order", call. = FALSE)
   }
   native <- fastmr_native_call(
     fastmr_grid_native,

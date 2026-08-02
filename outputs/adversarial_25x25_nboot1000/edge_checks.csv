@@ -1,0 +1,8 @@
+"check","passed","detail"
+"small_input_1_snps",TRUE,"5 rows"
+"small_input_2_snps",TRUE,"5 rows"
+"small_input_3_snps",TRUE,"5 rows"
+"small_input_7_snps",TRUE,"5 rows"
+"non_finite_input_rejected",TRUE,"grid inputs must be non-empty with finite beta values and positive standard errors"
+"mismatched_snp_count_rejected",TRUE,"grid matrices must have matching beta/se and SNP dimensions"
+"flipped_alleles_harmonised",TRUE,"rows 4 kept 2"

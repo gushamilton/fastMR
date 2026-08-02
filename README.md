@@ -132,6 +132,26 @@ The final tables and reproducible audit script are in
 [`outputs/final_package_audit/`](outputs/final_package_audit/) and
 [`benchmarks/final_package_audit.R`](benchmarks/final_package_audit.R).
 
+### Adversarial 25 × 25 proof run
+
+The package was also checked on a deliberately different, heavy-tailed and
+heteroskedastic simulation: 25 exposures × 25 outcomes, 82 SNPs, all five
+main methods, and `nboot = 1,000`. The run produced all 625 × 5 = 3,125
+expected rows, repeated exactly across 1-thread and 10-thread fastMR runs,
+and compared every pair with native TwoSampleMR 0.7.9. It also exercised
+one- and two-SNP inputs, invalid/non-finite inputs, and deliberately flipped
+alleles through the local harmoniser. The measured result is recorded in
+[`outputs/adversarial_25x25_nboot1000/`](outputs/adversarial_25x25_nboot1000/)
+and can be reproduced with
+[`benchmarks/adversarial_25x25_nboot1000.R`](benchmarks/adversarial_25x25_nboot1000.R).
+
+Measured on the Mac mini: fastMR took 3.630 s at 10 threads and 20.177 s at
+one thread; native TwoSampleMR took 824.585 s. That is a 227.16× native
+speedup, with a 5.56× fastMR thread multiplier and a maximum native point
+estimate beta difference of `4.53e-12`. IVW and Egger beta/SE/p-value parity
+was at floating-point noise; bootstrap SE/p-value distributions for the
+median and mode methods are reported per method in `method_summary.csv`.
+
 Correctness checks found exact harmonisation-key parity for local BMI → CRP,
 floating-point parity for deterministic IVW/Egger estimates, and a maximum
 beta difference of `6.9e-11` across the independent 50 × 50 simulation.
@@ -145,6 +165,12 @@ implementations use independently sampled bootstrap streams.
 - Pre-harmonise and clump once, then reuse the resulting matrices across scans.
 - Increase `threads` for large grids, but do not expect linear scaling on tiny
   workloads.
+- Named exposure/outcome grid matrices must have identical SNP column names in
+  identical order; unnamed matrices are treated as already aligned.
+- Kept tidy rows require finite beta values, positive standard errors, unique
+  SNPs within each exposure/outcome group, and non-empty SNP identifiers.
+- Parallel grid workers perform numerical kernels only; R probability values are
+  filled after the workers join, keeping the threaded path safe for R.
 - PLINK remains the preferred route when a large external LD reference panel
   is available. The matrix clumper is intended for local, reusable LD data.
 - The package does not download GWAS data or reproduce TwoSampleMR's remote
@@ -155,21 +181,24 @@ implementations use independently sampled bootstrap streams.
 ```sh
 R CMD INSTALL --library=.local/Rlib .
 Rscript -e 'testthat::test_local(".")'
-R CMD check --no-manual --as-cran .
+_R_CHECK_FORCE_SUGGESTS_=false R CMD check --no-manual --as-cran .
 ```
 
-The package has a 121-test suite, native harmonisation audits, simulation
+The package has a 127-test suite, native harmonisation audits, simulation
 tyre-kick tests, adversarial thread checks, and native TwoSampleMR benchmarks.
+The `R CMD check` command above deliberately allows the optional Arrow
+dependency to be absent; install Arrow first if Parquet checks are required.
 See [`NEWS.md`](NEWS.md) and [`HANDOFF.md`](HANDOFF.md) for the optimization
 history and detailed validation record.
 
 ## Logo
 
-The mark is an original R-inspired identity: a cobalt italic `R` under a
-single silver orbital swoosh, finished with a coral acceleration tip. The `R`
-places the package clearly in the R ecosystem; the swoosh represents a causal
-trajectory through the data; and the coral tip signals fast movement through a
-large MR grid. It deliberately avoids copying the official R Project mark.
+The mark is an original `MR` identity: a cobalt italic `MR` monogram under a
+single silver orbital swoosh, finished with a coral acceleration tip. The
+monogram identifies Mendelian randomization and the R ecosystem; the swoosh
+represents a causal trajectory through the data; and the coral tip signals
+fast movement through a large MR grid. It deliberately avoids copying the
+official R Project mark.
 
 ## License
 

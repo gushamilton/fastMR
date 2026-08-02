@@ -77,6 +77,9 @@ fastmr_normalize_methods <- function(methods) {
   if (length(unsupported)) {
     stop("unknown MR method(s): ", paste(unsupported, collapse = ", "), call. = FALSE)
   }
+  if (anyDuplicated(normalized)) {
+    stop("methods must be unique after alias normalization", call. = FALSE)
+  }
   normalized
 }
 
@@ -145,8 +148,8 @@ fastmr_tidy_native <- function(native_results, methods, id.exposure = "", id.out
   display <- registry$method[match(code, registry$code)]
   n <- vapply(native_results, fastmr_scalar, numeric(1), name = "n", default = NA_real_)
   out <- data.frame(
-    id.exposure = rep(exposure_label, length(native_results)),
-    id.outcome = rep(outcome_label, length(native_results)),
+    id.exposure = rep(id.exposure, length(native_results)),
+    id.outcome = rep(id.outcome, length(native_results)),
     method = display,
     method_code = code,
     nsnp = n,

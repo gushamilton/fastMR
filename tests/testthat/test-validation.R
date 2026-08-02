@@ -8,6 +8,9 @@ test_that("invalid controls and method names fail clearly", {
   bad <- d
   bad$beta.outcome[[1]] <- "not numeric"
   expect_error(fast_mr(bad, nboot = 0), "beta.outcome")
+  bad <- d
+  bad$se.outcome[[1]] <- 0
+  expect_error(fast_mr(bad, nboot = 0), "positive standard errors")
 })
 
 test_that("invalid grid shapes and values fail before native compute", {
@@ -19,6 +22,14 @@ test_that("invalid grid shapes and values fail before native compute", {
                             nboot = 0), "positive standard errors")
   expect_error(fast_mr_grid(g$exposure_beta, g$outcome_beta, g$exposure_se,
                             matrix("bad", nrow = 2, ncol = 82), nboot = 0), "numeric")
+})
+
+test_that("named grid matrices must share SNP order", {
+  g <- grid_fixture(2, 2)
+  colnames(g$exposure_beta) <- paste0("rs", seq_len(ncol(g$exposure_beta)))
+  colnames(g$outcome_beta) <- rev(colnames(g$exposure_beta))
+  expect_error(fast_mr_grid(g$exposure_beta, g$outcome_beta, g$exposure_se,
+                            g$outcome_se, nboot = 0), "same SNP")
 })
 
 test_that("mr_keep false rows produce NA method results rather than errors", {

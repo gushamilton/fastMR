@@ -51,6 +51,39 @@ test_that("MR-Egger bootstrap handles zero and negative exposure effects", {
   expect_true(is.finite(result$pval))
 })
 
+test_that("MR-Egger bootstrap retains three instruments with an exact zero", {
+  d <- il6_fixture()[1:3, ]
+  d$beta.exposure[[1]] <- 0
+  result <- fast_mr(d, methods = "egger_bootstrap", nboot = 20, seed = 20260807)
+  expect_equal(result$nsnp, 3)
+  expect_true(is.finite(result$b))
+  expect_true(is.finite(result$se))
+})
+
+test_that("duplicate methods and duplicate SNPs fail before native compute", {
+  d <- il6_fixture()[1:4, ]
+  expect_error(fast_mr(d, methods = c("ivw", "mr_ivw"), nboot = 0), "unique")
+  d$SNP[[2]] <- d$SNP[[1]]
+  expect_error(fast_mr(d, methods = "ivw", nboot = 0), "unique SNP")
+})
+
+test_that("mode diagnostics report the requested phi", {
+  d <- il6_fixture()[1:8, ]
+  result <- fast_mr(d, methods = "simple_mode", phi = 0.25, nboot = 0)
+  expect_equal(result$phi, 0.25)
+})
+
+test_that("tidy IDs remain IDs when trait labels differ", {
+  d <- il6_fixture()[1:4, ]
+  d$id.exposure <- "ieu-a-123"
+  d$id.outcome <- "ieu-b-456"
+  d$exposure <- "Human-readable exposure"
+  d$outcome <- "Human-readable outcome"
+  result <- fast_mr(d, methods = "ivw", nboot = 0)
+  expect_equal(result$id.exposure, "ieu-a-123")
+  expect_equal(result$id.outcome, "ieu-b-456")
+})
+
 test_that("unweighted regression and sign concordance are available", {
   d <- il6_fixture()[1:8, ]
   result <- fast_mr(d, methods = c("mr_uwr", "mr_sign"), nboot = 0)
