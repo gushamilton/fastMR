@@ -16,6 +16,11 @@ d$id.outcome <- "O"
 d$exposure <- "E"
 d$outcome <- "O"
 d$mr_keep <- TRUE
+steiger_d <- d
+steiger_d$r.exposure <- seq_len(nrow(steiger_d)) / 1000
+steiger_d$r.outcome <- seq_len(nrow(steiger_d)) / 1200
+steiger_d$samplesize.exposure <- 10000
+steiger_d$samplesize.outcome <- 12000
 
 fast_repeats <- 20L
 native_repeats <- 5L
@@ -69,11 +74,14 @@ native_singlesnp <- function() suppressMessages(suppressWarnings(
                             all_method = c("mr_ivw", "mr_egger_regression"))))
 native_leaveoneout <- function() suppressMessages(suppressWarnings(
   TwoSampleMR::mr_leaveoneout(d, method = TwoSampleMR::mr_ivw)))
+native_directionality <- function() suppressMessages(suppressWarnings(
+  TwoSampleMR::directionality_test(steiger_d)))
 
 fast_heterogeneity <- function() fast_mr_heterogeneity(d, threads = threads)
 fast_pleiotropy <- function() fast_mr_pleiotropy_test(d, threads = threads)
 fast_singlesnp <- function() fast_mr_singlesnp(d, threads = threads)
 fast_leaveoneout <- function() fast_mr_leaveoneout(d, method = "ivw", threads = threads)
+fast_directionality <- function() fast_mr_directionality_test(steiger_d)
 
 singlesnp_native_once <- native_singlesnp()
 singlesnp_key <- singlesnp_native_once$SNP
@@ -88,7 +96,10 @@ rows <- list(
   compare("single_snp", fast_singlesnp, native_singlesnp, singlesnp_key,
           primary = "b", secondary = "se", p_value = "p"),
   compare("leave_one_out", fast_leaveoneout, native_leaveoneout, leaveoneout_key,
-          primary = "b", secondary = "se", p_value = "p")
+          primary = "b", secondary = "se", p_value = "p"),
+  compare("directionality", fast_directionality, native_directionality,
+          primary = "snp_r2.exposure", secondary = "snp_r2.outcome",
+          p_value = "steiger_pval")
 )
 result <- do.call(rbind, rows)
 dir.create(file.path(root, "outputs"), showWarnings = FALSE, recursive = TRUE)

@@ -15,3 +15,13 @@ grid_fixture <- function(n_exposure = 3L, n_outcome = 4L) {
     outcome_se = matrix(rep(d$se.outcome, n_outcome), nrow = n_outcome, byrow = TRUE)
   )
 }
+
+diagnostic_fixture <- function() {
+  d <- il6_fixture()
+  d$id.exposure <- "E"
+  d$id.outcome <- "O"
+  d$exposure <- "E"
+  d$outcome <- "O"
+  d$mr_keep <- TRUE
+  d
+}
