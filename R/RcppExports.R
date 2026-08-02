@@ -4,7 +4,6 @@
 fastmr_run_native <- function(exposure_beta, outcome_beta, exposure_se, outcome_se, methods, nboot = 1000L, seed = NULL, threads = 1L, phi = 1.0, penk = 20.0) {
     .Call(`_fastMR_fastmr_run_native`, exposure_beta, outcome_beta, exposure_se, outcome_se, methods, nboot, seed, threads, phi, penk)
 }
-
 fastmr_grid_native <- function(exposure_beta, outcome_beta, exposure_se, outcome_se, methods, nboot = 1000L, seed = NULL, threads = 1L, phi = 1.0, penk = 20.0) {
     .Call(`_fastMR_fastmr_grid_native`, exposure_beta, outcome_beta, exposure_se, outcome_se, methods, nboot, seed, threads, phi, penk)
 }

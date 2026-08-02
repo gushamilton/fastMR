@@ -1,0 +1,13 @@
+cff-version: 1.2.0
+title: "fastMR: Exact and Fast Summary-Statistics Mendelian Randomization"
+message: "If you use fastMR, please cite the software and the native TwoSampleMR package it is designed to complement."
+type: software
+authors:
+  - family-names: Hamilton
+    given-names: Fergus
+    email: fergushamilton@users.noreply.github.com
+version: 0.1.0
+date-released: 2026-08-02
+license: MIT
+repository-code: https://github.com/gushamilton/fastMR
+url: https://github.com/gushamilton/fastMR

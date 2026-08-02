@@ -1,18 +1,52 @@
 # fastMR
 
-`fastMR` is a small R package for exact summary-statistics Mendelian
-randomization. It accepts the tidy columns used by TwoSampleMR and uses a
-registered C++17 backend for the shared exposure/outcome grid that dominates
-large MR scans.
+<p align="center">
+  <img src="inst/fastMR-logo.png" alt="fastMR logo" width="180">
+</p>
 
-The first release includes IVW (under-dispersion-corrected, fixed-effects, and
-multiplicative random-effects variants), MR-Egger, MR-Egger bootstrap, simple,
-weighted, and penalised weighted median, simple mode, weighted mode, unweighted
-regression, sign concordance, Wald ratio, and basic multivariable IVW. The
-default methods are exact; there is no approximate mode estimator in the
-default API.
+<p align="center"><strong>Exact, compiled summary-statistics Mendelian randomization for large R workflows.</strong></p>
+
+[![R-CMD-check](https://github.com/gushamilton/fastMR/actions/workflows/R-CMD-check.yaml/badge.svg)](https://github.com/gushamilton/fastMR/actions/workflows/R-CMD-check.yaml)
+[![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
+
+`fastMR` is a small R package for doing TwoSampleMR-style summary-statistics
+Mendelian randomization quickly when many exposures and outcomes must be
+scanned together. It keeps the familiar tidy R interface, but moves the
+repeated numerical work into a registered C++17 backend and exposes a shared
+matrix-grid path for large scans.
+
+## Why fastMR?
+
+The usual R workflow is excellent for individual analyses, but a 50 × 50
+exposure/outcome grid repeats data-frame construction, grouping, validation,
+and R-level function calls thousands of times. `fastMR` prepares the matrices
+once, reuses shared work across pairs, and returns the same tidy result shape.
+
+It is intended as a fast local computation layer, not as a replacement for
+OpenGWAS extraction, study metadata, or the broader TwoSampleMR ecosystem.
+
+## Installation
+
+Once the repository is public, install the development release with:
+
+```r
+install.packages("remotes")
+remotes::install_github("gushamilton/fastMR")
+```
+
+For a local checkout:
+
+```sh
+R CMD INSTALL .
+```
+
+The core package requires R (≥ 4.1), `Rcpp`, and a C++17 compiler. Arrow is
+optional and is only needed for Parquet input.
 
 ## Quick start
+
+`fast_mr()` accepts the standard summary-statistics columns used by
+TwoSampleMR:
 
 ```r
 library(fastMR)
@@ -30,9 +64,7 @@ dat <- data.frame(
 fast_mr(dat, methods = c("ivw", "egger"), nboot = 100, seed = 20260801)
 ```
 
-For a shared grid, matrices have one exposure/outcome per row and one SNP per
-column. Results are exposure-major, outcome-minor, so the first outcome row is
-returned for every method before the next outcome row.
+For a grid, put exposures and outcomes in rows and SNPs in columns:
 
 ```r
 fast_mr_grid(
@@ -42,81 +74,104 @@ fast_mr_grid(
 )
 ```
 
-The C++ kernel copies R's column-major matrices once into contiguous
-row-major side layouts. Bootstrap normal draws are shared across all grid
-pairs, exposure denominators and outcome numerators are generated once per
-grid side, and worker count is bounded by the number of pairs. If the build
-toolchain has no OpenMP, the same kernel uses a serial or `std::thread`
-fallback; no nested thread pools are created.
+The grid result is exposure-major and outcome-minor, with one tidy row per
+pair and method.
 
-For grids containing only IVW variants (`ivw`, `ivw_fe`, and `ivw_mre`),
-fastMR takes a batched BLAS path: the exposure/outcome cross-products for all
-pairs are computed together, and tidy results are flattened in one pass. This
-is the high-throughput path for large exposure-by-outcome IVW scans; its
-compact native return layout avoids allocating one nested result list per
-pair. The mixed-method path remains available when other estimators are
-requested.
+## Methods
 
-The exact simple/weighted mode kernel reuses its FFT workspaces, cached FFT
-plans, and per-stage twiddle factors across bootstrap draws. This reduces
-allocation and transform setup cost while retaining the native density-grid
-semantics.
+The method registry includes:
 
-Mixed-method grids also use a compact native method-by-pair result layout,
-including method-specific diagnostics, before the final tidy data frame is
-constructed in R.
+- IVW, fixed-effects IVW, and multiplicative random-effects IVW
+- MR-Egger and seeded MR-Egger bootstrap
+- simple, weighted, and penalised weighted median
+- simple and weighted mode
+- unweighted regression, sign concordance, and Wald ratio
+- basic multivariable IVW
 
-Penalised weighted median follows TwoSampleMR's chi-square down-weighting and
-two-stream bootstrap semantics, with `penk = 20` by default.
+Use `fastmr_method_registry()` for method codes and descriptions. Results use
+the familiar `id.exposure`, `id.outcome`, `method`, `nsnp`, `b`, `se`, and
+`pval` columns, with method-specific diagnostics retained where applicable.
 
-For a local preprocessing path, harmonise alleles without a network dependency
-and then clump with either a supplied LD matrix or a local PLINK reference.
-The harmoniser supports native TwoSampleMR actions 1, 2, and 3, four allele
-information cases (2-2, 2-1, 1-2, and 1-1), strand/complement handling,
-palindromic-frequency checks, and native indel recoding:
+## Local preprocessing
+
+The package also provides dependency-light local preprocessing:
 
 ```r
 harmonised <- fast_harmonise_data(exposure_dat, outcome_dat, action = 2)
 independent <- fast_clump_data(harmonised, bfile = "reference/eur")
 ```
 
-The PLINK path delegates LD calculation to the installed binary; the matrix
-path is useful when the same LD panel is reused across many exposure grids.
-
-## Parquet
-
-Parquet is intentionally optional. With the optional `arrow` package installed:
+Harmonisation supports the native TwoSampleMR actions 1, 2, and 3, strand and
+complement handling, palindromic-frequency checks, indel recoding, incomplete
+allele information, and outcome-specific action vectors. Clumping can use an
+in-memory LD matrix or delegate LD calculation to a locally installed PLINK
+binary. Parquet readers are available through optional `arrow` support:
 
 ```r
 fast_mr_parquet("summary_stats.parquet", methods = "ivw")
-dat <- fast_read_parquet("summary_stats.parquet")
 ```
 
-Install Arrow only when needed: `install.packages("arrow")`. The core package
-has no mandatory data.table, dplyr, RcppArmadillo, or database dependency.
+## Benchmarks
 
-## Results and compatibility
+Final Mac mini audit: native `TwoSampleMR` 0.7.9 comparator, five methods,
+`nboot = 100`, and 10 fastMR threads for the grid run.
 
-Results use the familiar columns `id.exposure`, `id.outcome`, `method`,
-`nsnp`, `b`, `se`, and `pval`, with method-specific diagnostics such as `Q`,
-`Q_df`, `Q_pval`, `intercept`, and `sigma` retained when available. Method
-codes are accepted alongside common TwoSampleMR function names; inspect
-`fastmr_method_registry()` for the complete registry.
+| Workload | fastMR | Native TwoSampleMR | Speedup |
+|---|---:|---:|---:|
+| Local BMI → CRP, 104 SNPs, median of 5 runs | 0.005 s | 0.127 s | **25.4×** |
+| Independent simulation, 1 × 1, 400 SNPs | 0.008 s | 0.165 s | **20.6×** |
+| Independent simulation, 50 × 50, 2,500 pairs, 400 SNPs | 2.030 s | 391.764 s | **193.0×** |
 
-`fastMR` ports the validated exact native-grid implementation developed in the
-companion prototype and follows TwoSampleMR's public method semantics. It does
-not bundle TwoSampleMR or its remote OpenGWAS/data-extraction stack.
+The 50 × 50 run processed about 1,232 pairs/s with fastMR versus 6.4
+pairs/s natively. These are observed timings on one Mac mini, not a promise
+for every machine or workload; the largest gains come from the shared-grid
+implementation and reduced R-level allocation, with threading contributing
+additional benefit for bootstrap-heavy methods.
 
-## Validation and benchmarks
+The final tables and reproducible audit script are in
+[`outputs/final_package_audit/`](outputs/final_package_audit/) and
+[`benchmarks/final_package_audit.R`](benchmarks/final_package_audit.R).
 
-The durable 82-row IL6/CRP fixture is in `inst/extdata/`. Reproducible package
-benchmarks and optimization-loop history are in `benchmarks/` and `outputs/`.
-The benchmark separates cold startup, warm single-pair compute, shared-grid
-compute, and optional Arrow read time; see [HANDOFF.md](HANDOFF.md) for the
-latest exact commands, correctness gates, and measured results.
+Correctness checks found exact harmonisation-key parity for local BMI → CRP,
+floating-point parity for deterministic IVW/Egger estimates, and a maximum
+beta difference of `6.9e-11` across the independent 50 × 50 simulation.
+Bootstrap SE and p-value differences are reported separately because the two
+implementations use independently sampled bootstrap streams.
+
+## Design notes and limits
+
+- Use `fast_mr_grid()` when scanning many exposure/outcome pairs; for one pair,
+  R/data-frame overhead becomes a larger share of elapsed time.
+- Pre-harmonise and clump once, then reuse the resulting matrices across scans.
+- Increase `threads` for large grids, but do not expect linear scaling on tiny
+  workloads.
+- PLINK remains the preferred route when a large external LD reference panel
+  is available. The matrix clumper is intended for local, reusable LD data.
+- The package does not download GWAS data or reproduce TwoSampleMR's remote
+  extraction stack.
+
+## Development and verification
 
 ```sh
-/opt/homebrew/bin/R CMD INSTALL --library=.local/Rlib .
-/opt/homebrew/bin/Rscript -e 'testthat::test_dir("tests/testthat")'
-/opt/homebrew/bin/R CMD check --no-manual --as-cran .
+R CMD INSTALL --library=.local/Rlib .
+Rscript -e 'testthat::test_local(".")'
+R CMD check --no-manual --as-cran .
 ```
+
+The package has a 121-test suite, native harmonisation audits, simulation
+tyre-kick tests, adversarial thread checks, and native TwoSampleMR benchmarks.
+See [`NEWS.md`](NEWS.md) and [`HANDOFF.md`](HANDOFF.md) for the optimization
+history and detailed validation record.
+
+## Logo
+
+The mark combines three connected variant nodes with a forward chevron. The
+nodes represent genetic instruments and causal structure; the chevron signals
+the package's purpose—moving the same MR calculations through a large grid
+quickly. Navy gives it a technical, stable base, while coral provides a small
+amount of motion and emphasis without making the scientific package look like
+a generic benchmarking tool.
+
+## License
+
+MIT © Fergus Hamilton.

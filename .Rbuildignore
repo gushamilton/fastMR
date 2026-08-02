@@ -1,5 +1,7 @@
 ^\.local$
 ^\.git$
+^\.github$
+^CITATION\.cff$
 ^fastMR\.Rcheck$
 ^benchmarks$
 ^outputs$
