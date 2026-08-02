@@ -1,13 +1,3 @@
-diagnostic_fixture <- function() {
-  d <- il6_fixture()
-  d$id.exposure <- "E"
-  d$id.outcome <- "O"
-  d$exposure <- "E"
-  d$outcome <- "O"
-  d$mr_keep <- TRUE
-  d
-}
-
 test_that("heterogeneity and Egger pleiotropy use compiled diagnostics", {
   d <- diagnostic_fixture()
   mr <- fast_mr(d, methods = c("ivw", "egger"), nboot = 0)
