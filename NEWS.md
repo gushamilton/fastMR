@@ -1,3 +1,9 @@
+# fastMR 0.1.3
+
+* Duplicate SNP rows are now collapsed once per MR pair/clumping exposure,
+  while repeated outcome rows are restored after clumping. Repeated p-values
+  are treated as ordinary metadata.
+
 # fastMR 0.1.2
 
 * Added the original `MR` monogram logo and a reproducible adversarial

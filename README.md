@@ -167,8 +167,10 @@ implementations use independently sampled bootstrap streams.
   workloads.
 - Named exposure/outcome grid matrices must have identical SNP column names in
   identical order; unnamed matrices are treated as already aligned.
-- Kept tidy rows require finite beta values, positive standard errors, unique
-  SNPs within each exposure/outcome group, and non-empty SNP identifiers.
+- Kept tidy rows require finite beta values and positive standard errors;
+  duplicate SNPs within each exposure/outcome group are collapsed to the first
+  row, and non-empty SNP identifiers are required. Repeated SNPs across
+  outcomes are restored after clumping.
 - Parallel grid workers perform numerical kernels only; R probability values are
   filled after the workers join, keeping the threaded path safe for R.
 - PLINK remains the preferred route when a large external LD reference panel

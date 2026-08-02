@@ -60,11 +60,13 @@ test_that("MR-Egger bootstrap retains three instruments with an exact zero", {
   expect_true(is.finite(result$se))
 })
 
-test_that("duplicate methods and duplicate SNPs fail before native compute", {
+test_that("duplicate methods fail and duplicate SNPs are counted once", {
   d <- il6_fixture()[1:4, ]
   expect_error(fast_mr(d, methods = c("ivw", "mr_ivw"), nboot = 0), "unique")
   d$SNP[[2]] <- d$SNP[[1]]
-  expect_error(fast_mr(d, methods = "ivw", nboot = 0), "unique SNP")
+  d$pval.exposure[[2]] <- d$pval.exposure[[1]]
+  result <- fast_mr(d, methods = "ivw", nboot = 0)
+  expect_equal(result$nsnp, 3)
 })
 
 test_that("mode diagnostics report the requested phi", {

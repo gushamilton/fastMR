@@ -6,7 +6,7 @@ authors:
   - family-names: Hamilton
     given-names: Fergus
     email: fergushamilton@users.noreply.github.com
-version: 0.1.2
+version: 0.1.3
 date-released: 2026-08-02
 license: MIT
 repository-code: https://github.com/gushamilton/fastMR

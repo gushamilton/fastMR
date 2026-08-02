@@ -354,15 +354,23 @@ fast_clump_data <- function(dat, clump_kb = 10000, clump_r2 = 0.001,
   if (anyNA(dat$SNP) || any(!nzchar(trimws(as.character(dat$SNP))))) {
     stop("SNP must contain non-missing, non-empty identifiers", call. = FALSE)
   }
-  group_key <- paste(as.character(dat$SNP), as.character(dat$id.exposure), sep = "\r")
-  if (anyDuplicated(group_key)) {
-    stop("SNP must be unique within each id.exposure for clumping", call. = FALSE)
+  # Harmonisation and multi-outcome joins commonly repeat an exposure SNP.
+  # Clump once per exposure/SNP, then restore every original row for retained
+  # SNPs so multi-outcome data are not silently truncated.
+  original_dat <- dat
+  dedup_key <- paste(as.character(dat$id.exposure), as.character(dat$SNP), sep = "\r")
+  dat <- dat[!duplicated(dedup_key), , drop = FALSE]
+  restore_rows <- function(retained) {
+    retained_key <- unique(paste(as.character(retained$id.exposure),
+                                 as.character(retained$SNP), sep = "\r"))
+    original_key <- paste(as.character(original_dat$id.exposure),
+                          as.character(original_dat$SNP), sep = "\r")
+    original_dat[original_key %in% retained_key, , drop = FALSE]
   }
   if (!is.null(bfile)) {
     if (is.null(plink_bin)) plink_bin <- Sys.which("plink")
     if (!nzchar(plink_bin)) stop("PLINK executable not found; provide plink_bin", call. = FALSE)
     pieces <- lapply(split(seq_len(nrow(dat)), dat$id.exposure, drop = TRUE), function(index) {
-      if (length(index) <= 1L) return(index)
       stem <- tempfile("fastMR_clump_")
       input <- paste0(stem, ".txt")
       write.table(data.frame(SNP = dat$SNP[index], P = dat[[pval_column]][index]), input,
@@ -403,7 +411,7 @@ fast_clump_data <- function(dat, clump_kb = 10000, clump_r2 = 0.001,
       }
       index[dat$SNP[index] %in% clumped$SNP]
     })
-    return(dat[sort(unlist(pieces, use.names = FALSE)), , drop = FALSE])
+    return(restore_rows(dat[sort(unlist(pieces, use.names = FALSE)), , drop = FALSE]))
   }
   if (is.null(ld_matrix)) stop("provide ld_matrix for dependency-free local clumping or bfile for PLINK", call. = FALSE)
   ld_matrix <- as.matrix(ld_matrix)
@@ -444,5 +452,5 @@ fast_clump_data <- function(dat, clump_kb = 10000, clump_r2 = 0.001,
         (same_chr & close & is.finite(r2) & r2 >= clump_r2)
     }
   }
-  dat[keep, , drop = FALSE]
+  restore_rows(dat[keep, , drop = FALSE])
 }

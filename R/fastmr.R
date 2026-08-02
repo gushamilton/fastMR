@@ -53,9 +53,10 @@ fast_mr <- function(data,
     group_index <- which(id.exp == groups$id.exposure[[i]] &
                          id.out == groups$id.outcome[[i]])
     index <- group_index[keep[group_index]]
-    if (anyDuplicated(snp[index])) {
-      stop("each exposure/outcome group must contain unique SNP identifiers", call. = FALSE)
-    }
+    # Joins and multi-study exports often repeat the same SNP row. Count each
+    # SNP once per MR pair; retain the first row deterministically. Repeated
+    # p-values are metadata and do not affect this rule.
+    index <- index[!duplicated(snp[index])]
     representative <- group_index[[1L]]
     native <- fastmr_native_call(
       fastmr_run_native,

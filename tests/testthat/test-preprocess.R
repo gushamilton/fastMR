@@ -135,10 +135,27 @@ test_that("local clumping converts factor p-values and handles short groups", {
   result <- fast_clump_data(dat, clump_p1 = 1e-5, ld_matrix = ld)
   expect_equal(result$SNP, c("rs1", "rs3"))
   expect_equal(fast_clump_data(dat[1, , drop = FALSE], ld_matrix = ld)$SNP, "rs1")
-  expect_error(fast_clump_data(dat[c(1, 1), ], ld_matrix = ld),
-               "unique within each id.exposure")
+  duplicate <- fast_clump_data(dat[c(1, 1), ], ld_matrix = ld)
+  expect_equal(nrow(duplicate), 2L)
+  expect_equal(duplicate$SNP, c("rs1", "rs1"))
   dat$SNP[1] <- NA_character_
   expect_error(fast_clump_data(dat, ld_matrix = ld), "non-missing")
+})
+
+test_that("clumping deduplicates exposure SNPs but restores multiple outcomes", {
+  dat <- data.frame(
+    SNP = c("rs1", "rs1", "rs2"),
+    id.exposure = "E",
+    id.outcome = c("O1", "O2", "O1"),
+    pval.exposure = c(1e-8, 1e-8, 1e-6),
+    chr_name = 1,
+    chrom_start = c(100, 100, 500000)
+  )
+  ld <- diag(2)
+  rownames(ld) <- colnames(ld) <- c("rs1", "rs2")
+  result <- fast_clump_data(dat, clump_kb = 10, clump_r2 = .5, ld_matrix = ld)
+  expect_equal(result$SNP, c("rs1", "rs1", "rs2"))
+  expect_equal(result$id.outcome, c("O1", "O2", "O1"))
 })
 
 test_that("PLINK clumping passes an explicit clump field and preserves groups", {
