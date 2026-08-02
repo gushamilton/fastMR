@@ -15,8 +15,8 @@ suppressPackageStartupMessages({
 seed <- 20260824L
 nboot <- 100L
 threads <- 5L
-fast_repeats <- 5L
-native_repeats <- 3L
+fast_repeats <- 50L
+native_repeats <- 10L
 
 method_specs <- data.frame(
   method = c(
