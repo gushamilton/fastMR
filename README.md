@@ -140,7 +140,8 @@ alleles, and all five main methods. See the
 ### Per-method native comparison across five grid shapes
 
 This is the complete five-method grid benchmark: balanced 50 × 50,
-1 × 250, 250 × 1, 10 × 100, and 100 × 10; 400 SNPs, `nboot = 100`, and
+1 × 250, 250 × 1, 10 × 100, and 100 × 10; the 82-SNP IL6 fixture,
+`nboot = 100`, and
 five fastMR threads. Ranges are the minimum–maximum across those shapes.
 
 | Method | fastMR time | Native TSMR time | Speedup | Max abs Δ beta | Max median abs Δ SE | Max abs Δ p |
