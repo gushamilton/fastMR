@@ -156,6 +156,37 @@ The full 25-row result is in
 The additional registered methods were benchmarked across the same five
 shapes as follows:
 
+### Independent simulation for every univariable method
+
+This separate Mac mini run uses a 400-SNP causal simulation with heavy-tailed
+pleiotropic noise, heterogeneous standard errors, and mixed-sign instrument
+effects. Each method is timed separately with 50 fastMR repeats and 10 native
+TwoSampleMR repeats (`nboot = 100`, five fastMR threads). Wald ratio is shown
+on a one-SNP simulation because that method is defined for a single instrument.
+
+| Method | SNPs | fastMR | Native TSMR | Speedup | Abs Δ beta | Abs Δ SE | Abs Δ p |
+|---|---:|---:|---:|---:|---:|---:|---:|
+| IVW | 400 | 0.001000 s | 0.006500 s | **6.50×** | `1.665e-16` | `6.939e-18` | `9.124e-33` |
+| IVW fixed effects | 400 | 0.001000 s | 0.006000 s | **6.00×** | `1.665e-16` | `3.469e-18` | `5.223e-39` |
+| IVW multiplicative random effects | 400 | 0.001000 s | 0.006000 s | **6.00×** | `1.665e-16` | `6.939e-18` | `9.124e-33` |
+| MR-Egger | 400 | 0.001000 s | 0.006000 s | **6.00×** | `2.776e-17` | `2.082e-17` | `3.151e-19` |
+| MR-Egger bootstrap | 400 | 0.002000 s | 0.010000 s | **5.00×** | `0` | `2.082e-17` | `0` |
+| Unweighted regression | 400 | 0.001000 s | 0.006000 s | **6.00×** | `8.327e-17` | `4.441e-16` | `0` |
+| Sign concordance | 400 | 0.001000 s | 0.006000 s | **6.00×** | `0` | — | `0` |
+| Simple median | 400 | 0.003000 s | 0.010000 s | **3.33×** | `3.275e-15` | `4.163e-17` | `1.544e-22` |
+| Weighted median | 400 | 0.003000 s | 0.010000 s | **3.33×** | `0` | `6.939e-18` | `1.165e-21` |
+| Penalised weighted median | 400 | 0.004000 s | 0.014000 s | **3.50×** | `5.551e-17` | `0` | `7.031e-23` |
+| Simple mode | 400 | 0.004000 s | 0.088500 s | **22.12×** | `0` | `5.551e-16` | `1.176e-17` |
+| Weighted mode | 400 | 0.004000 s | 0.090500 s | **22.62×** | `0` | `1.041e-16` | `1.059e-20` |
+| Wald ratio | 1 | 0.001000 s | 0.006000 s | **6.00×** | `0` | `0` | `0` |
+
+The complete machine-readable result is
+[`outputs/simulated_method_benchmark.csv`](outputs/simulated_method_benchmark.csv),
+with the generated table in
+[`outputs/simulated_method_benchmark.md`](outputs/simulated_method_benchmark.md)
+and the reproducible script in
+[`benchmarks/simulated_method_benchmark.R`](benchmarks/simulated_method_benchmark.R).
+
 | Additional method | fastMR time | Native TSMR time | Speedup | Max abs Δ beta | Max median abs Δ SE | Max abs Δ p | Raw results |
 |---|---:|---:|---:|---:|---:|---:|---|
 | Simple median | 0.138–1.345 s | 1.753–17.365 s | **12.17–13.04×** | `3.30e-17` | `5.83e-4` | `0.142` | [CSV](outputs/native_tsmr_simple_median_benchmark.csv) |
