@@ -27,7 +27,7 @@ OpenGWAS extraction, study metadata, or the broader TwoSampleMR ecosystem.
 
 ## Installation
 
-Once the repository is public, install the development release with:
+Install the development release from GitHub with:
 
 ```r
 install.packages("remotes")
