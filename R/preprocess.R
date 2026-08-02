@@ -70,7 +70,15 @@ fast_harmonise_data <- function(exposure_dat, outcome_dat, action = 2,
   } else {
     merged <- merge(outcome_dat, exposure_dat, by = "SNP", sort = FALSE)
   }
-  n_outcomes <- length(unique(as.character(merged$id.outcome)))
+  # Native TwoSampleMR assigns action values in the order of outcomes after
+  # its SNP-sorted merge, not in the caller's row order. Keep that mapping
+  # before incomplete-allele rows are filtered out.
+  outcome_levels <- if (length(action) == 1L) {
+    unique(as.character(merged$id.outcome))
+  } else {
+    unique(as.character(merged$id.outcome[order(merged$SNP)]))
+  }
+  n_outcomes <- length(outcome_levels)
   if (length(action) == 1L) action <- rep(action, n_outcomes)
   if (length(action) != n_outcomes) {
     stop("action must have length 1 or one value per unique id.outcome", call. = FALSE)
@@ -87,8 +95,17 @@ fast_harmonise_data <- function(exposure_dat, outcome_dat, action = 2,
   allele_cols <- c("effect_allele.exposure", "other_allele.exposure",
                    "effect_allele.outcome", "other_allele.outcome")
   for (column in allele_cols) merged[[column]] <- toupper(as.character(merged[[column]]))
-  merged$beta.exposure <- suppressWarnings(as.numeric(merged$beta.exposure))
-  merged$beta.outcome <- suppressWarnings(as.numeric(merged$beta.outcome))
+  empty_outcome_oa <- !is.na(merged$other_allele.outcome) &
+    merged$other_allele.outcome == ""
+  merged$other_allele.outcome[empty_outcome_oa] <- NA_character_
+  as_numeric <- function(x) {
+    if (is.numeric(x)) return(x)
+    suppressWarnings(as.numeric(as.character(x)))
+  }
+  merged$beta.exposure <- as_numeric(merged$beta.exposure)
+  merged$beta.outcome <- as_numeric(merged$beta.outcome)
+  merged$se.exposure <- as_numeric(merged$se.exposure)
+  merged$se.outcome <- as_numeric(merged$se.outcome)
 
   merged$eaf.exposure <- suppressWarnings(as.numeric(as.character(merged$eaf.exposure)))
   outcome_eaf <- as.character(merged$eaf.outcome)
@@ -124,7 +141,6 @@ fast_harmonise_data <- function(exposure_dat, outcome_dat, action = 2,
   beta_b <- merged$beta.outcome
   eaf_a <- merged$eaf.exposure
   eaf_b <- merged$eaf.outcome
-  outcome_levels <- unique(as.character(merged$id.outcome))
   row_action <- action[match(as.character(merged$id.outcome), outcome_levels)]
   remove <- rep(FALSE, nrow(merged))
   palindromic <- rep(FALSE, nrow(merged))
@@ -155,8 +171,7 @@ fast_harmonise_data <- function(exposure_dat, outcome_dat, action = 2,
     z <- indel & ncb1 < ncb2 & aa1 == "D" & aa2 == "I"; aa1[z] <- bb1[z]; aa2[z] <- bb2[z]
     r[indel & nca1 > 1 & nca1 == nca2 & bb1 %in% c("D", "I")] <- FALSE
     r[indel & ncb1 > 1 & ncb1 == ncb2 & aa1 %in% c("D", "I")] <- FALSE
-    r[aa1 == aa2] <- FALSE; r[bb1 == bb2] <- FALSE
-    status <- aa1 == bb1 & aa2 == bb2
+    r[indel & aa1 == aa2] <- FALSE; r[indel & bb1 == bb2] <- FALSE
     z <- aa1 == bb2 & aa2 == bb1
     switched[ii[z]] <- TRUE
     tmp <- bb1[z]; bb1[z] <- bb2[z]; bb2[z] <- tmp
@@ -187,7 +202,7 @@ fast_harmonise_data <- function(exposure_dat, outcome_dat, action = 2,
   if (any(i21)) {
     ii <- which(i21)
     aa1 <- a1[ii]; aa2 <- a2[ii]; bb1 <- b1[ii]; bb2 <- rep(NA_character_, length(ii))
-    nca1 <- nchar(aa1); nca2 <- nchar(aa2); ncb1 <- nchar(bb1)
+    nca1 <- nchar(aa1); nca2 <- nchar(aa2)
     indel <- nca1 > 1 | nca2 > 1 | aa1 %in% c("D", "I")
     r <- rep(TRUE, length(ii))
     z <- indel & nca1 > nca2 & bb1 == "I"; bb1[z] <- aa1[z]; bb2[z] <- aa2[z]
@@ -197,7 +212,7 @@ fast_harmonise_data <- function(exposure_dat, outcome_dat, action = 2,
     r[indel & aa1 == "I" & aa2 == "D"] <- FALSE
     r[indel & aa1 == "D" & aa2 == "I"] <- FALSE
     r[indel & nca1 > 1 & nca1 == nca2 & bb1 %in% c("D", "I")] <- FALSE
-    r[aa1 == aa2] <- FALSE
+    r[indel & aa1 == aa2] <- FALSE
     pal <- is_palindromic(aa1, aa2); rem <- pal
     fa <- eaf_a[ii]; fb <- eaf_b[ii]; fa[is.na(fa)] <- 0.5; fb[is.na(fb)] <- 0.5
     similar1 <- (fa < minf & fb < minf) | (fa > maxf & fb > maxf)
@@ -223,7 +238,7 @@ fast_harmonise_data <- function(exposure_dat, outcome_dat, action = 2,
   if (any(i12)) {
     ii <- which(i12)
     aa1 <- a1[ii]; aa2 <- rep(NA_character_, length(ii)); bb1 <- b1[ii]; bb2 <- b2[ii]
-    ncb1 <- nchar(bb1); ncb2 <- nchar(bb2); nca1 <- nchar(aa1)
+    ncb1 <- nchar(bb1); ncb2 <- nchar(bb2)
     indel <- ncb1 > 1 | ncb2 > 1 | bb1 %in% c("D", "I")
     r <- rep(TRUE, length(ii))
     z <- indel & ncb1 > ncb2 & aa1 == "I"; aa1[z] <- bb1[z]; aa2[z] <- bb2[z]
@@ -310,10 +325,10 @@ fast_harmonise_data <- function(exposure_dat, outcome_dat, action = 2,
 #' @param clump_kb Maximum physical distance between index and secondary SNPs.
 #' @param clump_r2 Minimum LD r-squared for removal.
 #' @param clump_p1 Maximum p-value for index SNPs.
-#' @param ld_matrix Optional local correlation matrix.
+#' @param ld_matrix Optional dense local correlation matrix.
 #' @param ld_snps Optional SNP names for `ld_matrix`.
 #' @param bfile Optional PLINK binary-prefix for local clumping.
-#' @param plink_bin Optional PLINK executable path.
+#' @param plink_bin Optional PLINK 1.9 executable path.
 #' @return `dat` filtered to retained index SNPs.
 #' @export
 fast_clump_data <- function(dat, clump_kb = 10000, clump_r2 = 0.001,
@@ -327,13 +342,22 @@ fast_clump_data <- function(dat, clump_kb = 10000, clump_r2 = 0.001,
   }
   pval_column <- if ("pval.exposure" %in% names(dat)) "pval.exposure" else if ("pval.outcome" %in% names(dat)) "pval.outcome" else NULL
   if (is.null(pval_column)) {
-    # Match TwoSampleMR::clump_data()/ieugwasr::ld_clump(): without a
-    # supplied p-value column, every variant receives 0.99, independently of
-    # the index threshold requested by the caller.
+    # Match TwoSampleMR::clump_data(): without a supplied p-value column,
+    # every variant receives 0.99, independently of the index threshold.
     dat$pval.exposure <- 0.99
     pval_column <- "pval.exposure"
   }
   if (!"id.exposure" %in% names(dat)) dat$id.exposure <- "exposure"
+  if (anyNA(dat$id.exposure)) {
+    stop("id.exposure must not contain missing values for clumping", call. = FALSE)
+  }
+  if (anyNA(dat$SNP) || any(!nzchar(trimws(as.character(dat$SNP))))) {
+    stop("SNP must contain non-missing, non-empty identifiers", call. = FALSE)
+  }
+  group_key <- paste(as.character(dat$SNP), as.character(dat$id.exposure), sep = "\r")
+  if (anyDuplicated(group_key)) {
+    stop("SNP must be unique within each id.exposure for clumping", call. = FALSE)
+  }
   if (!is.null(bfile)) {
     if (is.null(plink_bin)) plink_bin <- Sys.which("plink")
     if (!nzchar(plink_bin)) stop("PLINK executable not found; provide plink_bin", call. = FALSE)
@@ -344,12 +368,14 @@ fast_clump_data <- function(dat, clump_kb = 10000, clump_r2 = 0.001,
       write.table(data.frame(SNP = dat$SNP[index], P = dat[[pval_column]][index]), input,
                   row.names = FALSE, col.names = TRUE, quote = FALSE, sep = "\t")
       on.exit(unlink(c(input, paste0(stem, ".clumped"), paste0(stem, ".log"), paste0(stem, ".nosex"))), add = TRUE)
+      quote_arg <- function(x) shQuote(as.character(x),
+                                       type = if (.Platform$OS.type == "windows") "cmd" else "sh")
       run_error <- NULL
-      run_output <- tryCatch(system2(plink_bin, c(
-        "--bfile", bfile, "--clump", input, "--clump-field", "P",
+      run_output <- tryCatch(suppressWarnings(system2(plink_bin, c(
+        "--bfile", quote_arg(bfile), "--clump", quote_arg(input), "--clump-field", "P",
         "--clump-p1", as.character(clump_p1), "--clump-r2", as.character(clump_r2),
-        "--clump-kb", as.character(clump_kb), "--out", stem),
-        stdout = TRUE, stderr = TRUE), error = function(e) {
+        "--clump-kb", as.character(clump_kb), "--out", quote_arg(stem)),
+        stdout = TRUE, stderr = TRUE)), error = function(e) {
           run_error <<- conditionMessage(e)
           character()
         })
@@ -358,10 +384,15 @@ fast_clump_data <- function(dat, clump_kb = 10000, clump_r2 = 0.001,
       clumped_file <- paste0(stem, ".clumped")
       if (!is.null(run_error) || !isTRUE(status == 0L) || !file.exists(clumped_file)) {
         detail <- c(run_error, if (length(run_output)) utils::tail(run_output, 8L))
+        log_file <- paste0(stem, ".log")
+        if (file.exists(log_file)) {
+          detail <- c(detail, utils::tail(readLines(log_file, warn = FALSE), 8L))
+        }
         detail <- detail[nzchar(detail)]
         suffix <- if (length(detail)) paste0(": ", paste(detail, collapse = " | ")) else ""
         stop("PLINK clumping failed for exposure ",
-             unique(dat$id.exposure[index]), suffix, call. = FALSE)
+             unique(dat$id.exposure[index]), " (exit status ", status, ")", suffix,
+             call. = FALSE)
       }
       clumped <- tryCatch(read.table(clumped_file, header = TRUE,
                                      stringsAsFactors = FALSE, check.names = FALSE),
@@ -383,8 +414,12 @@ fast_clump_data <- function(dat, clump_kb = 10000, clump_r2 = 0.001,
   if (anyDuplicated(ld_snps)) stop("ld_snps must be unique", call. = FALSE)
   positions <- match(as.character(dat$SNP), ld_snps)
   chr <- if ("chr_name" %in% names(dat)) as.character(dat$chr_name) else rep(NA_character_, nrow(dat))
-  bp <- if ("chrom_start" %in% names(dat)) suppressWarnings(as.numeric(dat$chrom_start)) else rep(NA_real_, nrow(dat))
-  p <- suppressWarnings(as.numeric(dat[[pval_column]]))
+  as_numeric <- function(x) {
+    if (is.numeric(x)) return(x)
+    suppressWarnings(as.numeric(as.character(x)))
+  }
+  bp <- if ("chrom_start" %in% names(dat)) as_numeric(dat$chrom_start) else rep(NA_real_, nrow(dat))
+  p <- as_numeric(dat[[pval_column]])
   keep <- logical(nrow(dat))
   for (group in split(seq_len(nrow(dat)), dat$id.exposure, drop = TRUE)) {
     candidates <- group[!is.na(positions[group]) & is.finite(p[group]) & p[group] <= clump_p1]
@@ -392,6 +427,10 @@ fast_clump_data <- function(dat, clump_kb = 10000, clump_r2 = 0.001,
     blocked <- logical(length(candidates))
     for (j in seq_along(candidates)) {
       if (blocked[j]) next
+      if (j == length(candidates)) {
+        keep[candidates[j]] <- TRUE
+        next
+      }
       i <- candidates[j]
       keep[i] <- TRUE
       remaining <- seq.int(j + 1L, length(candidates))

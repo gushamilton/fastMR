@@ -12,10 +12,10 @@ fast_clump_data(dat, clump_kb = 10000, clump_r2 = 0.001, clump_p1 = 1,
 \item{clump_kb}{Maximum physical distance between index and secondary SNPs.}
 \item{clump_r2}{Minimum LD r-squared for removal.}
 \item{clump_p1}{Maximum p-value for index SNPs.}
-\item{ld_matrix}{Optional local correlation matrix.}
+\item{ld_matrix}{Optional dense local correlation matrix.}
 \item{ld_snps}{Optional SNP names for \code{ld_matrix}.}
 \item{bfile}{Optional PLINK binary-prefix for local clumping.}
-\item{plink_bin}{Optional PLINK executable path.}
+\item{plink_bin}{Optional PLINK 1.9 executable path.}
 }
 \value{The input data frame filtered to retained index SNPs.}
 \description{Local greedy LD clumping from a supplied LD matrix, or delegation to a local PLINK reference panel.}
