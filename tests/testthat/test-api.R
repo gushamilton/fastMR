@@ -69,6 +69,18 @@ test_that("duplicate methods fail and duplicate SNPs are counted once", {
   expect_equal(result$nsnp, 3)
 })
 
+test_that("duplicate SNP rows do not change estimates or standard errors", {
+  d <- il6_fixture()[1:8, ]
+  methods <- c("ivw", "egger", "weighted_median", "simple_mode", "weighted_mode")
+  unique_result <- fast_mr(d, methods = methods, nboot = 40, seed = 20260808)
+  duplicated <- rbind(d, d[3, , drop = FALSE])
+  duplicated_result <- fast_mr(duplicated, methods = methods, nboot = 40, seed = 20260808)
+  fields <- c("method_code", "nsnp", "b", "se", "pval", "Q", "Q_pval",
+              "intercept", "intercept_se", "intercept_pval")
+  expect_equal(duplicated_result[, fields, drop = FALSE],
+               unique_result[, fields, drop = FALSE], tolerance = 0)
+})
+
 test_that("mode diagnostics report the requested phi", {
   d <- il6_fixture()[1:8, ]
   result <- fast_mr(d, methods = "simple_mode", phi = 0.25, nboot = 0)

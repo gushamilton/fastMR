@@ -1,6 +1,6 @@
 Package: fastMR
 Title: Exact and Fast Summary-Statistics Mendelian Randomization
-Version: 0.1.3
+Version: 0.1.4
 Date: 2026-08-02
 Authors@R: person("Fergus", "Hamilton", email = "fergushamilton@users.noreply.github.com", role = c("aut", "cre"))
 Author: Fergus Hamilton [aut, cre]

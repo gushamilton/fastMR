@@ -1,3 +1,9 @@
+# fastMR 0.1.4
+
+* Added a regression test proving that exact duplicate SNP rows leave all
+  point estimates, standard errors, p-values, Q statistics, and Egger
+  intercept diagnostics unchanged after deduplication.
+
 # fastMR 0.1.3
 
 * Duplicate SNP rows are now collapsed once per MR pair/clumping exposure,
