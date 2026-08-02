@@ -21,6 +21,11 @@ steiger_d$r.exposure <- seq_len(nrow(steiger_d)) / 1000
 steiger_d$r.outcome <- seq_len(nrow(steiger_d)) / 1200
 steiger_d$samplesize.exposure <- 10000
 steiger_d$samplesize.outcome <- 12000
+filtering_d <- d
+filtering_d$units.exposure <- "SD"
+filtering_d$units.outcome <- "SD"
+filtering_d$samplesize.exposure <- 10000
+filtering_d$samplesize.outcome <- 12000
 
 fast_repeats <- 20L
 native_repeats <- 5L
@@ -76,17 +81,21 @@ native_leaveoneout <- function() suppressMessages(suppressWarnings(
   TwoSampleMR::mr_leaveoneout(d, method = TwoSampleMR::mr_ivw)))
 native_directionality <- function() suppressMessages(suppressWarnings(
   TwoSampleMR::directionality_test(steiger_d)))
+native_steiger_filtering <- function() suppressMessages(suppressWarnings(
+  TwoSampleMR::steiger_filtering(filtering_d)))
 
 fast_heterogeneity <- function() fast_mr_heterogeneity(d, threads = threads)
 fast_pleiotropy <- function() fast_mr_pleiotropy_test(d, threads = threads)
 fast_singlesnp <- function() fast_mr_singlesnp(d, threads = threads)
 fast_leaveoneout <- function() fast_mr_leaveoneout(d, method = "ivw", threads = threads)
 fast_directionality <- function() fast_mr_directionality_test(steiger_d)
+fast_steiger_filtering <- function() fast_mr_steiger_filtering(filtering_d)
 
 singlesnp_native_once <- native_singlesnp()
 singlesnp_key <- singlesnp_native_once$SNP
 leaveoneout_native_once <- native_leaveoneout()
 leaveoneout_key <- leaveoneout_native_once$SNP
+steiger_filtering_key <- native_steiger_filtering()$SNP
 
 rows <- list(
   compare("heterogeneity", fast_heterogeneity, native_heterogeneity,
@@ -99,7 +108,10 @@ rows <- list(
           primary = "b", secondary = "se", p_value = "p"),
   compare("directionality", fast_directionality, native_directionality,
           primary = "snp_r2.exposure", secondary = "snp_r2.outcome",
-          p_value = "steiger_pval")
+          p_value = "steiger_pval"),
+  compare("steiger_filtering", fast_steiger_filtering, native_steiger_filtering,
+          steiger_filtering_key, primary = "rsq.exposure",
+          secondary = "rsq.outcome", p_value = "steiger_pval")
 )
 result <- do.call(rbind, rows)
 dir.create(file.path(root, "outputs"), showWarnings = FALSE, recursive = TRUE)
