@@ -113,50 +113,89 @@ fast_mr_parquet("summary_stats.parquet", methods = "ivw")
 
 ## Benchmarks
 
-Final Mac mini audit: native `TwoSampleMR` 0.7.9 comparator, five methods,
-`nboot = 100`, and 10 fastMR threads for the grid run.
+All timings below were measured on the same Mac mini against native
+`TwoSampleMR` 0.7.9. Times are seconds; speedups are native/fastMR. The
+results are observed measurements, not guarantees for every machine. Raw
+CSV files and the scripts that generated them are linked in each table.
 
-| Workload | fastMR | Native TwoSampleMR | Speedup |
-|---|---:|---:|---:|
-| Local BMI → CRP, 104 SNPs, median of 5 runs | 0.005 s | 0.127 s | **25.4×** |
-| Independent simulation, 1 × 1, 400 SNPs | 0.008 s | 0.165 s | **20.6×** |
-| Independent simulation, 50 × 50, 2,500 pairs, 400 SNPs | 2.030 s | 391.764 s | **193.0×** |
+### End-to-end audits
+
+| Workload | Shape / SNPs | Methods | `nboot` / threads | fastMR | Native TSMR | Speedup | Parity / checks |
+|---|---|---:|---:|---:|---:|---:|---|
+| Local BMI → CRP | 1 × 1 / 104 SNPs | 5 | 100 / 1 | 0.005 s | 0.127 s | **25.4×** | Harmonisation keys exact |
+| Independent simulation | 1 × 1 / 400 SNPs | 5 | 100 / 1 | 0.008 s | 0.165 s | **20.6×** | Max beta delta `2.78e-16` |
+| Independent heavy-tailed simulation | 50 × 50 / 400 SNPs, 2,500 pairs | 5 | 100 / 10 | 2.030 s | 391.764 s | **193.0×** | Max beta delta `6.9e-11` |
+| Adversarial heavy-tailed simulation | 25 × 25 / 82 SNPs, 625 pairs / 3,125 rows | 5 | 1,000 / 10 | 3.630 s | 824.585 s | **227.2×** | 1-thread/10-thread exact; max beta delta `4.53e-12` |
 
 The 50 × 50 run processed about 1,232 pairs/s with fastMR versus 6.4
-pairs/s natively. These are observed timings on one Mac mini, not a promise
-for every machine or workload; the largest gains come from the shared-grid
-implementation and reduced R-level allocation, with threading contributing
-additional benefit for bootstrap-heavy methods.
-
-The final tables and reproducible audit script are in
-[`outputs/final_package_audit/`](outputs/final_package_audit/) and
-[`benchmarks/final_package_audit.R`](benchmarks/final_package_audit.R).
-
-### Adversarial 25 × 25 proof run
-
-The package was also checked on a deliberately different, heavy-tailed and
-heteroskedastic simulation: 25 exposures × 25 outcomes, 82 SNPs, all five
-main methods, and `nboot = 1,000`. The run produced all 625 × 5 = 3,125
-expected rows, repeated exactly across 1-thread and 10-thread fastMR runs,
-and compared every pair with native TwoSampleMR 0.7.9. It also exercised
-one- and two-SNP inputs, invalid/non-finite inputs, and deliberately flipped
-alleles through the local harmoniser. The measured result is recorded in
-[`outputs/adversarial_25x25_nboot1000/`](outputs/adversarial_25x25_nboot1000/)
-and can be reproduced with
+pairs/s natively. The adversarial run took 20.177 s with one fastMR thread,
+so the measured thread multiplier was 5.56×. The 25 × 25 run also exercised
+one- and two-SNP inputs, invalid/non-finite inputs, deliberately flipped
+alleles, and all five main methods. See the
+[final package audit](outputs/final_package_audit/) and the
+[25 × 25 audit](outputs/adversarial_25x25_nboot1000/), reproduced by
+[`benchmarks/final_package_audit.R`](benchmarks/final_package_audit.R) and
 [`benchmarks/adversarial_25x25_nboot1000.R`](benchmarks/adversarial_25x25_nboot1000.R).
 
-Measured on the Mac mini: fastMR took 3.630 s at 10 threads and 20.177 s at
-one thread; native TwoSampleMR took 824.585 s. That is a 227.16× native
-speedup, with a 5.56× fastMR thread multiplier and a maximum native point
-estimate beta difference of `4.53e-12`. IVW and Egger beta/SE/p-value parity
-was at floating-point noise; bootstrap SE/p-value distributions for the
-median and mode methods are reported per method in `method_summary.csv`.
+### Per-method native comparison across five grid shapes
 
-Correctness checks found exact harmonisation-key parity for local BMI → CRP,
-floating-point parity for deterministic IVW/Egger estimates, and a maximum
-beta difference of `6.9e-11` across the independent 50 × 50 simulation.
-Bootstrap SE and p-value differences are reported separately because the two
-implementations use independently sampled bootstrap streams.
+This is the complete five-method grid benchmark: balanced 50 × 50,
+1 × 250, 250 × 1, 10 × 100, and 100 × 10; 400 SNPs, `nboot = 100`, and
+five fastMR threads. Ranges are the minimum–maximum across those shapes.
+
+| Method | fastMR time | Native TSMR time | Speedup | Max abs Δ beta | Max median abs Δ SE | Max abs Δ p |
+|---|---:|---:|---:|---:|---:|---:|
+| IVW | 0.001–0.001 s | 1.498–14.083 s | **1,498–14,083×** | `3.25e-18` | `4.34e-19` | `7.77e-16` |
+| MR-Egger | 0.001–0.002 s | 1.581–14.494 s | **1,581–7,247×** | `8.67e-18` | `1.73e-18` | `9.44e-16` |
+| Weighted median | 0.010–0.068 s | 1.826–17.296 s | **166.0–254.4×** | `4.34e-19` | `1.11e-4` | `0.148` |
+| Simple mode | 0.156–1.286 s | 18.038–173.085 s | **114.9–134.6×** | `2.66e-16` | `2.15e-3` | `0.044` |
+| Weighted mode | 0.158–1.290 s | 17.988–176.129 s | **85.3–136.5×** | `2.52e-16` | `2.31e-4` | `0.270` |
+
+The full 25-row result is in
+[`outputs/native_tsmr_method_benchmark.csv`](outputs/native_tsmr_method_benchmark.csv).
+The additional registered methods were benchmarked across the same five
+shapes as follows:
+
+| Additional method | fastMR time | Native TSMR time | Speedup | Max abs Δ beta | Max median abs Δ SE | Max abs Δ p | Raw results |
+|---|---:|---:|---:|---:|---:|---:|---|
+| Simple median | 0.138–1.345 s | 1.753–17.365 s | **12.17–13.04×** | `3.30e-17` | `5.83e-4` | `0.142` | [CSV](outputs/native_tsmr_simple_median_benchmark.csv) |
+| Penalised weighted median | 0.016–0.143 s | 2.068–20.544 s | **122.5–159.5×** | `6.51e-19` | `1.75e-4` | `0.154` | [CSV](outputs/native_tsmr_penalised_median_benchmark.csv) |
+| MR-Egger bootstrap | 0.139–1.380 s | 1.843–18.293 s | **12.84–13.35×** | `6.37e-4` | `1.14e-4` | `0.110` | [CSV](outputs/native_tsmr_egger_bootstrap_benchmark.csv) |
+| Unweighted regression | 0.132–1.307 s | 1.390–13.910 s | **10.45–10.66×** | `4.34e-19` | — | `0` | [CSV](outputs/native_tsmr_uwr_sign_benchmark.csv) |
+| Sign concordance | 0.128–1.240 s | 1.457–13.708 s | **10.83–11.29×** | `0` | — | `0` | [CSV](outputs/native_tsmr_uwr_sign_benchmark.csv) |
+
+Bootstrap SE and p-value differences are reported as distributions because
+native TwoSampleMR and fastMR use independently sampled bootstrap streams;
+the deterministic IVW/Egger estimates agree to floating-point precision.
+
+### Scaling and implementation benchmarks
+
+| Component | Workload | Result | Interpretation | Raw results |
+|---|---|---:|---|---|
+| Compact IVW kernel | 50 × 50 through 1,000 × 1,000; 82 SNPs | 0.00026–0.109 s; 9.17–10.59 million pairs/s | Linear large-grid throughput before tidy-frame allocation | [CSV](outputs/ivw_large_grid_scaling.csv) |
+| Batched BLAS IVW path | 2,500 pairs; threads 1, 5, 10 | 0.00088 s; **1,492×** vs pre-BLAS scalar path | Same result and speed across tested thread counts | [CSV](outputs/ivw_algorithmic_benchmark.csv) |
+| Five-method grid, no bootstrap | 2,500 pairs; 1 → 10 threads | 0.082 → 0.017 s; **4.82×** | Threading helps even without bootstrap work | [CSV](outputs/iteration_scaling.csv) |
+| Five-method grid, `nboot = 100` | 2,500 pairs; 1 → 10 threads | 7.885 → 1.503 s; **5.25×** | Bootstrap-heavy work scales substantially with threads | [CSV](outputs/iteration_scaling.csv) |
+| Mode workspace reuse | 2,500 pairs; simple / weighted mode | 1.886 → 1.012 s / 1.910 → 1.011 s | **1.86× / 1.89×** over the previous workspace path | [CSV](outputs/mode_optimization_benchmark.csv) |
+| Local LD-matrix clumping | 1,500 pair rows | 0.037 s | Dependency-light local clumper | [CSV](outputs/iteration_scaling.csv) |
+| Local harmonisation | 20,000 rows | 0.015 s vs 0.107 s native; **7.13×** | Same kept rows and beta values | [CSV](outputs/iteration_harmonise_benchmark.csv) |
+
+### Correctness and adversarial checks
+
+| Check | Coverage | Result |
+|---|---|---|
+| 25 × 25, `nboot = 1,000` proof run | 3,125 expected rows; 1 vs 10 threads; native comparison | All rows present; thread delta `0`; max native beta delta `4.53e-12` |
+| Native harmonisation options | 63 combinations across actions 1, 2, and 3, including strand, palindromic, indel, missing-frequency, and incomplete-allele cases | **63/63 exact key matches**, max numeric delta `0` |
+| Simulated harmonisation actions | 60 overlapping SNPs under actions 1, 2, and 3 | Zero keep/remove/ambiguous mismatches; max beta delta `0` |
+| Unequal SNP sets | 47 exposure SNPs, 34 outcome SNPs | Expected 27-row overlap produced |
+| Duplicate SNP regression | Five main methods; duplicate rows and repeated p-values | All `b`, `se`, `pval`, Q, and Egger diagnostic deltas `0` |
+| Randomised threaded IVW | 100 adversarial panels | All scalar and threaded gates passed with delta `0` |
+| Mixed threaded grids | 150 adversarial panels | All exactness and finite-result gates passed |
+| Penalised median edge panels | 300 adversarial panels | All exactness and finite-result gates passed |
+
+The proof-run details are in
+[`outputs/adversarial_25x25_nboot1000/`](outputs/adversarial_25x25_nboot1000/);
+the harmonisation and simulation files are in [`outputs/`](outputs/).
 
 ## Design notes and limits
 
@@ -186,7 +225,7 @@ Rscript -e 'testthat::test_local(".")'
 _R_CHECK_FORCE_SUGGESTS_=false R CMD check --no-manual --as-cran .
 ```
 
-The package has a 127-test suite, native harmonisation audits, simulation
+The package has a 134-test suite, native harmonisation audits, simulation
 tyre-kick tests, adversarial thread checks, and native TwoSampleMR benchmarks.
 The `R CMD check` command above deliberately allows the optional Arrow
 dependency to be absent; install Arrow first if Parquet checks are required.
