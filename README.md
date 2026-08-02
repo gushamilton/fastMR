@@ -181,6 +181,12 @@ on a one-SNP simulation because that method is defined for a single instrument.
 | Weighted mode | 400 | 0.004000 s | 0.090500 s | **22.62×** | `0` | `1.041e-16` | `1.059e-20` |
 | Wald ratio | 1 | 0.001000 s | 0.006000 s | **6.00×** | `0` | `0` | `0` |
 
+These are deliberately one-pair timings, where fixed R/native-call overhead
+dominates. They should not be compared directly with the large-grid IVW
+benchmark: the dedicated 2,500-pair IVW path measures **1,867–14,682×**
+against native TwoSampleMR across the tested grid shapes, while the compact
+BLAS path is **1,492×** faster than the previous scalar fastMR implementation.
+
 The complete machine-readable result is
 [`outputs/simulated_method_benchmark.csv`](outputs/simulated_method_benchmark.csv),
 with the generated table in
