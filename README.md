@@ -87,10 +87,21 @@ The method registry includes:
 - simple and weighted mode
 - unweighted regression, sign concordance, and Wald ratio
 - basic multivariable IVW
+- heterogeneity and MR-Egger pleiotropy diagnostics
+- single-SNP and leave-one-out MR summaries
 
 Use `fastmr_method_registry()` for method codes and descriptions. Results use
 the familiar `id.exposure`, `id.outcome`, `method`, `nsnp`, `b`, `se`, and
 `pval` columns, with method-specific diagnostics retained where applicable.
+
+High-use downstream diagnostics are available as tidy local functions:
+
+```r
+fast_mr_heterogeneity(harmonised)
+fast_mr_pleiotropy_test(harmonised)
+fast_mr_singlesnp(harmonised)
+fast_mr_leaveoneout(harmonised)
+```
 
 ## Local preprocessing
 
@@ -235,6 +246,26 @@ The proof-run details are in
 [`outputs/adversarial_25x25_nboot1000/`](outputs/adversarial_25x25_nboot1000/);
 the harmonisation and simulation files are in [`outputs/`](outputs/).
 
+### Diagnostics versus native TwoSampleMR
+
+These new utilities were compared row-by-row with native TwoSampleMR 0.7.9
+on the 82-SNP IL6 fixture, using five fastMR threads. Timings are medians of
+20 fastMR calls and five native calls; primary/secondary deltas refer to Q and
+Q-df for heterogeneity, the Egger intercept and SE for pleiotropy, and MR beta
+and SE for the SNP-wise utilities.
+
+| Utility | fastMR | Native TSMR | Speedup | Rows | Key parity | Max primary delta | Max secondary delta | Max p delta |
+|---|---:|---:|---:|---:|---|---:|---:|---:|
+| Heterogeneity | 0.002 s | 0.003 s | **1.50×** | 2 / 2 | — | `5.684e-14` | `0` | `2.746e-35` |
+| MR-Egger pleiotropy | 0.001 s | 0.001 s | **1.00×** | 1 / 1 | — | `0` | `2.169e-19` | `6.939e-17` |
+| Single-SNP MR | 0.0025 s | 0.005 s | **2.00×** | 84 / 84 | Exact | `4.337e-18` | `1.735e-18` | `3.886e-16` |
+| Leave-one-out IVW | 0.007 s | 0.020 s | **2.86×** | 83 / 83 | Exact | `1.626e-18` | `6.939e-18` | `3.331e-16` |
+
+The raw parity result is in
+[`outputs/diagnostics_native_parity.csv`](outputs/diagnostics_native_parity.csv),
+with the reproducible audit at
+[`benchmarks/diagnostics_native_parity.R`](benchmarks/diagnostics_native_parity.R).
+
 ## Design notes and limits
 
 - Use `fast_mr_grid()` when scanning many exposure/outcome pairs; for one pair,
@@ -263,7 +294,7 @@ Rscript -e 'testthat::test_local(".")'
 _R_CHECK_FORCE_SUGGESTS_=false R CMD check --no-manual --as-cran .
 ```
 
-The package has a 134-test suite, native harmonisation audits, simulation
+The package has a 152-test suite, native harmonisation audits, simulation
 tyre-kick tests, adversarial thread checks, and native TwoSampleMR benchmarks.
 The `R CMD check` command above deliberately allows the optional Arrow
 dependency to be absent; install Arrow first if Parquet checks are required.
