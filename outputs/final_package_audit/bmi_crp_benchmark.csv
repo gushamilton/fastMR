@@ -1,0 +1,6 @@
+"workload","repeat_index","bmi_rows","crp_rows_matched","harmonised_rows_fast","mr_rows_fast","fast_harmonise_seconds","fast_mr_seconds","fast_pipeline_seconds","native_harmonise_seconds","native_mr_seconds","native_pipeline_seconds","pipeline_speedup","harmonisation_key_exact"
+"local BMI -> CRP",1,104,104,104,5,0,0.005,0.005,0.002,0.122,0.124,24.8,TRUE
+"local BMI -> CRP",2,104,104,104,5,0.001,0.004,0.005,0.003,0.124,0.127,25.4,TRUE
+"local BMI -> CRP",3,104,104,104,5,0,0.005,0.005,0.002,0.124,0.126,25.2,TRUE
+"local BMI -> CRP",4,104,104,104,5,0,0.005,0.005,0.002,0.127,0.129,25.8,TRUE
+"local BMI -> CRP",5,104,104,104,5,0.00099999999999989,0.004,0.00499999999999989,0.00299999999999989,0.126,0.129,25.8000000000006,TRUE

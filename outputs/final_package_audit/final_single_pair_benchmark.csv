@@ -1,0 +1,2 @@
+"workload","snps","methods","nboot","fastMR_seconds","TwoSampleMR_seconds","speedup","max_abs_beta_delta","max_abs_se_delta","max_abs_pval_delta"
+"different simulation, 1 exposure x 1 outcome",400,5,100,0.00799999999998136,0.164999999999964,20.6250000000435,2.77555756156289e-16,8.46628565181634,0.00461814033183236

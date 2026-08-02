@@ -1,0 +1,2 @@
+"workload","exposures","outcomes","snps","pairs","methods","nboot","fast_threads","fastMR_seconds","TwoSampleMR_seconds","speedup","fastMR_pairs_per_second","TwoSampleMR_pairs_per_second","max_abs_beta_delta","max_abs_se_delta","max_abs_pval_delta"
+"different heavy-tailed heteroskedastic simulation",50,50,400,2500,5,100,10,2.03,391.764,192.987192118227,1231.52709359606,6.38139287938657,6.92352841724642e-11,36233.1472821617,0.128155641825283
