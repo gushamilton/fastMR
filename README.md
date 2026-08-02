@@ -165,12 +165,11 @@ history and detailed validation record.
 
 ## Logo
 
-The mark combines three connected variant nodes with a forward chevron. The
-nodes represent genetic instruments and causal structure; the chevron signals
-the package's purpose—moving the same MR calculations through a large grid
-quickly. Navy gives it a technical, stable base, while coral provides a small
-amount of motion and emphasis without making the scientific package look like
-a generic benchmarking tool.
+The mark is an original R-inspired identity: a cobalt italic `R` under a
+single silver orbital swoosh, finished with a coral acceleration tip. The `R`
+places the package clearly in the R ecosystem; the swoosh represents a causal
+trajectory through the data; and the coral tip signals fast movement through a
+large MR grid. It deliberately avoids copying the official R Project mark.
 
 ## License
 

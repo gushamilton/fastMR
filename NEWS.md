@@ -1,3 +1,8 @@
+# fastMR 0.1.1
+
+* Refreshed the package identity with a distinctive R-inspired swoosh logo
+  for GitHub, documentation, and package distribution.
+
 # fastMR 0.1.0
 
 * Added compact mixed-method grid results, preserving diagnostics while
