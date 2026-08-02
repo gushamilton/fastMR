@@ -1,0 +1,5 @@
+"component","fastMR_seconds","TwoSampleMR_seconds","speedup","fast_rows","native_rows","row_count_match","key_match","nsnp_match","max_abs_beta_delta","max_abs_se_delta","max_abs_pval_delta"
+"mv_ivw",0.00199999999999999,0.013,6.50000000000005,4,4,TRUE,TRUE,TRUE,1.66533453693773e-16,6.50521303491303e-19,0
+"mv_multiple_shared",0.002,0.002,1,4,4,TRUE,TRUE,TRUE,4.44089209850063e-16,7.58941520739853e-19,0
+"mv_multiple_specific",0.001,0.002,2,4,4,TRUE,TRUE,TRUE,1.66533453693773e-16,6.50521303491303e-19,0
+"mv_multiple_intercept",0.001,0.002,2,4,4,TRUE,TRUE,TRUE,2.4980018054066e-16,1.19262238973405e-18,0
