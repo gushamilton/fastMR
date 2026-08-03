@@ -21,9 +21,9 @@ jobs:
         r: [release]
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v7
         with:
           python-version: '3.12'
 
@@ -36,11 +36,15 @@ jobs:
 
       - uses: r-lib/actions/setup-r-dependencies@v2
         with:
+          dependencies: '"hard"'
           extra-packages: |
             any::rcmdcheck
+            any::testthat
             github::gushamilton/CompreSSoR@agent/pcodec-r-package
           needs: check
 
       - uses: r-lib/actions/check-r-package@v2
+        env:
+          _R_CHECK_FORCE_SUGGESTS_: false
         with:
           upload-snapshots: true
