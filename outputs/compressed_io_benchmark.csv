@@ -1,0 +1,16 @@
+format,run,seconds,pairs,instruments_per_pair,estimate
+CompreSSoR Pcodec batch,1,0.184,25,25,1
+CompreSSoR Pcodec batch,2,0.14,25,25,1
+CompreSSoR Pcodec batch,3,0.14,25,25,1
+CompreSSoR Pcodec batch,4,0.136,25,25,1
+CompreSSoR Pcodec batch,5,0.149,25,25,1
+VCF.gz + Tabix,1,0.196,25,25,1
+VCF.gz + Tabix,2,0.197,25,25,1
+VCF.gz + Tabix,3,0.196,25,25,1
+VCF.gz + Tabix,4,0.197,25,25,1
+VCF.gz + Tabix,5,0.196,25,25,1
+TSV.gz full scan,1,18.226,25,25,1
+TSV.gz full scan,2,18.175,25,25,1
+TSV.gz full scan,3,18.339,25,25,1
+TSV.gz full scan,4,18.049,25,25,1
+TSV.gz full scan,5,16.821,25,25,1

@@ -18,7 +18,8 @@ fast_mr_compressed(exposure_files, outcome_files, instruments,
   \item{nboot}{Number of bootstrap draws.}
   \item{seed}{Optional FastMR seed.}
   \item{threads}{Native FastMR worker count.}
-  \item{io_threads}{Number of stores read concurrently on Unix-like systems.}
+  \item{io_threads}{Number of stores decoded concurrently inside the shared
+  CompreSSoR process.}
   \item{minimum_snps}{Minimum matched instruments required for each pair.}
   \item{strict}{Fail on invalid beta/standard-error values and on pairs below
   \code{minimum_snps}; otherwise omit them with explicit warnings.}

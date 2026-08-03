@@ -152,19 +152,44 @@ result <- fast_mr_compressed(
   outcome_files = c(cad = "cad.cpr", stroke = "stroke.cpr"),
   instruments = instruments,
   methods = "ivw",
-  io_threads = 4
+  io_threads = 1
 )
 ```
 
 Each exposure is read only for its own instruments. Each outcome is read once
-for their union, and the matched rows are passed directly to the compiled
-FastMR estimator. The canonical key is `chromosome:position:REF:ALT`; the beta
+for their union. All exposure and outcome requests share one codec process,
+and identical requests are decoded once. The matched rows are passed directly
+to the compiled FastMR estimator. The canonical key is
+`chromosome:position:REF:ALT`; the beta
 and frequency in every CompreSSoR file refer to ALT, so matching keys are
 already aligned and no rsID dictionary is involved. Instrument discovery,
 association-threshold selection, and LD clumping remain explicit upstream
 steps—random instruments are used only in the reproducible I/O benchmark.
 This path deliberately rejects legacy Parquet CompreSSoR stores because their
 variant-ID lookup does not implement the canonical-key index.
+
+### Full-FinnGen compressed I/O benchmark
+
+This end-to-end Mac mini benchmark used a real 14,923,434-SNP FinnGen GWAS,
+25 deterministic genome-wide REF/ALT keys, five logical exposures, five
+logical outcomes, and 25 IVW estimates. The same GWAS was deliberately reused
+for all ten study reads to isolate access cost; every path returned 25 SNPs per
+pair and the expected self-comparison estimate of one. Times are medians of
+five measured runs and include reading, matching, data-frame construction, and
+FastMR estimation.
+
+| Input path | Median | Range | Speedup vs TSV.gz |
+|---|---:|---:|---:|
+| CompreSSoR Pcodec batch | 0.140 s | 0.136–0.184 s | **129.8x** |
+| VCF.gz + Tabix | 0.196 s | 0.196–0.197 s | **92.7x** |
+| TSV.gz full scan | 18.175 s | 16.821–18.339 s | 1.0x |
+
+The self-contained CompreSSoR store is 59,369,314 bytes, versus 201,658,018
+bytes for the eight-column TSV.gz and 228,634,485 bytes for VCF.gz plus its
+Tabix index. The benchmark is reproducible with
+[`benchmarks/compressed_io_benchmark.R`](benchmarks/compressed_io_benchmark.R);
+the [individual runs](outputs/compressed_io_benchmark.csv) and
+[machine-readable record](outputs/compressed_io_benchmark.json) are included.
 
 ## Benchmarks
 

@@ -1,3 +1,11 @@
+# fastMR 0.1.7
+
+- Batches every compressed exposure and outcome read through one CompreSSoR
+  process, removing repeated Python startup and reusing identical requests.
+- Adds a corrected full-FinnGen 5 x 5 benchmark: median 0.140 seconds from
+  Pcodec, 0.196 seconds from VCF.gz plus Tabix, and 18.175 seconds from ten
+  TSV.gz scans, with all 25 REF/ALT keys and IVW results checked.
+
 # fastMR 0.1.6
 
 - Adds `fast_read_compressed()` and `fast_mr_compressed()` for indexed,

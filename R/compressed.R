@@ -80,7 +80,38 @@ fastmr_normalize_instruments <- function(instruments, exposure_labels) {
   out
 }
 
+fastmr_finalize_compressed_read <- function(out, columns) {
+  identity <- c("chromosome", "base_pair_location", "effect_allele", "other_allele")
+  if (!nrow(out)) {
+    out$variant_key <- character()
+  } else if (all(identity %in% names(out))) {
+    out$variant_key <- CompreSSoR::compressor_variant_key(
+      out$chromosome, out$base_pair_location, out$other_allele, out$effect_allele
+    )
+  }
+  if (anyDuplicated(out$variant_key)) {
+    stop("compressed store returned duplicate canonical variant keys", call. = FALSE)
+  }
+  keep <- unique(c(columns, if ("variant_key" %in% names(out)) "variant_key"))
+  out[keep]
+}
+
 fastmr_io_map <- function(paths, keys, columns, io_threads) {
+  exports <- getNamespaceExports("CompreSSoR")
+  if ("read_sumstats_batch" %in% exports) {
+    batch_reader <- getExportedValue("CompreSSoR", "read_sumstats_batch")
+    identity <- c("chromosome", "base_pair_location", "effect_allele", "other_allele")
+    requested <- unique(c(columns, identity))
+    result <- tryCatch(
+      batch_reader(
+        unname(paths), unname(keys), columns = requested, threads = io_threads
+      ),
+      error = function(error) {
+        stop("batched compressed read failed: ", conditionMessage(error), call. = FALSE)
+      }
+    )
+    return(lapply(result, fastmr_finalize_compressed_read, columns = columns))
+  }
   reader <- function(index) {
     tryCatch(
       fast_read_compressed(paths[[index]], variants = keys[[index]], columns = columns),
@@ -145,18 +176,7 @@ fast_read_compressed <- function(
   identity <- c("chromosome", "base_pair_location", "effect_allele", "other_allele")
   requested <- unique(c(columns, identity))
   out <- CompreSSoR::read_sumstats(store, variants = variants, columns = requested)
-  if (!nrow(out)) {
-    out$variant_key <- character()
-  } else if (all(identity %in% names(out))) {
-    out$variant_key <- CompreSSoR::compressor_variant_key(
-      out$chromosome, out$base_pair_location, out$other_allele, out$effect_allele
-    )
-  }
-  if (anyDuplicated(out$variant_key)) {
-    stop("compressed store returned duplicate canonical variant keys", call. = FALSE)
-  }
-  keep <- unique(c(columns, if ("variant_key" %in% names(out)) "variant_key"))
-  out[keep]
+  fastmr_finalize_compressed_read(out, columns)
 }
 
 #' Run FastMR directly from compressed GWAS files
@@ -176,7 +196,8 @@ fast_read_compressed <- function(
 #' @param nboot Number of bootstrap draws.
 #' @param seed Optional FastMR seed.
 #' @param threads Native FastMR worker count.
-#' @param io_threads Number of stores read concurrently on Unix-like systems.
+#' @param io_threads Number of stores decoded concurrently inside the shared
+#'   CompreSSoR process.
 #' @param minimum_snps Minimum matched instruments required for every pair.
 #' @param strict If `TRUE`, fail on invalid beta/standard-error values and when
 #'   a pair has fewer than `minimum_snps`; otherwise omit them with warnings.
@@ -210,14 +231,17 @@ fast_mr_compressed <- function(
   union_keys <- unique(unlist(instrument_sets, use.names = FALSE))
   columns <- c("chromosome", "base_pair_location", "effect_allele", "other_allele",
                "beta", "standard_error")
-  exposure_data <- fastmr_io_map(
-    exposure_files, instrument_sets, columns, as.integer(io_threads)
-  )
-  names(exposure_data) <- names(exposure_files)
   outcome_keys <- rep(list(union_keys), length(outcome_files))
-  outcome_data <- fastmr_io_map(
-    outcome_files, outcome_keys, columns, as.integer(io_threads)
+  all_data <- fastmr_io_map(
+    c(unname(exposure_files), unname(outcome_files)),
+    c(unname(instrument_sets), unname(outcome_keys)),
+    columns,
+    as.integer(io_threads)
   )
+  exposure_count <- length(exposure_files)
+  exposure_data <- all_data[seq_len(exposure_count)]
+  outcome_data <- all_data[exposure_count + seq_along(outcome_files)]
+  names(exposure_data) <- names(exposure_files)
   names(outcome_data) <- names(outcome_files)
 
   rows <- list()

@@ -1,0 +1,172 @@
+{
+  "schema_version": "1.0.0",
+  "measured_utc": "2026-08-03 22:22:44 UTC",
+  "machine": ["Ferguss-Mini", "Darwin", "24.6.0", "arm64"],
+  "rows_in_gwas": 14923434,
+  "instrument_keys": ["1:14717:G:A", "1:151913364:T:A", "2:20704838:T:C", "2:144696401:A:G", "3:21374980:A:T", "3:144299383:T:A", "4:60274713:T:A", "4:178401750:G:A", "5:107412227:G:A", "6:35543965:A:G", "6:155348004:A:G", "7:97243368:C:T", "8:47623110:T:C", "9:17023859:A:G", "10:17310862:G:A", "11:346076:A:G", "11:119023565:C:T", "12:104181274:C:T", "13:105052612:A:G", "15:39948936:A:G", "16:66626644:C:T", "18:10832853:T:C", "19:51517447:T:C", "22:25266257:C:T", "X:155699751:C:T"],
+  "study_reads": 10,
+  "mr_pairs": 25,
+  "inputs": {
+    "compressed": {
+      "file": "finngen-full-pcodec-canonical.cpr",
+      "bytes": 59369314
+    },
+    "tsv_gz": {
+      "file": "core-canonical.tsv.gz",
+      "bytes": 201658018
+    },
+    "vcf_gz": {
+      "file": "core.vcf.gz",
+      "bytes": 226985307,
+      "index_bytes": 1649178
+    }
+  },
+  "summary": [
+    {
+      "format": "CompreSSoR Pcodec batch",
+      "runs": 5,
+      "median_seconds": 0.14,
+      "min_seconds": 0.136,
+      "max_seconds": 0.184,
+      "speedup_vs_tsv_gz": 129.8214
+    },
+    {
+      "format": "VCF.gz + Tabix",
+      "runs": 5,
+      "median_seconds": 0.196,
+      "min_seconds": 0.196,
+      "max_seconds": 0.197,
+      "speedup_vs_tsv_gz": 92.7296
+    },
+    {
+      "format": "TSV.gz full scan",
+      "runs": 5,
+      "median_seconds": 18.175,
+      "min_seconds": 16.821,
+      "max_seconds": 18.339,
+      "speedup_vs_tsv_gz": 1
+    }
+  ],
+  "runs": [
+    {
+      "format": "CompreSSoR Pcodec batch",
+      "run": 1,
+      "seconds": 0.184,
+      "pairs": 25,
+      "instruments_per_pair": 25,
+      "estimate": 1
+    },
+    {
+      "format": "CompreSSoR Pcodec batch",
+      "run": 2,
+      "seconds": 0.14,
+      "pairs": 25,
+      "instruments_per_pair": 25,
+      "estimate": 1
+    },
+    {
+      "format": "CompreSSoR Pcodec batch",
+      "run": 3,
+      "seconds": 0.14,
+      "pairs": 25,
+      "instruments_per_pair": 25,
+      "estimate": 1
+    },
+    {
+      "format": "CompreSSoR Pcodec batch",
+      "run": 4,
+      "seconds": 0.136,
+      "pairs": 25,
+      "instruments_per_pair": 25,
+      "estimate": 1
+    },
+    {
+      "format": "CompreSSoR Pcodec batch",
+      "run": 5,
+      "seconds": 0.149,
+      "pairs": 25,
+      "instruments_per_pair": 25,
+      "estimate": 1
+    },
+    {
+      "format": "VCF.gz + Tabix",
+      "run": 1,
+      "seconds": 0.196,
+      "pairs": 25,
+      "instruments_per_pair": 25,
+      "estimate": 1
+    },
+    {
+      "format": "VCF.gz + Tabix",
+      "run": 2,
+      "seconds": 0.197,
+      "pairs": 25,
+      "instruments_per_pair": 25,
+      "estimate": 1
+    },
+    {
+      "format": "VCF.gz + Tabix",
+      "run": 3,
+      "seconds": 0.196,
+      "pairs": 25,
+      "instruments_per_pair": 25,
+      "estimate": 1
+    },
+    {
+      "format": "VCF.gz + Tabix",
+      "run": 4,
+      "seconds": 0.197,
+      "pairs": 25,
+      "instruments_per_pair": 25,
+      "estimate": 1
+    },
+    {
+      "format": "VCF.gz + Tabix",
+      "run": 5,
+      "seconds": 0.196,
+      "pairs": 25,
+      "instruments_per_pair": 25,
+      "estimate": 1
+    },
+    {
+      "format": "TSV.gz full scan",
+      "run": 1,
+      "seconds": 18.226,
+      "pairs": 25,
+      "instruments_per_pair": 25,
+      "estimate": 1
+    },
+    {
+      "format": "TSV.gz full scan",
+      "run": 2,
+      "seconds": 18.175,
+      "pairs": 25,
+      "instruments_per_pair": 25,
+      "estimate": 1
+    },
+    {
+      "format": "TSV.gz full scan",
+      "run": 3,
+      "seconds": 18.339,
+      "pairs": 25,
+      "instruments_per_pair": 25,
+      "estimate": 1
+    },
+    {
+      "format": "TSV.gz full scan",
+      "run": 4,
+      "seconds": 18.049,
+      "pairs": 25,
+      "instruments_per_pair": 25,
+      "estimate": 1
+    },
+    {
+      "format": "TSV.gz full scan",
+      "run": 5,
+      "seconds": 16.821,
+      "pairs": 25,
+      "instruments_per_pair": 25,
+      "estimate": 1
+    }
+  ]
+}
