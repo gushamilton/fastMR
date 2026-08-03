@@ -122,6 +122,43 @@ binary. Parquet readers are available through optional `arrow` support:
 fast_mr_parquet("summary_stats.parquet", methods = "ivw")
 ```
 
+## Direct MR from compressed GWAS files
+
+FastMR resolves canonical GRCh38 instruments from self-contained Pcodec
+CompreSSoR stores. Install the R package and its pinned Python codec runtime:
+
+```sh
+Rscript -e 'remotes::install_github("gushamilton/CompreSSoR")'
+python3 -m pip install 'numpy==1.26.4' 'pcodec==1.0.3' 'zstandard==0.25.0'
+```
+
+Set `COMPRESSOR_PYTHON` when `python3` is not the intended interpreter. Then:
+
+```r
+instruments <- list(
+  bmi = c("1:12345:A:G", "2:67890:C:T"),
+  crp = c("1:54321:G:A", "6:112233:C:G")
+)
+
+result <- fast_mr_compressed(
+  exposure_files = c(bmi = "bmi.cpr", crp = "crp.cpr"),
+  outcome_files = c(cad = "cad.cpr", stroke = "stroke.cpr"),
+  instruments = instruments,
+  methods = "ivw",
+  io_threads = 4
+)
+```
+
+Each exposure is read only for its own instruments. Each outcome is read once
+for their union, and the matched rows are passed directly to the compiled
+FastMR estimator. The canonical key is `chromosome:position:REF:ALT`; the beta
+and frequency in every CompreSSoR file refer to ALT, so matching keys are
+already aligned and no rsID dictionary is involved. Instrument discovery,
+association-threshold selection, and LD clumping remain explicit upstream
+steps—random instruments are used only in the reproducible I/O benchmark.
+This path deliberately rejects legacy Parquet CompreSSoR stores because their
+variant-ID lookup does not implement the canonical-key index.
+
 ## Benchmarks
 
 All timings below were measured on the same Mac mini against native

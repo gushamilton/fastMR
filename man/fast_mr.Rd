@@ -15,7 +15,7 @@ fast_mr(
 }
 \arguments{
 \item{data}{A data frame with \code{beta.exposure}, \code{beta.outcome},
-\code{se.exposure}, \code{se.outcome}, and optionally \code{SNP}, \code{id.exposure}, and
+\code{se.exposure}, \code{se.outcome}, and \code{SNP}, with optional \code{id.exposure} and
 \code{id.outcome} columns.}
 
 \item{methods}{Character vector of method codes. See
@@ -29,7 +29,8 @@ ratio bootstrap layout per pair.}
 \item{threads}{Maximum native worker count. It is most useful for
 \code{\link[=fast_mr_grid]{fast_mr_grid()}}; single-pair calls remain bounded and deterministic.}
 
-\item{...}{Optional \code{phi} bandwidth multiplier for mode methods and \code{penk} penalty multiplier for penalised weighted median (default 20).}
+\item{...}{Optional \code{phi} bandwidth multiplier for mode methods and \code{penk}
+penalty multiplier for penalised weighted median (default 20).}
 }
 \value{
 A tidy data frame using TwoSampleMR-compatible result columns.

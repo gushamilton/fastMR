@@ -1,3 +1,12 @@
+# fastMR 0.1.6
+
+- Adds `fast_read_compressed()` and `fast_mr_compressed()` for indexed,
+  canonical-key MR directly from self-contained CompreSSoR stores.
+- Reads each exposure only for its instruments and each outcome once for the
+  union, with optional file-level parallelism and explicit overlap counts.
+- Fails clearly on unsupported backends, duplicate keys, corrupt parallel
+  reads, and invalid statistics; non-strict runs report every omitted value.
+
 # fastMR 0.1.5
 
 * Added fast heterogeneity, MR-Egger pleiotropy, single-SNP, and leave-one-out

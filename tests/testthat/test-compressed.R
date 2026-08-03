@@ -1,0 +1,190 @@
+compressed_test_python <- function() {
+  candidates <- c(Sys.getenv("COMPRESSOR_PYTHON", unset = ""),
+                  Sys.which("python3"), Sys.which("python"))
+  candidates <- unique(candidates[nzchar(candidates)])
+  for (candidate in candidates) {
+    status <- suppressWarnings(system2(
+      candidate, c("-c", shQuote("import numpy, pcodec, zstandard")),
+      stdout = FALSE, stderr = FALSE
+    ))
+    if (identical(as.integer(status), 0L)) return(candidate)
+  }
+  NULL
+}
+
+compressed_fixture <- function(multiplier = 1) {
+  n <- 80L
+  data.frame(
+    chromosome = rep("1", n),
+    base_pair_location = seq.int(100001L, length.out = n),
+    effect_allele = rep(c("C", "G", "T"), length.out = n),
+    other_allele = "A",
+    beta = multiplier * seq(-0.2, 0.2, length.out = n),
+    standard_error = 0.02 + (seq_len(n) %% 7L) / 1000,
+    effect_allele_frequency = seq(0.05, 0.95, length.out = n),
+    stringsAsFactors = FALSE
+  )
+}
+
+test_that("FastMR reads canonical keys from CompreSSoR", {
+  skip_if_not_installed("CompreSSoR")
+  python <- compressed_test_python()
+  skip_if(is.null(python), "Pcodec Python dependencies are unavailable")
+  old <- Sys.getenv("COMPRESSOR_PYTHON", unset = NA_character_)
+  Sys.setenv(COMPRESSOR_PYTHON = python)
+  on.exit(if (is.na(old)) Sys.unsetenv("COMPRESSOR_PYTHON") else
+    Sys.setenv(COMPRESSOR_PYTHON = old), add = TRUE)
+
+  input <- compressed_fixture()
+  store <- tempfile("fastmr-compressed-read-")
+  CompreSSoR::compress_sumstats(
+    input, store, reference = NULL, mode = "convert",
+    assume_grch38_ref_alt = TRUE, overwrite = TRUE
+  )
+  keys <- CompreSSoR::compressor_variant_key(
+    input$chromosome, input$base_pair_location,
+    input$other_allele, input$effect_allele
+  )[c(3L, 29L, 70L)]
+  got <- fast_read_compressed(store, keys, columns = c("beta", "standard_error"))
+  expect_identical(names(got), c("beta", "standard_error", "variant_key"))
+  expect_setequal(got$variant_key, keys)
+  missing <- fast_read_compressed(
+    store, "2:200000000:A:C", columns = c("beta", "standard_error")
+  )
+  expect_equal(nrow(missing), 0L)
+  expect_identical(missing$variant_key, character())
+})
+
+test_that("compressed 2 x 2 MR equals the explicitly decoded workflow", {
+  skip_if_not_installed("CompreSSoR")
+  python <- compressed_test_python()
+  skip_if(is.null(python), "Pcodec Python dependencies are unavailable")
+  old <- Sys.getenv("COMPRESSOR_PYTHON", unset = NA_character_)
+  Sys.setenv(COMPRESSOR_PYTHON = python)
+  on.exit(if (is.na(old)) Sys.unsetenv("COMPRESSOR_PYTHON") else
+    Sys.setenv(COMPRESSOR_PYTHON = old), add = TRUE)
+
+  stores <- vapply(c(1, 1.3, 0.7, -0.4), function(multiplier) {
+    path <- tempfile("fastmr-compressed-grid-")
+    CompreSSoR::compress_sumstats(
+      compressed_fixture(multiplier), path, reference = NULL, mode = "convert",
+      assume_grch38_ref_alt = TRUE, overwrite = TRUE
+    )
+    path
+  }, character(1))
+  exposures <- setNames(stores[1:2], c("exposure_a", "exposure_b"))
+  outcomes <- setNames(stores[3:4], c("outcome_a", "outcome_b"))
+  identity <- compressed_fixture()
+  all_keys <- CompreSSoR::compressor_variant_key(
+    identity$chromosome, identity$base_pair_location,
+    identity$other_allele, identity$effect_allele
+  )
+  instruments <- list(
+    exposure_a = all_keys[c(2L, 7L, 14L, 25L, 40L)],
+    exposure_b = all_keys[c(3L, 8L, 19L, 31L, 60L)]
+  )
+
+  compressed <- fast_mr_compressed(
+    exposures, outcomes, instruments, methods = "ivw", nboot = 0,
+    threads = 1, io_threads = 2
+  )
+  expect_equal(nrow(compressed), 4L)
+  expect_true(all(compressed$nsnp == 5L))
+  expect_equal(nrow(attr(compressed, "compressed_input")$counts), 4L)
+
+  exposure <- fast_read_compressed(exposures[[1L]], instruments[[1L]])
+  outcome <- fast_read_compressed(outcomes[[1L]], instruments[[1L]])
+  hit <- match(exposure$variant_key, outcome$variant_key)
+  manual <- fast_mr(data.frame(
+    SNP = exposure$variant_key,
+    beta.exposure = exposure$beta,
+    beta.outcome = outcome$beta[hit],
+    se.exposure = exposure$standard_error,
+    se.outcome = outcome$standard_error[hit]
+  ), methods = "ivw", nboot = 0)
+  first <- compressed[compressed$id.exposure == "exposure_a" &
+                        compressed$id.outcome == "outcome_a", , drop = FALSE]
+  expect_equal(first[c("nsnp", "b", "se", "pval")],
+               manual[c("nsnp", "b", "se", "pval")], tolerance = 0)
+
+  serial <- fast_mr_compressed(
+    exposures, outcomes, instruments, methods = "ivw", nboot = 0,
+    threads = 1, io_threads = 1
+  )
+  attributes(serial)$compressed_input <- NULL
+  attributes(compressed)$compressed_input <- NULL
+  expect_identical(serial, compressed)
+})
+
+test_that("compressed MR rejects malformed contracts and missing instruments", {
+  expect_error(fastMR:::fastmr_normalize_variant_keys("rs123"),
+               "chromosome:position:REF:ALT")
+  expect_error(fastMR:::fastmr_normalize_variant_keys(c("1:1:A:C", "1:1:A:C")),
+               "must not contain duplicates")
+  expect_error(fastMR:::fastmr_normalize_instruments(list(a = "1:1:A:C"), c("a", "b")),
+               "one list element per exposure")
+  expect_error(fastMR:::fastmr_positive_integer_scalar("2", "io_threads"),
+               "positive integer")
+  expect_error(fast_mr_compressed(character(), character(), "1:1:A:C"),
+               "non-empty")
+
+  fake <- tempfile("fastmr-parquet-store-")
+  dir.create(fake)
+  writeLines('{"format":"CompreSSoR","backend":"parquet"}',
+             file.path(fake, "manifest.json"))
+  expect_error(fast_read_compressed(fake), "requires a Pcodec")
+})
+
+test_that("compressed MR exposes invalid values and parallel read failures", {
+  skip_if_not_installed("CompreSSoR")
+  python <- compressed_test_python()
+  skip_if(is.null(python), "Pcodec Python dependencies are unavailable")
+  old <- Sys.getenv("COMPRESSOR_PYTHON", unset = NA_character_)
+  Sys.setenv(COMPRESSOR_PYTHON = python)
+  on.exit(if (is.na(old)) Sys.unsetenv("COMPRESSOR_PYTHON") else
+    Sys.setenv(COMPRESSOR_PYTHON = old), add = TRUE)
+
+  exposure_input <- compressed_fixture()
+  exposure_input$beta[4L] <- NA_real_
+  outcome_input <- compressed_fixture(0.5)
+  exposure <- tempfile("fastmr-invalid-exposure-")
+  outcome <- tempfile("fastmr-valid-outcome-")
+  broken <- tempfile("fastmr-broken-exposure-")
+  for (spec in list(c(exposure, "exposure"), c(outcome, "outcome"),
+                    c(broken, "broken"))) {
+    input <- if (spec[[2L]] == "exposure") exposure_input else outcome_input
+    CompreSSoR::compress_sumstats(
+      input, spec[[1L]], reference = NULL, mode = "convert",
+      assume_grch38_ref_alt = TRUE, overwrite = TRUE
+    )
+  }
+  keys <- CompreSSoR::compressor_variant_key(
+    outcome_input$chromosome, outcome_input$base_pair_location,
+    outcome_input$other_allele, outcome_input$effect_allele
+  )[1:5]
+  expect_error(
+    fast_mr_compressed(c(exp = exposure), c(out = outcome), keys),
+    "invalid beta/standard_error"
+  )
+  expect_warning(
+    non_strict <- fast_mr_compressed(
+      c(exp = exposure), c(out = outcome), keys, strict = FALSE
+    ),
+    "omitted invalid"
+  )
+  expect_equal(non_strict$nsnp, 4L)
+  counts <- attr(non_strict, "compressed_input")$counts
+  expect_equal(counts$invalid_exposure, 1L)
+
+  broken_store <- CompreSSoR::open_compressor(broken)
+  unlink(file.path(broken, broken_store$manifest$files$z))
+  if (.Platform$OS.type != "windows") {
+    expect_error(
+      suppressWarnings(fast_mr_compressed(
+        c(good = outcome, broken = broken), c(out = outcome), keys,
+        io_threads = 2
+      )),
+      "failed to read.*broken"
+    )
+  }
+})

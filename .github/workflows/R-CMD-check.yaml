@@ -10,15 +10,25 @@ permissions:
 
 jobs:
   R-CMD-check:
-    runs-on: macos-latest
-    name: R ${{ matrix.r }}
+    runs-on: ${{ matrix.os }}
+    name: ${{ matrix.os }} / R ${{ matrix.r }}
+    env:
+      COMPRESSOR_PYTHON: python3
     strategy:
       fail-fast: false
       matrix:
+        os: [macos-latest, ubuntu-latest]
         r: [release]
 
     steps:
       - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install Pcodec runtime
+        run: python3 -m pip install 'numpy==1.26.4' 'pcodec==1.0.3' 'zstandard==0.25.0'
 
       - uses: r-lib/actions/setup-r@v2
         with:
@@ -26,7 +36,9 @@ jobs:
 
       - uses: r-lib/actions/setup-r-dependencies@v2
         with:
-          extra-packages: any::rcmdcheck
+          extra-packages: |
+            any::rcmdcheck
+            github::gushamilton/CompreSSoR@agent/pcodec-r-package
           needs: check
 
       - uses: r-lib/actions/check-r-package@v2
