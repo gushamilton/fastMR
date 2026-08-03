@@ -89,10 +89,15 @@ The method registry includes:
 - basic multivariable IVW
 - heterogeneity and MR-Egger pleiotropy diagnostics
 - single-SNP and leave-one-out MR summaries
+- Steiger directionality testing and per-SNP Steiger filtering
 
 Use `fastmr_method_registry()` for method codes and descriptions. Results use
 the familiar `id.exposure`, `id.outcome`, `method`, `nsnp`, `b`, `se`, and
 `pval` columns, with method-specific diagnostics retained where applicable.
+
+For matrix-form multivariable MR, `fast_mr_multivariable()` adds shared- or
+exposure-specific instrument sets and an optional weighted-regression
+intercept; `fast_mr_multivariable_ivw()` is the compact native `mv_ivw` path.
 
 High-use downstream diagnostics are available as tidy local functions:
 
@@ -101,6 +106,8 @@ fast_mr_heterogeneity(harmonised)
 fast_mr_pleiotropy_test(harmonised)
 fast_mr_singlesnp(harmonised)
 fast_mr_leaveoneout(harmonised)
+fast_mr_directionality_test(harmonised)
+fast_mr_steiger_filtering(harmonised)
 ```
 
 ## Local preprocessing
@@ -285,23 +292,43 @@ the harmonisation and simulation files are in [`outputs/`](outputs/).
 
 ### Diagnostics versus native TwoSampleMR
 
-These new utilities were compared row-by-row with native TwoSampleMR 0.7.9
-on the 82-SNP IL6 fixture, using five fastMR threads. Timings are medians of
-20 fastMR calls and five native calls; primary/secondary deltas refer to Q and
-Q-df for heterogeneity, the Egger intercept and SE for pleiotropy, and MR beta
-and SE for the SNP-wise utilities.
+These utilities were compared row-by-row with native TwoSampleMR 0.7.9 on the
+82-SNP IL6 fixture, using five fastMR threads. Timings are medians of 20 fastMR
+calls and five native calls; primary/secondary deltas refer to each utility's
+main numerical fields.
 
 | Utility | fastMR | Native TSMR | Speedup | Rows | Key parity | Max primary delta | Max secondary delta | Max p delta |
 |---|---:|---:|---:|---:|---|---:|---:|---:|
-| Heterogeneity | 0.002 s | 0.003 s | **1.50×** | 2 / 2 | — | `5.684e-14` | `0` | `2.746e-35` |
+| Heterogeneity | 0.002 s | 0.004 s | **2.00×** | 2 / 2 | — | `5.684e-14` | `0` | `2.746e-35` |
 | MR-Egger pleiotropy | 0.001 s | 0.001 s | **1.00×** | 1 / 1 | — | `0` | `2.169e-19` | `6.939e-17` |
-| Single-SNP MR | 0.0025 s | 0.005 s | **2.00×** | 84 / 84 | Exact | `4.337e-18` | `1.735e-18` | `3.886e-16` |
-| Leave-one-out IVW | 0.007 s | 0.020 s | **2.86×** | 83 / 83 | Exact | `1.626e-18` | `6.939e-18` | `3.331e-16` |
+| Single-SNP MR | 0.0025 s | 0.004 s | **1.60×** | 84 / 84 | Exact | `4.337e-18` | `1.735e-18` | `3.886e-16` |
+| Leave-one-out IVW | 0.007 s | 0.019 s | **2.71×** | 83 / 83 | Exact | `1.626e-18` | `6.939e-18` | `3.331e-16` |
+| Steiger directionality | 0.0005 s | 0.001 s | **2.00×** | 1 / 1 | — | `0` | `0` | `0` |
+| Steiger filtering | 0.001 s | 0.001 s | **1.00×** | 82 / 82 | Exact | `0` | `0` | `0` |
 
 The raw parity result is in
 [`outputs/diagnostics_native_parity.csv`](outputs/diagnostics_native_parity.csv),
 with the reproducible audit at
 [`benchmarks/diagnostics_native_parity.R`](benchmarks/diagnostics_native_parity.R).
+
+### Multivariable MR versus native TwoSampleMR
+
+This deterministic Mac mini audit uses 800 SNPs, four exposures, heterogeneous
+outcome standard errors, and exposure-specific p-value thresholds. All rows,
+instrument counts, coefficients, standard errors, and p-values match native
+TwoSampleMR within floating-point error.
+
+| Component | fastMR | Native TSMR | Speedup | Rows | Key / nsnp | Max Δ beta | Max Δ SE | Max Δ p |
+|---|---:|---:|---:|---:|---|---:|---:|---:|
+| `mv_ivw` | 0.002 s | 0.013 s | **6.50×** | 4 / 4 | Exact / exact | `1.665e-16` | `6.505e-19` | `0` |
+| `mv_multiple` shared instruments | 0.002 s | 0.002 s | **1.00×** | 4 / 4 | Exact / exact | `4.441e-16` | `7.589e-19` | `0` |
+| `mv_multiple` instrument-specific | 0.001 s | 0.002 s | **2.00×** | 4 / 4 | Exact / exact | `1.665e-16` | `6.505e-19` | `0` |
+| `mv_multiple` with intercept | 0.001 s | 0.002 s | **2.00×** | 4 / 4 | Exact / exact | `2.498e-16` | `1.193e-18` | `0` |
+
+The raw result is in
+[`outputs/multivariable_native_parity.csv`](outputs/multivariable_native_parity.csv),
+with the reproducible script at
+[`benchmarks/multivariable_native_parity.R`](benchmarks/multivariable_native_parity.R).
 
 ## Design notes and limits
 
@@ -331,7 +358,7 @@ Rscript -e 'testthat::test_local(".")'
 _R_CHECK_FORCE_SUGGESTS_=false R CMD check --no-manual --as-cran .
 ```
 
-The package has a 152-test suite, native harmonisation audits, simulation
+The package has a 173-test suite, native harmonisation audits, simulation
 tyre-kick tests, adversarial thread checks, and native TwoSampleMR benchmarks.
 The `R CMD check` command above deliberately allows the optional Arrow
 dependency to be absent; install Arrow first if Parquet checks are required.

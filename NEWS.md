@@ -11,6 +11,11 @@
 
 * Added fast heterogeneity, MR-Egger pleiotropy, single-SNP, and leave-one-out
   utilities with TwoSampleMR-compatible tidy output.
+* Added Steiger directionality testing and per-SNP Steiger filtering, including
+  quantitative-trait, SD-scaled, and log-odds metadata paths. The Mac mini
+  parity audit matches native TwoSampleMR exactly on the IL6 fixture.
+* Added matrix-form multivariable MR with shared or exposure-specific
+  instruments and an optional intercept, with native `mv_ivw` parity.
 * Vectorized single-SNP Wald ratios and leave-one-out regression diagnostics;
   the Mac mini audit matches native TwoSampleMR row-for-row at floating-point
   precision, with leave-one-out about 2.9x faster and single-SNP about 2x faster
