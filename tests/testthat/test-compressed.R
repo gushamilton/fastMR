@@ -116,6 +116,55 @@ test_that("compressed 2 x 2 MR equals the explicitly decoded workflow", {
   expect_identical(serial, compressed)
 })
 
+test_that("shared compressed instruments use the exact native grid path", {
+  keys <- paste0("1:", 1:6, ":A:C")
+  panel <- function(multiplier) data.frame(
+    beta = multiplier * seq(0.02, 0.12, length.out = length(keys)),
+    standard_error = seq(0.01, 0.015, length.out = length(keys)),
+    variant_key = keys,
+    stringsAsFactors = FALSE
+  )
+  exposures <- list(a = panel(1), b = panel(1.2))
+  outcomes <- list(x = panel(0.7), y = panel(-0.4))
+  instruments <- list(a = keys, b = keys)
+  controls <- fastMR:::fastmr_validate_controls(0, 42, 1)
+  observed <- fastMR:::fastmr_compressed_grid_fast_path(
+    exposures, outcomes, instruments, "ivw", controls, 1L,
+    c(a = "a.cpr", b = "b.cpr"), c(x = "x.cpr", y = "y.cpr"),
+    1L, list()
+  )
+  expected <- fast_mr_grid(
+    do.call(rbind, lapply(exposures, `[[`, "beta")),
+    do.call(rbind, lapply(outcomes, `[[`, "beta")),
+    do.call(rbind, lapply(exposures, `[[`, "standard_error")),
+    do.call(rbind, lapply(outcomes, `[[`, "standard_error")),
+    methods = "ivw", nboot = 0, seed = 42, threads = 1
+  )
+  expected$exposure_index <- NULL
+  expected$outcome_index <- NULL
+  attributes(observed)$compressed_input <- NULL
+  expect_equal(observed, expected, tolerance = 0)
+
+  bootstrap_controls <- fastMR:::fastmr_validate_controls(100, 42, 1)
+  expect_null(fastMR:::fastmr_compressed_grid_fast_path(
+    exposures, outcomes, instruments, "weighted_median", bootstrap_controls, 1L,
+    c(a = "a.cpr", b = "b.cpr"), c(x = "x.cpr", y = "y.cpr"),
+    1L, list()
+  ))
+  expect_s3_class(fastMR:::fastmr_compressed_grid_fast_path(
+    exposures, outcomes, instruments, "ivw", bootstrap_controls, 1L,
+    c(a = "a.cpr", b = "b.cpr"), c(x = "x.cpr", y = "y.cpr"),
+    1L, list()
+  ), "data.frame")
+
+  exposures$b$variant_key[[1L]] <- "1:100:A:C"
+  expect_null(fastMR:::fastmr_compressed_grid_fast_path(
+    exposures, outcomes, instruments, "ivw", controls, 1L,
+    c(a = "a.cpr", b = "b.cpr"), c(x = "x.cpr", y = "y.cpr"),
+    1L, list()
+  ))
+})
+
 test_that("compressed MR rejects malformed contracts and missing instruments", {
   expect_error(fastMR:::fastmr_normalize_variant_keys("rs123"),
                "chromosome:position:REF:ALT")

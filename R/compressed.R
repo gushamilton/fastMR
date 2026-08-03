@@ -142,6 +142,76 @@ fastmr_io_map <- function(paths, keys, columns, io_threads) {
   lapply(indexes, reader)
 }
 
+fastmr_compressed_grid_fast_path <- function(
+    exposure_data, outcome_data, instrument_sets, methods, controls,
+    minimum_snps, exposure_files, outcome_files, io_threads, dots) {
+  bootstrap_methods <- c(
+    "egger_bootstrap", "simple_median", "weighted_median",
+    "penalised_weighted_median", "simple_mode", "weighted_mode"
+  )
+  # fast_mr() advances a supplied seed independently for every pair, whereas
+  # fast_mr_grid() deliberately shares bootstrap layouts across its grid.  Use
+  # the shortcut only when no requested result depends on bootstrap draws so
+  # compressed input preserves the established seeded-result contract.
+  if (controls$nboot > 0L && any(methods %in% bootstrap_methods)) return(NULL)
+  wanted <- instrument_sets[[1L]]
+  if (length(wanted) < minimum_snps ||
+      !all(vapply(instrument_sets, identical, logical(1), wanted))) {
+    return(NULL)
+  }
+  reorder_complete <- function(data) {
+    matched <- match(wanted, data$variant_key)
+    if (anyNA(matched)) return(NULL)
+    out <- data[matched, c("beta", "standard_error"), drop = FALSE]
+    valid <- is.finite(out$beta) & is.finite(out$standard_error) &
+      out$standard_error > 0
+    if (!all(valid)) return(NULL)
+    out
+  }
+  exposures <- lapply(exposure_data, reorder_complete)
+  outcomes <- lapply(outcome_data, reorder_complete)
+  if (any(vapply(c(exposures, outcomes), is.null, logical(1)))) return(NULL)
+  as_grid <- function(data, column, labels) {
+    matrix <- do.call(rbind, lapply(data, `[[`, column))
+    rownames(matrix) <- labels
+    colnames(matrix) <- wanted
+    matrix
+  }
+  exposure_labels <- names(exposure_data)
+  outcome_labels <- names(outcome_data)
+  call <- c(list(
+    exposure_beta = as_grid(exposures, "beta", exposure_labels),
+    outcome_beta = as_grid(outcomes, "beta", outcome_labels),
+    exposure_se = as_grid(exposures, "standard_error", exposure_labels),
+    outcome_se = as_grid(outcomes, "standard_error", outcome_labels),
+    methods = methods, nboot = controls$nboot, seed = controls$seed,
+    threads = controls$threads
+  ), dots)
+  result <- do.call(fast_mr_grid, call)
+  result$exposure_index <- NULL
+  result$outcome_index <- NULL
+  pair <- seq_len(length(exposure_labels) * length(outcome_labels))
+  exposure_index <- ((pair - 1L) %/% length(outcome_labels)) + 1L
+  outcome_index <- ((pair - 1L) %% length(outcome_labels)) + 1L
+  counts <- data.frame(
+    id.exposure = exposure_labels[exposure_index],
+    id.outcome = outcome_labels[outcome_index],
+    requested = length(wanted), exposure_found = length(wanted),
+    outcome_found = length(wanted), invalid_exposure = 0L,
+    invalid_outcome = 0L, matched = length(wanted),
+    stringsAsFactors = FALSE
+  )
+  attr(result, "compressed_input") <- list(
+    exposure_files = exposure_files,
+    outcome_files = outcome_files,
+    instruments = instrument_sets,
+    counts = counts,
+    io_threads = as.integer(io_threads),
+    estimator_path = "shared_instrument_grid"
+  )
+  result
+}
+
 #' Read selected variants from a Pcodec CompreSSoR GWAS
 #'
 #' This is the FastMR-facing reader for a self-contained CompreSSoR store. It
@@ -227,6 +297,7 @@ fast_mr_compressed <- function(
     stop("strict must be TRUE or FALSE", call. = FALSE)
   }
   methods <- fastmr_normalize_methods(methods)
+  dots <- list(...)
   instrument_sets <- fastmr_normalize_instruments(instruments, names(exposure_files))
   union_keys <- unique(unlist(instrument_sets, use.names = FALSE))
   columns <- c("chromosome", "base_pair_location", "effect_allele", "other_allele",
@@ -243,6 +314,12 @@ fast_mr_compressed <- function(
   outcome_data <- all_data[exposure_count + seq_along(outcome_files)]
   names(exposure_data) <- names(exposure_files)
   names(outcome_data) <- names(outcome_files)
+
+  grid_result <- fastmr_compressed_grid_fast_path(
+    exposure_data, outcome_data, instrument_sets, methods, controls,
+    minimum_snps, exposure_files, outcome_files, io_threads, dots
+  )
+  if (!is.null(grid_result)) return(grid_result)
 
   rows <- list()
   counts <- list()
@@ -324,16 +401,17 @@ fast_mr_compressed <- function(
     warning("omitted invalid instrument value(s): ",
             paste(unique(invalid_omitted), collapse = "; "), call. = FALSE)
   }
-  result <- fast_mr(
-    do.call(rbind, rows), methods = methods, nboot = controls$nboot,
-    seed = controls$seed, threads = controls$threads, ...
-  )
+  result <- do.call(fast_mr, c(list(
+    data = do.call(rbind, rows), methods = methods, nboot = controls$nboot,
+    seed = controls$seed, threads = controls$threads
+  ), dots))
   attr(result, "compressed_input") <- list(
     exposure_files = exposure_files,
     outcome_files = outcome_files,
     instruments = instrument_sets,
     counts = do.call(rbind, counts),
-    io_threads = as.integer(io_threads)
+    io_threads = as.integer(io_threads),
+    estimator_path = "pairwise"
   )
   result
 }

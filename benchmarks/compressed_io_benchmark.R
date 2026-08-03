@@ -14,7 +14,7 @@ suppressPackageStartupMessages({
 
 compressed_path <- Sys.getenv(
   "FASTMR_COMPRESSED_STORE",
-  "/Volumes/crucial_x9/CompreSSoR-benchmarks/finngen-full-pcodec-canonical.cpr"
+  "/Volumes/crucial_x9/CompreSSoR-benchmarks/finngen-full-pcodec-v03-release.cpr"
 )
 tsv_path <- Sys.getenv(
   "FASTMR_TSV_GZ",
@@ -106,25 +106,32 @@ read_tabix <- function() {
   order_hits(x[wanted, on = .(chrom, pos), nomatch = 0L, allow.cartesian = TRUE])
 }
 
+read_pcodec <- function() {
+  x <- fast_read_compressed(
+    compressed_path, variants = keys,
+    columns = c("beta", "standard_error")
+  )
+  data.table(
+    variant_key = x$variant_key,
+    beta = as.numeric(x$beta),
+    se = as.numeric(x$standard_error)
+  )
+}
+
 run_ivw_grid <- function(exposures, outcomes) {
-  rows <- vector("list", length(exposures) * length(outcomes))
-  at <- 0L
-  for (i in seq_along(exposures)) {
-    for (j in seq_along(outcomes)) {
-      at <- at + 1L
-      rows[[at]] <- data.frame(
-        SNP = keys,
-        beta.exposure = exposures[[i]]$beta,
-        beta.outcome = outcomes[[j]]$beta,
-        se.exposure = exposures[[i]]$se,
-        se.outcome = outcomes[[j]]$se,
-        id.exposure = paste0("ex", i),
-        id.outcome = paste0("out", j),
-        stringsAsFactors = FALSE
-      )
-    }
+  make_matrix <- function(studies, column, prefix) {
+    out <- do.call(rbind, lapply(studies, `[[`, column))
+    rownames(out) <- paste0(prefix, seq_along(studies))
+    colnames(out) <- keys
+    out
   }
-  fast_mr(rbindlist(rows), methods = "ivw", threads = 1L)
+  fast_mr_grid(
+    exposure_beta = make_matrix(exposures, "beta", "ex"),
+    outcome_beta = make_matrix(outcomes, "beta", "out"),
+    exposure_se = make_matrix(exposures, "se", "ex"),
+    outcome_se = make_matrix(outcomes, "se", "out"),
+    methods = "ivw", nboot = 0, threads = 1L
+  )
 }
 
 run_repeated_reader <- function(reader) {
@@ -135,20 +142,33 @@ run_repeated_reader <- function(reader) {
 compressed_files <- setNames(rep(compressed_path, 5L), paste0("ex", 1:5))
 outcome_files <- setNames(rep(compressed_path, 5L), paste0("out", 1:5))
 workloads <- list(
-  `CompreSSoR Pcodec batch` = function() fast_mr_compressed(
+  `CompreSSoR Pcodec - 10 explicit reads` = function() run_repeated_reader(read_pcodec),
+  `CompreSSoR + fastMR - optimized same-store batch` = function() fast_mr_compressed(
     compressed_files, outcome_files, keys, methods = "ivw",
     threads = 1L, io_threads = 1L
   ),
-  `VCF.gz + Tabix` = function() run_repeated_reader(read_tabix),
-  `TSV.gz full scan` = function() run_repeated_reader(read_tsv)
+  `VCF.gz + Tabix - 10 queries` = function() run_repeated_reader(read_tabix),
+  `TSV.gz - 10 full scans` = function() run_repeated_reader(read_tsv)
 )
 
-# Warm only the two indexed paths. The five recorded gzip runs include their
-# first full scan so cache treatment is visible rather than hidden.
-invisible(workloads[[1L]]())
-invisible(workloads[[2L]]())
 records <- list()
 for (label in names(workloads)) {
+  if (startsWith(label, "CompreSSoR")) {
+    try(get("pcodec_stop_worker", asNamespace("CompreSSoR"))(), silent = TRUE)
+  }
+  gc()
+  first <- NULL
+  first_elapsed <- system.time(first <- workloads[[label]]())[["elapsed"]]
+  stopifnot(nrow(first) == 25L, all(first$nsnp == 25L),
+            max(abs(first$b - 1)) < 1e-12)
+  records[[length(records) + 1L]] <- data.table(
+    format = label, phase = "first_call", run = 0L,
+    seconds = as.numeric(first_elapsed), pairs = nrow(first),
+    instruments_per_pair = unique(first$nsnp), estimate = first$b[[1L]]
+  )
+  # Keep first-call reporting separate and ensure every one of the five timed
+  # warm runs follows an additional untimed warm-up through the same path.
+  invisible(workloads[[label]]())
   for (run in seq_len(runs)) {
     gc()
     result <- NULL
@@ -156,7 +176,7 @@ for (label in names(workloads)) {
     stopifnot(nrow(result) == 25L, all(result$nsnp == 25L),
               max(abs(result$b - 1)) < 1e-12)
     records[[length(records) + 1L]] <- data.table(
-      format = label,
+      format = label, phase = "warm",
       run = run,
       seconds = as.numeric(elapsed),
       pairs = nrow(result),
@@ -167,14 +187,33 @@ for (label in names(workloads)) {
   }
 }
 records <- rbindlist(records)
-summary <- records[, .(
+summary <- records[phase == "warm", .(
   runs = .N,
   median_seconds = median(seconds),
   min_seconds = min(seconds),
   max_seconds = max(seconds)
 ), by = format]
+first_call <- records[phase == "first_call", .(
+  first_call_seconds = seconds[[1L]]
+), by = format]
 summary[, speedup_vs_tsv_gz :=
-          summary[format == "TSV.gz full scan", median_seconds] / median_seconds]
+          summary[format == "TSV.gz - 10 full scans", median_seconds] / median_seconds]
+
+# Cross-format correctness is checked after timing so it does not warm any path
+# before the separately recorded first call.
+parity_values <- list(
+  pcodec = read_pcodec(), tabix = read_tabix(), tsv_gz = read_tsv()
+)
+stopifnot(
+  identical(parity_values$pcodec$variant_key, parity_values$tabix$variant_key),
+  identical(parity_values$pcodec$variant_key, parity_values$tsv_gz$variant_key)
+)
+parity <- lapply(c("tabix", "tsv_gz"), function(name) list(
+  comparison = paste0("pcodec_vs_", name),
+  keys_equal = TRUE,
+  max_abs_beta = max(abs(parity_values$pcodec$beta - parity_values[[name]]$beta)),
+  max_abs_se = max(abs(parity_values$pcodec$se - parity_values[[name]]$se))
+))
 
 csv_path <- file.path(output_dir, "compressed_io_benchmark.csv")
 json_path <- file.path(output_dir, "compressed_io_benchmark.json")
@@ -182,6 +221,14 @@ fwrite(records, csv_path)
 write_json(list(
   schema_version = "1.0.0",
   measured_utc = format(Sys.time(), tz = "UTC", usetz = TRUE),
+  package_versions = list(
+    CompreSSoR = as.character(utils::packageVersion("CompreSSoR")),
+    fastMR = as.character(utils::packageVersion("fastMR"))
+  ),
+  source_revisions = list(
+    CompreSSoR = Sys.getenv("COMPRESSOR_BENCH_COMMIT", unset = "uncommitted"),
+    fastMR = Sys.getenv("FASTMR_BENCH_COMMIT", unset = "uncommitted")
+  ),
   machine = Sys.info()[c("nodename", "sysname", "release", "machine")],
   rows_in_gwas = n,
   instrument_keys = keys,
@@ -196,6 +243,14 @@ write_json(list(
       index_bytes = unname(file.info(paste0(vcf_path, ".tbi"))$size)
     )
   ),
+  benchmark_contract = list(
+    fair_paths = "ten explicit reads followed by identical fast_mr_grid IVW",
+    optimized_path = "same normalized store/key requests may be coalesced once",
+    first_call = "first call in this R process; operating-system disk cache not controlled",
+    warm_runs = runs
+  ),
+  parity = parity,
+  first_call = first_call,
   summary = summary,
   runs = records
 ), json_path, auto_unbox = TRUE, pretty = TRUE)

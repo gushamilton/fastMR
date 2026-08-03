@@ -1,6 +1,6 @@
 Package: fastMR
 Title: Exact and Fast Summary-Statistics Mendelian Randomization
-Version: 0.1.7
+Version: 0.1.8
 Date: 2026-08-03
 Authors@R: person("Fergus", "Hamilton", email = "fergushamilton@users.noreply.github.com", role = c("aut", "cre"))
 Author: Fergus Hamilton [aut, cre]
@@ -27,7 +27,7 @@ LinkingTo:
     Rcpp
 Suggests:
     arrow,
-    CompreSSoR (>= 0.2.0),
+    CompreSSoR (>= 0.3.0),
     testthat (>= 3.0.0)
 Config/testthat/edition: 3
 SystemRequirements: C++17; Python (>= 3.10) with numpy 1.26, pcodec 1.0,

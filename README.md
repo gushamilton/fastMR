@@ -173,20 +173,27 @@ variant-ID lookup does not implement the canonical-key index.
 This end-to-end Mac mini benchmark used a real 14,923,434-SNP FinnGen GWAS,
 25 deterministic genome-wide REF/ALT keys, five logical exposures, five
 logical outcomes, and 25 IVW estimates. The same GWAS was deliberately reused
-for all ten study reads to isolate access cost; every path returned 25 SNPs per
-pair and the expected self-comparison estimate of one. Times are medians of
-five measured runs and include reading, matching, data-frame construction, and
-FastMR estimation.
+for all ten study reads to isolate access cost. The fair paths perform ten
+explicit reads and then call the same `fast_mr_grid()` IVW estimator. The
+optimized path is reported separately because it is allowed to coalesce ten
+literally identical same-store requests. Every path returned the same 25
+canonical keys per pair and the expected self-comparison estimate of one.
+Times are medians of five warm runs and include reading, matching, R object
+construction, and FastMR estimation.
 
 | Input path | Median | Range | Speedup vs TSV.gz |
 |---|---:|---:|---:|
-| CompreSSoR Pcodec batch | 0.140 s | 0.136–0.184 s | **129.8x** |
-| VCF.gz + Tabix | 0.196 s | 0.196–0.197 s | **92.7x** |
-| TSV.gz full scan | 18.175 s | 16.821–18.339 s | 1.0x |
+| CompreSSoR Pcodec, 10 explicit reads | 0.027 s | 0.026–0.062 s | **690.8x** |
+| CompreSSoR + fastMR, optimized same-store batch | 0.006 s | 0.006–0.121 s | **3,108.5x** |
+| VCF.gz + Tabix, 10 queries | 0.175 s | 0.172–0.176 s | **106.6x** |
+| TSV.gz, 10 full scans | 18.651 s | 17.375–18.685 s | 1.0x |
 
-The self-contained CompreSSoR store is 59,369,314 bytes, versus 201,658,018
+The self-contained CompreSSoR store is 58,033,297 bytes, versus 201,658,018
 bytes for the eight-column TSV.gz and 228,634,485 bytes for VCF.gz plus its
-Tabix index. The benchmark is reproducible with
+Tabix index. The first-call times in the same R process are retained separately
+in the machine-readable record. Cross-format REF/ALT keys are exact; observed
+beta/SE differences are bounded by the declared lossy Z9/EAF8/SE6 profile.
+The benchmark is reproducible with
 [`benchmarks/compressed_io_benchmark.R`](benchmarks/compressed_io_benchmark.R);
 the [individual runs](outputs/compressed_io_benchmark.csv) and
 [machine-readable record](outputs/compressed_io_benchmark.json) are included.

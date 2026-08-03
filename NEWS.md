@@ -1,3 +1,13 @@
+# fastMR 0.1.8
+
+- Uses CompreSSoR's persistent wrapped-Pcodec reader and exact canonical keys
+  for direct compressed-input MR.
+- Adds a shared-instrument native IVW grid shortcut while retaining the
+  established pair-specific seed stream for bootstrap-dependent methods.
+- Separates explicit ten-read, optimized same-store deduplication, Tabix, and
+  TSV.gz paths in the real FinnGen benchmark and applies the same IVW grid
+  estimator to every fair-comparison path.
+
 # fastMR 0.1.7
 
 - Batches every compressed exposure and outcome read through one CompreSSoR
