@@ -124,7 +124,9 @@ def stage_paths(args, input_format: str, count: int,
     for index in range(count):
         label = f"study-{index + 1:02d}"
         if input_format.startswith("pcodec"):
-            target = args.store
+            target = trial / f"{label}.cpr"
+            records = copy_store_nocache(args.store, target)
+            total += sum(int(record["bytes"]) for record in records.values())
         elif input_format.startswith("tsv"):
             target = trial / f"{label}.tsv.gz"
             record = copy_file_nocache(args.tsv, target)
@@ -204,16 +206,16 @@ def run_trial(args, keys: list[str], repetition: int, workload: str,
             "outcomes": outcomes,
             "logical_study_reads": study_count,
             "io_threads": int(record.get("io_threads", 1)),
-            # Staging is deliberately outside the timed interval. Pcodec uses
-            # F_NOCACHE on the immutable source itself, so its staging is zero.
+            # Staging is deliberately outside the timed interval. Every format
+            # gets one distinct F_NOCACHE-written copy per logical study.
             "physical_staging_bytes_not_timed": staged_bytes,
             "staging_seconds_not_timed": staging_seconds,
             "system_load_average_before": load_average_before,
             "system_load_average_after": load_average_after,
             "cache_protocol": (
-                "fresh R process; every logical Pcodec study gets a fresh reader "
-                "context with coalescing/page cache disabled, exceptions reloaded, "
-                "and F_NOCACHE; TSV/VCF use fresh F_NOCACHE-staged copies read once"
+                "fresh R process and one fresh F_NOCACHE-staged copy per logical "
+                "study for every format; Pcodec coalescing/page cache disabled, "
+                "fresh reader context, exceptions reloaded, and F_NOCACHE on reads"
             ),
         })
         validate_record(record, keys)
@@ -547,11 +549,10 @@ def main() -> None:
             ),
         },
         "cache_protocol": (
-            "fresh R process; every logical Pcodec study gets a fresh reader "
-            "context for the same immutable store, with request coalescing/page "
-            "cache disabled, exceptions reloaded, and F_NOCACHE on data "
-            "descriptors; TSV/VCF use fresh copies written through F_NOCACHE "
-            "descriptors and read once (a cache-controlled cold approximation)"
+            "fresh R process and a distinct fresh F_NOCACHE-staged copy for every "
+            "logical study and every format; Pcodec request coalescing/page cache "
+            "disabled, fresh reader contexts, exceptions reloaded, and F_NOCACHE "
+            "on read descriptors (a symmetric cache-controlled cold approximation)"
         ),
         "parity": parity,
         "summary": summary,
