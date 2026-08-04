@@ -1312,9 +1312,9 @@ std::vector<Result> compute_ivw_grid_blas(
       if (std::isfinite(beta_value)) {
         const double y2 = out_y2[static_cast<std::size_t>(outcome)];
         rss = y2 - 2.0 * beta_value * num + beta_value * beta_value * den;
-        // BLAS reduction order can leave a tiny negative residue at an exact
-        // fit. Preserve the scalar path's non-negative RSS contract.
-        if (rss < 0.0 && rss > -1e-12 * std::max(1.0, y2)) rss = 0.0;
+        // BLAS reduction order can leave a tiny residue of either sign at an
+        // exact fit. Preserve the scalar path's zero-RSS contract.
+        if (std::abs(rss) <= 1e-12 * std::max(1.0, y2)) rss = 0.0;
         if (rss >= 0.0 && std::isfinite(rss)) {
           sigma = std::sqrt(rss / static_cast<double>(snp_count - 1));
           base_se = std::sqrt(1.0 / den);
@@ -1434,7 +1434,7 @@ Rcpp::List compute_ivw_grid_compact(const GridData& grid,
         if (std::isfinite(beta_value)) {
           const double y2 = out_y2[static_cast<std::size_t>(outcome)];
           rss = y2 - 2.0 * beta_value * num + beta_value * beta_value * den;
-          if (rss < 0.0 && rss > -1e-12 * std::max(1.0, y2)) rss = 0.0;
+          if (std::abs(rss) <= 1e-12 * std::max(1.0, y2)) rss = 0.0;
           if (rss >= 0.0 && std::isfinite(rss)) {
             sigma_value = std::sqrt(rss / static_cast<double>(snp_count - 1));
             base_se = std::sqrt(1.0 / den);

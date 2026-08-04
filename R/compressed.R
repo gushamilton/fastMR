@@ -287,6 +287,7 @@ fast_mr_compressed <- function(
     minimum_snps = 1L,
     strict = TRUE,
     ...) {
+  total_started <- unname(proc.time()[["elapsed"]])
   fastmr_require_compressor()
   exposure_files <- fastmr_normalize_compressed_files(exposure_files, "exposure_files")
   outcome_files <- fastmr_normalize_compressed_files(outcome_files, "outcome_files")
@@ -303,23 +304,35 @@ fast_mr_compressed <- function(
   columns <- c("chromosome", "base_pair_location", "effect_allele", "other_allele",
                "beta", "standard_error")
   outcome_keys <- rep(list(union_keys), length(outcome_files))
+  io_started <- unname(proc.time()[["elapsed"]])
   all_data <- fastmr_io_map(
     c(unname(exposure_files), unname(outcome_files)),
     c(unname(instrument_sets), unname(outcome_keys)),
     columns,
     as.integer(io_threads)
   )
+  io_seconds <- unname(proc.time()[["elapsed"]]) - io_started
   exposure_count <- length(exposure_files)
   exposure_data <- all_data[seq_len(exposure_count)]
   outcome_data <- all_data[exposure_count + seq_along(outcome_files)]
   names(exposure_data) <- names(exposure_files)
   names(outcome_data) <- names(outcome_files)
 
+  estimator_started <- unname(proc.time()[["elapsed"]])
   grid_result <- fastmr_compressed_grid_fast_path(
     exposure_data, outcome_data, instrument_sets, methods, controls,
     minimum_snps, exposure_files, outcome_files, io_threads, dots
   )
-  if (!is.null(grid_result)) return(grid_result)
+  if (!is.null(grid_result)) {
+    metadata <- attr(grid_result, "compressed_input")
+    metadata$timing <- list(
+      io_seconds = io_seconds,
+      estimator_seconds = unname(proc.time()[["elapsed"]]) - estimator_started,
+      total_seconds = unname(proc.time()[["elapsed"]]) - total_started
+    )
+    attr(grid_result, "compressed_input") <- metadata
+    return(grid_result)
+  }
 
   rows <- list()
   counts <- list()
@@ -411,7 +424,12 @@ fast_mr_compressed <- function(
     instruments = instrument_sets,
     counts = do.call(rbind, counts),
     io_threads = as.integer(io_threads),
-    estimator_path = "pairwise"
+    estimator_path = "pairwise",
+    timing = list(
+      io_seconds = io_seconds,
+      estimator_seconds = unname(proc.time()[["elapsed"]]) - estimator_started,
+      total_seconds = unname(proc.time()[["elapsed"]]) - total_started
+    )
   )
   result
 }

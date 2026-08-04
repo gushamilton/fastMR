@@ -23,3 +23,34 @@ test_that("batched IVW handles zero and signed exposure effects", {
   expect_true(all(is.finite(result$b)))
   expect_true(all(is.finite(result$se)))
 })
+
+test_that("batched IVW preserves an exact zero-residual fit", {
+  exposure_beta <- matrix(
+    c(-0.18857602, 0.06684381, -0.12420417, -0.52960750,
+      0.08635273, 0.08257450),
+    nrow = 1L
+  )
+  outcome_beta <- exposure_beta
+  exposure_se <- matrix(
+    c(0.04247208, 0.01420307, 0.02663656, 0.11156014,
+      0.01890862, 0.01566239),
+    nrow = 1L
+  )
+  outcome_se <- exposure_se
+
+  batched <- fast_mr_grid(
+    exposure_beta, outcome_beta, exposure_se, outcome_se,
+    methods = "ivw", nboot = 0L, threads = 1L
+  )
+  scalar <- fast_mr_grid(
+    exposure_beta, outcome_beta, exposure_se, outcome_se,
+    methods = c("ivw", "uwr"), nboot = 0L, threads = 1L
+  )
+  scalar <- scalar[scalar$method_code == "ivw", , drop = FALSE]
+
+  expect_equal(batched$b, 1, tolerance = 1e-15)
+  expect_equal(batched$Q, 0, tolerance = 0)
+  expect_equal(batched$se, 0, tolerance = 0)
+  expect_equal(batched[c("b", "se", "Q")], scalar[c("b", "se", "Q")],
+               tolerance = 0)
+})

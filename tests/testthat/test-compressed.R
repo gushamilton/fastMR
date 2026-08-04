@@ -91,6 +91,13 @@ test_that("compressed 2 x 2 MR equals the explicitly decoded workflow", {
   expect_equal(nrow(compressed), 4L)
   expect_true(all(compressed$nsnp == 5L))
   expect_equal(nrow(attr(compressed, "compressed_input")$counts), 4L)
+  timing <- attr(compressed, "compressed_input")$timing
+  expect_named(
+    timing, c("io_seconds", "estimator_seconds", "total_seconds"),
+    ignore.order = FALSE
+  )
+  expect_true(all(is.finite(unlist(timing))))
+  expect_true(all(unlist(timing) >= 0))
 
   exposure <- fast_read_compressed(exposures[[1L]], instruments[[1L]])
   outcome <- fast_read_compressed(outcomes[[1L]], instruments[[1L]])
