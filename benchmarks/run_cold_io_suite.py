@@ -185,9 +185,11 @@ def run_trial(args, keys: list[str], repetition: int, workload: str,
             "/usr/bin/time", "-l", str(args.rscript), str(WORKER),
             str(spec_path), str(result_path),
         ]
+        load_average_before = list(os.getloadavg())
         process = subprocess.run(
             command, env=environment, text=True, capture_output=True
         )
+        load_average_after = list(os.getloadavg())
         if process.returncode:
             raise RuntimeError(
                 f"trial failed ({workload}, {input_format}):\n"
@@ -206,6 +208,8 @@ def run_trial(args, keys: list[str], repetition: int, workload: str,
             # F_NOCACHE on the immutable source itself, so its staging is zero.
             "physical_staging_bytes_not_timed": staged_bytes,
             "staging_seconds_not_timed": staging_seconds,
+            "system_load_average_before": load_average_before,
+            "system_load_average_after": load_average_after,
             "cache_protocol": (
                 "fresh R process; every logical Pcodec study gets a fresh reader "
                 "context with coalescing/page cache disabled, exceptions reloaded, "
@@ -459,6 +463,11 @@ def main() -> None:
     if missing:
         raise FileNotFoundError("missing benchmark input(s): " + ", ".join(missing))
     args.scratch.mkdir(parents=True, exist_ok=True)
+    if not args.scratch.name.endswith(".noindex"):
+        raise ValueError(
+            "benchmark scratch directory must end in .noindex on macOS so "
+            "fresh fixture copies do not trigger Spotlight during timed trials"
+        )
     args.output.mkdir(parents=True, exist_ok=True)
     keys = load_keys(args.instruments)
     workloads = args.workload or list(SHAPES)
