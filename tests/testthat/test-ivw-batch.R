@@ -86,9 +86,12 @@ test_that("batched IVW preserves small real residual heterogeneity", {
   )
 
   expect_gt(scalar$Q, 0)
-  expect_equal(batched[c("b", "se", "Q", "Q_pval", "sigma")],
-               scalar[c("b", "se", "Q", "Q_pval", "sigma")],
+  expect_equal(batched[c("b", "se", "Q", "sigma")],
+               scalar[c("b", "se", "Q", "sigma")],
                # The scalar and batched paths use different reduction orders;
                # allow sub-nanolevel cross-BLAS rounding without masking drift.
                tolerance = 1e-9)
+  # Q_pval is close to zero, where a relative tolerance overstates harmless
+  # platform differences propagated from Q. Test its absolute error directly.
+  expect_lt(abs(batched$Q_pval - scalar$Q_pval), 1e-14)
 })
