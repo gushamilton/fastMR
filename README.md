@@ -27,12 +27,16 @@ OpenGWAS extraction, study metadata, or the broader TwoSampleMR ecosystem.
 
 ## Installation
 
-Install the development release from GitHub with:
+Install the current compressed-GWAS development release from its pull-request
+branch with:
 
 ```r
 install.packages("remotes")
-remotes::install_github("gushamilton/fastMR")
+remotes::install_github("gushamilton/fastMR@agent/compressed-gwas-mr")
 ```
+
+After that branch is merged, `remotes::install_github("gushamilton/fastMR")`
+installs the same functionality from the main branch.
 
 For a local checkout:
 
@@ -132,10 +136,13 @@ fast_mr_parquet("summary_stats.parquet", methods = "ivw")
 ## Direct MR from compressed GWAS files
 
 FastMR resolves canonical GRCh38 instruments from self-contained Pcodec
-CompreSSoR stores. Install the R package and its pinned Python codec runtime:
+[CompreSSoR](https://github.com/gushamilton/CompreSSoR/tree/agent/pcodec-r-package)
+stores. Until both pull-request branches are merged, install the matching
+development versions and the pinned Python codec runtime:
 
 ```sh
-Rscript -e 'remotes::install_github("gushamilton/CompreSSoR")'
+Rscript -e 'remotes::install_github("gushamilton/CompreSSoR@agent/pcodec-r-package")'
+Rscript -e 'remotes::install_github("gushamilton/fastMR@agent/compressed-gwas-mr")'
 python3 -m pip install 'numpy==1.26.4' 'pcodec==1.0.3' 'zstandard==0.25.0'
 ```
 
@@ -160,13 +167,18 @@ Each exposure is read only for its own instruments. Each outcome is read once
 for their union. All exposure and outcome requests share one codec process,
 and identical requests are decoded once. The matched rows are passed directly
 to the compiled FastMR estimator. The canonical key is
-`chromosome:position:REF:ALT`; the beta
-and frequency in every CompreSSoR file refer to ALT, so matching keys are
+`chromosome:position:REF:ALT`; beta, Z, and frequency in every CompreSSoR file
+refer to ALT, so matching keys are
 already aligned and no rsID dictionary is involved. Instrument discovery,
 association-threshold selection, and LD clumping remain explicit upstream
 steps—random instruments are used only in the reproducible I/O benchmark.
 This path deliberately rejects legacy Parquet CompreSSoR stores because their
 variant-ID lookup does not implement the canonical-key index.
+
+The CompreSSoR README documents the complete import, GRCh38 liftover,
+canonical-reference harmonisation, Pcodec accuracy contract, store layout,
+and validation workflow. FastMR begins after those files have been created;
+it does not silently select instruments or reinterpret their allele identity.
 
 ### Full-FinnGen compressed I/O benchmark
 
