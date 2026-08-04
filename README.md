@@ -183,10 +183,10 @@ construction, and FastMR estimation.
 
 | Input path | Median | Range | Speedup vs TSV.gz |
 |---|---:|---:|---:|
-| CompreSSoR Pcodec, 10 explicit reads | 0.027 s | 0.026–0.062 s | **690.8x** |
-| CompreSSoR + fastMR, optimized same-store batch | 0.006 s | 0.006–0.121 s | **3,108.5x** |
-| VCF.gz + Tabix, 10 queries | 0.175 s | 0.172–0.176 s | **106.6x** |
-| TSV.gz, 10 full scans | 18.651 s | 17.375–18.685 s | 1.0x |
+| CompreSSoR Pcodec, 10 explicit reads | 0.026 s | 0.025–0.027 s | **658.5x** |
+| CompreSSoR + fastMR, optimized same-store batch | 0.013 s | 0.006–0.018 s | **1,316.9x** |
+| VCF.gz + Tabix, 10 queries | 0.176 s | 0.175–0.185 s | **97.3x** |
+| TSV.gz, 10 full scans | 17.120 s | 16.966–17.884 s | 1.0x |
 
 The self-contained CompreSSoR store is 58,033,297 bytes, versus 201,658,018
 bytes for the eight-column TSV.gz and 228,634,485 bytes for VCF.gz plus its

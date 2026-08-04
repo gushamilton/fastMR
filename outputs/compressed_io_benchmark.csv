@@ -1,16 +1,25 @@
-format,run,seconds,pairs,instruments_per_pair,estimate
-CompreSSoR Pcodec batch,1,0.184,25,25,1
-CompreSSoR Pcodec batch,2,0.14,25,25,1
-CompreSSoR Pcodec batch,3,0.14,25,25,1
-CompreSSoR Pcodec batch,4,0.136,25,25,1
-CompreSSoR Pcodec batch,5,0.149,25,25,1
-VCF.gz + Tabix,1,0.196,25,25,1
-VCF.gz + Tabix,2,0.197,25,25,1
-VCF.gz + Tabix,3,0.196,25,25,1
-VCF.gz + Tabix,4,0.197,25,25,1
-VCF.gz + Tabix,5,0.196,25,25,1
-TSV.gz full scan,1,18.226,25,25,1
-TSV.gz full scan,2,18.175,25,25,1
-TSV.gz full scan,3,18.339,25,25,1
-TSV.gz full scan,4,18.049,25,25,1
-TSV.gz full scan,5,16.821,25,25,1
+format,phase,run,seconds,pairs,instruments_per_pair,estimate
+CompreSSoR Pcodec - 10 explicit reads,first_call,0,0.2,25,25,1
+CompreSSoR Pcodec - 10 explicit reads,warm,1,0.0269999999999999,25,25,1
+CompreSSoR Pcodec - 10 explicit reads,warm,2,0.026,25,25,1
+CompreSSoR Pcodec - 10 explicit reads,warm,3,0.026,25,25,1
+CompreSSoR Pcodec - 10 explicit reads,warm,4,0.025,25,25,1
+CompreSSoR Pcodec - 10 explicit reads,warm,5,0.025,25,25,1
+CompreSSoR + fastMR - optimized same-store batch,first_call,0,0.116,25,25,1
+CompreSSoR + fastMR - optimized same-store batch,warm,1,0.0179999999999998,25,25,1
+CompreSSoR + fastMR - optimized same-store batch,warm,2,0.0129999999999999,25,25,1
+CompreSSoR + fastMR - optimized same-store batch,warm,3,0.014,25,25,1
+CompreSSoR + fastMR - optimized same-store batch,warm,4,0.00700000000000012,25,25,1
+CompreSSoR + fastMR - optimized same-store batch,warm,5,0.00600000000000001,25,25,1
+VCF.gz + Tabix - 10 queries,first_call,0,0.187,25,25,1
+VCF.gz + Tabix - 10 queries,warm,1,0.176,25,25,1
+VCF.gz + Tabix - 10 queries,warm,2,0.176,25,25,1
+VCF.gz + Tabix - 10 queries,warm,3,0.185,25,25,1
+VCF.gz + Tabix - 10 queries,warm,4,0.176,25,25,1
+VCF.gz + Tabix - 10 queries,warm,5,0.175,25,25,1
+TSV.gz - 10 full scans,first_call,0,19.127,25,25,1
+TSV.gz - 10 full scans,warm,1,17.507,25,25,1
+TSV.gz - 10 full scans,warm,2,17.884,25,25,1
+TSV.gz - 10 full scans,warm,3,17.064,25,25,1
+TSV.gz - 10 full scans,warm,4,16.966,25,25,1
+TSV.gz - 10 full scans,warm,5,17.12,25,25,1

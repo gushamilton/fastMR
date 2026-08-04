@@ -1,6 +1,14 @@
 {
   "schema_version": "1.0.0",
-  "measured_utc": "2026-08-03 22:22:44 UTC",
+  "measured_utc": "2026-08-04 00:00:27 UTC",
+  "package_versions": {
+    "CompreSSoR": "0.3.0",
+    "fastMR": "0.1.8"
+  },
+  "source_revisions": {
+    "CompreSSoR": "444b636a8e7e68ca7d0b7f645fd7586f46aeb385",
+    "fastMR": "919378ae8b23ec5a103b1394a27265e719db36d1"
+  },
   "machine": ["Ferguss-Mini", "Darwin", "24.6.0", "arm64"],
   "rows_in_gwas": 14923434,
   "instrument_keys": ["1:14717:G:A", "1:151913364:T:A", "2:20704838:T:C", "2:144696401:A:G", "3:21374980:A:T", "3:144299383:T:A", "4:60274713:T:A", "4:178401750:G:A", "5:107412227:G:A", "6:35543965:A:G", "6:155348004:A:G", "7:97243368:C:T", "8:47623110:T:C", "9:17023859:A:G", "10:17310862:G:A", "11:346076:A:G", "11:119023565:C:T", "12:104181274:C:T", "13:105052612:A:G", "15:39948936:A:G", "16:66626644:C:T", "18:10832853:T:C", "19:51517447:T:C", "22:25266257:C:T", "X:155699751:C:T"],
@@ -8,8 +16,8 @@
   "mr_pairs": 25,
   "inputs": {
     "compressed": {
-      "file": "finngen-full-pcodec-canonical.cpr",
-      "bytes": 59369314
+      "file": "finngen-full-pcodec-v03-release.cpr",
+      "bytes": 58033297
     },
     "tsv_gz": {
       "file": "core-canonical.tsv.gz",
@@ -21,149 +29,291 @@
       "index_bytes": 1649178
     }
   },
+  "benchmark_contract": {
+    "fair_paths": "ten explicit reads followed by identical fast_mr_grid IVW",
+    "optimized_path": "same normalized store/key requests may be coalesced once",
+    "first_call": "first call in this R process; operating-system disk cache not controlled",
+    "warm_runs": 5
+  },
+  "parity": [
+    {
+      "comparison": "pcodec_vs_tabix",
+      "keys_equal": true,
+      "max_abs_beta": 0.0047,
+      "max_abs_se": 0.003
+    },
+    {
+      "comparison": "pcodec_vs_tsv_gz",
+      "keys_equal": true,
+      "max_abs_beta": 0.0047,
+      "max_abs_se": 0.003
+    }
+  ],
+  "first_call": [
+    {
+      "format": "CompreSSoR Pcodec - 10 explicit reads",
+      "first_call_seconds": 0.2
+    },
+    {
+      "format": "CompreSSoR + fastMR - optimized same-store batch",
+      "first_call_seconds": 0.116
+    },
+    {
+      "format": "VCF.gz + Tabix - 10 queries",
+      "first_call_seconds": 0.187
+    },
+    {
+      "format": "TSV.gz - 10 full scans",
+      "first_call_seconds": 19.127
+    }
+  ],
   "summary": [
     {
-      "format": "CompreSSoR Pcodec batch",
+      "format": "CompreSSoR Pcodec - 10 explicit reads",
       "runs": 5,
-      "median_seconds": 0.14,
-      "min_seconds": 0.136,
-      "max_seconds": 0.184,
-      "speedup_vs_tsv_gz": 129.8214
+      "median_seconds": 0.026,
+      "min_seconds": 0.025,
+      "max_seconds": 0.027,
+      "speedup_vs_tsv_gz": 658.4615
     },
     {
-      "format": "VCF.gz + Tabix",
+      "format": "CompreSSoR + fastMR - optimized same-store batch",
       "runs": 5,
-      "median_seconds": 0.196,
-      "min_seconds": 0.196,
-      "max_seconds": 0.197,
-      "speedup_vs_tsv_gz": 92.7296
+      "median_seconds": 0.013,
+      "min_seconds": 0.006,
+      "max_seconds": 0.018,
+      "speedup_vs_tsv_gz": 1316.9231
     },
     {
-      "format": "TSV.gz full scan",
+      "format": "VCF.gz + Tabix - 10 queries",
       "runs": 5,
-      "median_seconds": 18.175,
-      "min_seconds": 16.821,
-      "max_seconds": 18.339,
+      "median_seconds": 0.176,
+      "min_seconds": 0.175,
+      "max_seconds": 0.185,
+      "speedup_vs_tsv_gz": 97.2727
+    },
+    {
+      "format": "TSV.gz - 10 full scans",
+      "runs": 5,
+      "median_seconds": 17.12,
+      "min_seconds": 16.966,
+      "max_seconds": 17.884,
       "speedup_vs_tsv_gz": 1
     }
   ],
   "runs": [
     {
-      "format": "CompreSSoR Pcodec batch",
+      "format": "CompreSSoR Pcodec - 10 explicit reads",
+      "phase": "first_call",
+      "run": 0,
+      "seconds": 0.2,
+      "pairs": 25,
+      "instruments_per_pair": 25,
+      "estimate": 1
+    },
+    {
+      "format": "CompreSSoR Pcodec - 10 explicit reads",
+      "phase": "warm",
       "run": 1,
-      "seconds": 0.184,
+      "seconds": 0.027,
       "pairs": 25,
       "instruments_per_pair": 25,
       "estimate": 1
     },
     {
-      "format": "CompreSSoR Pcodec batch",
+      "format": "CompreSSoR Pcodec - 10 explicit reads",
+      "phase": "warm",
       "run": 2,
-      "seconds": 0.14,
+      "seconds": 0.026,
       "pairs": 25,
       "instruments_per_pair": 25,
       "estimate": 1
     },
     {
-      "format": "CompreSSoR Pcodec batch",
+      "format": "CompreSSoR Pcodec - 10 explicit reads",
+      "phase": "warm",
       "run": 3,
-      "seconds": 0.14,
+      "seconds": 0.026,
       "pairs": 25,
       "instruments_per_pair": 25,
       "estimate": 1
     },
     {
-      "format": "CompreSSoR Pcodec batch",
+      "format": "CompreSSoR Pcodec - 10 explicit reads",
+      "phase": "warm",
       "run": 4,
-      "seconds": 0.136,
+      "seconds": 0.025,
       "pairs": 25,
       "instruments_per_pair": 25,
       "estimate": 1
     },
     {
-      "format": "CompreSSoR Pcodec batch",
+      "format": "CompreSSoR Pcodec - 10 explicit reads",
+      "phase": "warm",
       "run": 5,
-      "seconds": 0.149,
+      "seconds": 0.025,
       "pairs": 25,
       "instruments_per_pair": 25,
       "estimate": 1
     },
     {
-      "format": "VCF.gz + Tabix",
+      "format": "CompreSSoR + fastMR - optimized same-store batch",
+      "phase": "first_call",
+      "run": 0,
+      "seconds": 0.116,
+      "pairs": 25,
+      "instruments_per_pair": 25,
+      "estimate": 1
+    },
+    {
+      "format": "CompreSSoR + fastMR - optimized same-store batch",
+      "phase": "warm",
       "run": 1,
-      "seconds": 0.196,
+      "seconds": 0.018,
       "pairs": 25,
       "instruments_per_pair": 25,
       "estimate": 1
     },
     {
-      "format": "VCF.gz + Tabix",
+      "format": "CompreSSoR + fastMR - optimized same-store batch",
+      "phase": "warm",
       "run": 2,
-      "seconds": 0.197,
+      "seconds": 0.013,
       "pairs": 25,
       "instruments_per_pair": 25,
       "estimate": 1
     },
     {
-      "format": "VCF.gz + Tabix",
+      "format": "CompreSSoR + fastMR - optimized same-store batch",
+      "phase": "warm",
       "run": 3,
-      "seconds": 0.196,
+      "seconds": 0.014,
       "pairs": 25,
       "instruments_per_pair": 25,
       "estimate": 1
     },
     {
-      "format": "VCF.gz + Tabix",
+      "format": "CompreSSoR + fastMR - optimized same-store batch",
+      "phase": "warm",
       "run": 4,
-      "seconds": 0.197,
+      "seconds": 0.007,
       "pairs": 25,
       "instruments_per_pair": 25,
       "estimate": 1
     },
     {
-      "format": "VCF.gz + Tabix",
+      "format": "CompreSSoR + fastMR - optimized same-store batch",
+      "phase": "warm",
       "run": 5,
-      "seconds": 0.196,
+      "seconds": 0.006,
       "pairs": 25,
       "instruments_per_pair": 25,
       "estimate": 1
     },
     {
-      "format": "TSV.gz full scan",
+      "format": "VCF.gz + Tabix - 10 queries",
+      "phase": "first_call",
+      "run": 0,
+      "seconds": 0.187,
+      "pairs": 25,
+      "instruments_per_pair": 25,
+      "estimate": 1
+    },
+    {
+      "format": "VCF.gz + Tabix - 10 queries",
+      "phase": "warm",
       "run": 1,
-      "seconds": 18.226,
+      "seconds": 0.176,
       "pairs": 25,
       "instruments_per_pair": 25,
       "estimate": 1
     },
     {
-      "format": "TSV.gz full scan",
+      "format": "VCF.gz + Tabix - 10 queries",
+      "phase": "warm",
       "run": 2,
-      "seconds": 18.175,
+      "seconds": 0.176,
       "pairs": 25,
       "instruments_per_pair": 25,
       "estimate": 1
     },
     {
-      "format": "TSV.gz full scan",
+      "format": "VCF.gz + Tabix - 10 queries",
+      "phase": "warm",
       "run": 3,
-      "seconds": 18.339,
+      "seconds": 0.185,
       "pairs": 25,
       "instruments_per_pair": 25,
       "estimate": 1
     },
     {
-      "format": "TSV.gz full scan",
+      "format": "VCF.gz + Tabix - 10 queries",
+      "phase": "warm",
       "run": 4,
-      "seconds": 18.049,
+      "seconds": 0.176,
       "pairs": 25,
       "instruments_per_pair": 25,
       "estimate": 1
     },
     {
-      "format": "TSV.gz full scan",
+      "format": "VCF.gz + Tabix - 10 queries",
+      "phase": "warm",
       "run": 5,
-      "seconds": 16.821,
+      "seconds": 0.175,
+      "pairs": 25,
+      "instruments_per_pair": 25,
+      "estimate": 1
+    },
+    {
+      "format": "TSV.gz - 10 full scans",
+      "phase": "first_call",
+      "run": 0,
+      "seconds": 19.127,
+      "pairs": 25,
+      "instruments_per_pair": 25,
+      "estimate": 1
+    },
+    {
+      "format": "TSV.gz - 10 full scans",
+      "phase": "warm",
+      "run": 1,
+      "seconds": 17.507,
+      "pairs": 25,
+      "instruments_per_pair": 25,
+      "estimate": 1
+    },
+    {
+      "format": "TSV.gz - 10 full scans",
+      "phase": "warm",
+      "run": 2,
+      "seconds": 17.884,
+      "pairs": 25,
+      "instruments_per_pair": 25,
+      "estimate": 1
+    },
+    {
+      "format": "TSV.gz - 10 full scans",
+      "phase": "warm",
+      "run": 3,
+      "seconds": 17.064,
+      "pairs": 25,
+      "instruments_per_pair": 25,
+      "estimate": 1
+    },
+    {
+      "format": "TSV.gz - 10 full scans",
+      "phase": "warm",
+      "run": 4,
+      "seconds": 16.966,
+      "pairs": 25,
+      "instruments_per_pair": 25,
+      "estimate": 1
+    },
+    {
+      "format": "TSV.gz - 10 full scans",
+      "phase": "warm",
+      "run": 5,
+      "seconds": 17.12,
       "pairs": 25,
       "instruments_per_pair": 25,
       "estimate": 1
