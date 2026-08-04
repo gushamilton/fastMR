@@ -207,9 +207,9 @@ def run_trial(args, keys: list[str], repetition: int, workload: str,
             "physical_staging_bytes_not_timed": staged_bytes,
             "staging_seconds_not_timed": staging_seconds,
             "cache_protocol": (
-                "fresh R process; Pcodec deliberately reloads the same immutable "
-                "store with coalescing/page cache disabled, exceptions reloaded, "
-                "and F_NOCACHE; TSV/VCF use fresh ordinary copies read once"
+                "fresh R process; every logical Pcodec study gets a fresh reader "
+                "context with coalescing/page cache disabled, exceptions reloaded, "
+                "and F_NOCACHE; TSV/VCF use fresh F_NOCACHE-staged copies read once"
             ),
         })
         validate_record(record, keys)
@@ -245,7 +245,8 @@ def validate_record(record: dict, keys: list[str]) -> None:
     for row in rows:
         if int(row["nsnp"]) != len(keys):
             raise ValueError("MR pair did not retain all instruments")
-        if not all(math.isfinite(float(row[name])) for name in ("b", "se")):
+        if not all(math.isfinite(float(row[name])) for name in (
+                "b", "se", "Q", "Q_pval", "sigma")):
             raise ValueError("MR result contains non-finite estimate or standard error")
         if not math.isclose(float(row["b"]), 1.0, rel_tol=0, abs_tol=1e-12):
             raise ValueError("self-GWAS MR estimate differs from one")
@@ -263,6 +264,7 @@ def mr_signature(record: dict) -> list[tuple]:
             # jsonlite omits non-finite data-frame fields.  A self-GWAS has
             # b=1 and se=0, so its p-value is intentionally undefined.
             None if row.get("pval") is None else float(row["pval"]),
+            float(row["Q"]), float(row["Q_pval"]), float(row["sigma"]),
         )
         for row in mr_rows(record)
     ]
@@ -288,29 +290,94 @@ def parity_report(records: list[dict]) -> list[dict]:
                 ))
                 for row in exact
             }
+            missing_counts = {
+                tuple(int(row["checksum"][name]) for name in (
+                    "beta_missing", "se_missing", "eaf_missing", "z_missing"
+                ))
+                for row in selected
+            }
             report.append({
                 "workload": workload,
                 "identity_exact_all_formats": len(identity_values) == 1,
                 "tsv_vcf_numeric_exact": len(exact_numeric) <= 1,
+                "missing_counts_exact_all_formats": len(missing_counts) == 1,
             })
             continue
         groups = {}
+        format_records = {}
         for row in selected:
             groups.setdefault(row["format"], []).append(mr_signature(row))
+            format_records.setdefault(row["format"], []).append(row)
         pcodec_exact = len({repr(value) for value in (
             groups.get("pcodec_direct", []) + groups.get("pcodec_explicit", [])
         )}) <= 1
         exact_formats = groups.get("tsv_gz", []) + groups.get("vcf_tabix", [])
         exact_equal = len({repr(value) for value in exact_formats}) <= 1
-        report.append({
+        signatures = {
+            name: values[0]["input_signature"]
+            for name, values in format_records.items()
+            if values and "input_signature" in values[0]
+        }
+        raw_signature = signatures.get("tsv_gz")
+        vcf_signature = signatures.get("vcf_tabix")
+        pcodec_signature = signatures.get("pcodec_explicit")
+        raw_exact = (
+            raw_signature is not None and vcf_signature is not None and
+            raw_signature == vcf_signature
+        )
+        profile_ok = False
+        numeric_delta = None
+        if raw_signature is not None and pcodec_signature is not None:
+            raw_keys = list(raw_signature["variant_key"])
+            pcodec_keys = list(pcodec_signature["variant_key"])
+            if raw_keys == pcodec_keys:
+                raw_beta = [float(value) for value in raw_signature["beta"]]
+                raw_se = [float(value) for value in raw_signature["standard_error"]]
+                packed_beta = [float(value) for value in pcodec_signature["beta"]]
+                packed_se = [
+                    float(value) for value in pcodec_signature["standard_error"]
+                ]
+                beta_delta = max(abs(a - b) for a, b in zip(raw_beta, packed_beta))
+                se_delta = max(abs(a - b) for a, b in zip(raw_se, packed_se))
+                z_delta = max(abs(
+                    a / sa - b / sb
+                ) for a, sa, b, sb in zip(
+                    raw_beta, raw_se, packed_beta, packed_se
+                ))
+                numeric_delta = {
+                    "max_abs_beta": beta_delta,
+                    "max_abs_standard_error": se_delta,
+                    "max_abs_z": z_delta,
+                }
+                # Z9 has a central half-bin error of 7/(2*510); exception
+                # values are float32. The broad beta/SE gates are the package's
+                # documented standard-profile regression tolerances.
+                profile_ok = (
+                    z_delta <= 7.0 / (2.0 * 510.0) + 1e-6 and
+                    beta_delta <= 0.02 and se_delta <= 0.01
+                )
+        entry = {
             "workload": workload,
             "pcodec_direct_explicit_exact": pcodec_exact,
             "tsv_vcf_exact": exact_equal,
-        })
+        }
+        if raw_signature is not None and vcf_signature is not None:
+            entry["tsv_vcf_input_exact"] = raw_exact
+        if raw_signature is not None and pcodec_signature is not None:
+            entry["pcodec_raw_numeric_within_profile"] = profile_ok
+            entry["pcodec_raw_max_delta"] = numeric_delta
+        report.append(entry)
     return report
 
 
 def summaries(records: list[dict]) -> list[dict]:
+    def optional_number(value):
+        try:
+            parsed = float(value)
+        except (TypeError, ValueError):
+            return None
+        return parsed if math.isfinite(parsed) else None
+
     groups = {}
     for record in records:
         groups.setdefault((record["workload"], record["format"]), []).append(record)
@@ -320,6 +387,11 @@ def summaries(records: list[dict]) -> list[dict]:
         io = [float(row["io_seconds"]) for row in values]
         estimator = [float(row["estimator_seconds"]) for row in values]
         rss = [int(row["maximum_rss_bytes"]) for row in values]
+        source_read = [
+            parsed for parsed in (
+                optional_number(row.get("source_bytes_read")) for row in values
+            ) if parsed is not None
+        ]
         output.append({
             "workload": workload,
             "format": input_format,
@@ -331,6 +403,9 @@ def summaries(records: list[dict]) -> list[dict]:
             "median_io_seconds": statistics.median(io),
             "median_estimator_seconds": statistics.median(estimator),
             "median_peak_rss_bytes": statistics.median(rss),
+            "median_pcodec_source_bytes_read": (
+                statistics.median(source_read) if source_read else None
+            ),
         })
     return output
 
@@ -391,6 +466,7 @@ def main() -> None:
     schedule = []
     rng = random.Random(args.seed)
     for repetition in range(1, args.reps + 1):
+        conditions = []
         for workload in workloads:
             formats = list(FULL_FORMATS if workload == "full_load" else MR_FORMATS)
             if args.formats:
@@ -399,8 +475,11 @@ def main() -> None:
                     raise ValueError(
                         f"none of the selected formats is compatible with {workload}"
                     )
-            rng.shuffle(formats)
-            schedule.extend((repetition, workload, value) for value in formats)
+            conditions.extend((workload, value) for value in formats)
+        rng.shuffle(conditions)
+        schedule.extend(
+            (repetition, workload, value) for workload, value in conditions
+        )
     for order, (repetition, workload, input_format) in enumerate(schedule, 1):
         print(
             f"trial {order}/{len(schedule)}: rep={repetition} "
@@ -424,8 +503,11 @@ def main() -> None:
         )
 
     parity = parity_report(records)
-    if not all(all(value is True for key, value in row.items() if key != "workload")
-               for row in parity):
+    gate_suffixes = ("_exact", "_exact_all_formats", "_within_profile")
+    if not all(all(
+            value is True for key, value in row.items()
+            if key.endswith(gate_suffixes)
+    ) for row in parity):
         raise RuntimeError(f"parity gate failed: {parity}")
     summary = summaries(records)
     result = {
@@ -456,10 +538,11 @@ def main() -> None:
             ),
         },
         "cache_protocol": (
-            "fresh R process; Pcodec deliberately reloads the same immutable "
-            "store for each logical study with coalescing/page cache disabled, "
-            "exceptions reloaded, and F_NOCACHE on data descriptors; TSV/VCF "
-            "use fresh ordinary copies written with F_NOCACHE and read once"
+            "fresh R process; every logical Pcodec study gets a fresh reader "
+            "context for the same immutable store, with request coalescing/page "
+            "cache disabled, exceptions reloaded, and F_NOCACHE on data "
+            "descriptors; TSV/VCF use fresh copies written through F_NOCACHE "
+            "descriptors and read once (a cache-controlled cold approximation)"
         ),
         "parity": parity,
         "summary": summary,
@@ -482,6 +565,7 @@ def main() -> None:
             "exposures", "outcomes", "logical_study_reads", "io_threads",
             "total_seconds",
             "io_seconds", "estimator_seconds", "touch_seconds",
+            "source_bytes_read",
             "maximum_rss_bytes", "page_faults", "page_reclaims",
             "block_input_operations", "block_output_operations",
             "physical_staging_bytes_not_timed",

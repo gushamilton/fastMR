@@ -42,15 +42,51 @@ test_that("batched IVW preserves an exact zero-residual fit", {
     exposure_beta, outcome_beta, exposure_se, outcome_se,
     methods = "ivw", nboot = 0L, threads = 1L
   )
-  scalar <- fast_mr_grid(
-    exposure_beta, outcome_beta, exposure_se, outcome_se,
-    methods = c("ivw", "uwr"), nboot = 0L, threads = 1L
+  scalar <- fast_mr(
+    data.frame(
+      SNP = paste0("rs", seq_len(ncol(exposure_beta))),
+      beta.exposure = as.numeric(exposure_beta),
+      beta.outcome = as.numeric(outcome_beta),
+      se.exposure = as.numeric(exposure_se),
+      se.outcome = as.numeric(outcome_se)
+    ),
+    methods = "ivw", nboot = 0L, threads = 1L
   )
-  scalar <- scalar[scalar$method_code == "ivw", , drop = FALSE]
 
   expect_equal(batched$b, 1, tolerance = 1e-15)
   expect_equal(batched$Q, 0, tolerance = 0)
   expect_equal(batched$se, 0, tolerance = 0)
   expect_equal(batched[c("b", "se", "Q")], scalar[c("b", "se", "Q")],
                tolerance = 0)
+})
+
+test_that("batched IVW preserves small real residual heterogeneity", {
+  exposure_beta <- c(0.08, 0.11, 0.14, 0.17, 0.21, 0.26)
+  outcome_beta <- 0.65 * exposure_beta +
+    c(-3, 2, -1, 4, -2, 1) * 1e-8
+  exposure_se <- rep(0.01, length(exposure_beta))
+  outcome_se <- rep(1e-8, length(exposure_beta))
+
+  scalar <- fast_mr(
+    data.frame(
+      SNP = paste0("rs", seq_along(exposure_beta)),
+      beta.exposure = exposure_beta,
+      beta.outcome = outcome_beta,
+      se.exposure = exposure_se,
+      se.outcome = outcome_se
+    ),
+    methods = "ivw", nboot = 0L, threads = 1L
+  )
+  batched <- fast_mr_grid(
+    matrix(exposure_beta, nrow = 1L),
+    matrix(outcome_beta, nrow = 1L),
+    matrix(exposure_se, nrow = 1L),
+    matrix(outcome_se, nrow = 1L),
+    methods = "ivw", nboot = 0L, threads = 1L
+  )
+
+  expect_gt(scalar$Q, 0)
+  expect_equal(batched[c("b", "se", "Q", "Q_pval", "sigma")],
+               scalar[c("b", "se", "Q", "Q_pval", "sigma")],
+               tolerance = 1e-12)
 })

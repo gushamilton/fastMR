@@ -93,11 +93,17 @@ test_that("compressed 2 x 2 MR equals the explicitly decoded workflow", {
   expect_equal(nrow(attr(compressed, "compressed_input")$counts), 4L)
   timing <- attr(compressed, "compressed_input")$timing
   expect_named(
-    timing, c("io_seconds", "estimator_seconds", "total_seconds"),
+    timing, c(
+      "io_seconds", "estimator_seconds", "total_seconds",
+      "source_bytes_read"
+    ),
     ignore.order = FALSE
   )
-  expect_true(all(is.finite(unlist(timing))))
-  expect_true(all(unlist(timing) >= 0))
+  expect_true(all(is.finite(unlist(timing[1:3]))))
+  expect_true(all(unlist(timing[1:3]) >= 0))
+  expect_true(is.na(timing$source_bytes_read) ||
+                (is.finite(timing$source_bytes_read) &&
+                   timing$source_bytes_read >= 0))
 
   exposure <- fast_read_compressed(exposures[[1L]], instruments[[1L]])
   outcome <- fast_read_compressed(outcomes[[1L]], instruments[[1L]])
@@ -173,6 +179,7 @@ test_that("shared compressed instruments use the exact native grid path", {
 })
 
 test_that("compressed MR rejects malformed contracts and missing instruments", {
+  skip_if_not_installed("CompreSSoR")
   expect_error(fastMR:::fastmr_normalize_variant_keys("rs123"),
                "chromosome:position:REF:ALT")
   expect_error(fastMR:::fastmr_normalize_variant_keys(c("1:1:A:C", "1:1:A:C")),
@@ -188,7 +195,29 @@ test_that("compressed MR rejects malformed contracts and missing instruments", {
   dir.create(fake)
   writeLines('{"format":"CompreSSoR","backend":"parquet"}',
              file.path(fake, "manifest.json"))
-  expect_error(fast_read_compressed(fake), "requires a Pcodec")
+  expect_error(fast_read_compressed(fake), "requires a self-contained")
+})
+
+test_that("compressed reads reject incompatible effect-orientation contracts", {
+  skip_if_not_installed("CompreSSoR")
+  python <- compressed_test_python()
+  skip_if(is.null(python), "Pcodec Python dependencies are unavailable")
+  old <- Sys.getenv("COMPRESSOR_PYTHON", unset = NA_character_)
+  Sys.setenv(COMPRESSOR_PYTHON = python)
+  on.exit(if (is.na(old)) Sys.unsetenv("COMPRESSOR_PYTHON") else
+    Sys.setenv(COMPRESSOR_PYTHON = old), add = TRUE)
+
+  path <- tempfile("fastmr-incompatible-contract-")
+  CompreSSoR::compress_sumstats(
+    compressed_fixture(), path, reference = NULL, mode = "convert",
+    assume_grch38_ref_alt = TRUE, overwrite = TRUE
+  )
+  manifest_path <- file.path(path, "manifest.json")
+  manifest <- CompreSSoR:::read_manifest(manifest_path)
+  manifest$identity$effect_allele_is_alt <- FALSE
+  CompreSSoR:::write_manifest(manifest, manifest_path)
+  CompreSSoR:::seal_pcodec_manifest(manifest_path)
+  expect_error(fast_read_compressed(path), "ALT-oriented")
 })
 
 test_that("compressed MR exposes invalid values and parallel read failures", {
@@ -218,6 +247,18 @@ test_that("compressed MR exposes invalid values and parallel read failures", {
     outcome_input$chromosome, outcome_input$base_pair_location,
     outcome_input$other_allele, outcome_input$effect_allele
   )[1:5]
+  absent <- "2:200000000:A:C"
+  expect_error(
+    fast_mr_compressed(c(exp = outcome), c(out = outcome), c(keys, absent)),
+    "missing requested exposure"
+  )
+  expect_warning(
+    missing_non_strict <- fast_mr_compressed(
+      c(exp = outcome), c(out = outcome), c(keys, absent), strict = FALSE
+    ),
+    "omitted missing requested"
+  )
+  expect_equal(missing_non_strict$nsnp, length(keys))
   expect_error(
     fast_mr_compressed(c(exp = exposure), c(out = outcome), keys),
     "invalid beta/standard_error"

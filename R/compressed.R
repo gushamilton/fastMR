@@ -80,6 +80,25 @@ fastmr_normalize_instruments <- function(instruments, exposure_labels) {
   out
 }
 
+fastmr_validate_compressed_store <- function(store) {
+  manifest <- store$manifest
+  identity <- manifest$identity
+  compatible <- identical(manifest$backend, "pcodec") &&
+    identical(manifest$genome_build, "GRCh38") &&
+    identical(manifest$variant_storage, "self_contained_identity_key") &&
+    is.list(identity) &&
+    identical(identity$effect_allele_is_alt, TRUE) &&
+    identical(identity$other_allele_is_ref, TRUE) &&
+    identical(identity$external_reference_required, FALSE)
+  if (!isTRUE(compatible)) {
+    stop(
+      "FastMR requires a self-contained GRCh38 Pcodec store whose effects are ALT-oriented",
+      call. = FALSE
+    )
+  }
+  invisible(store)
+}
+
 fastmr_finalize_compressed_read <- function(out, columns) {
   identity <- c("chromosome", "base_pair_location", "effect_allele", "other_allele")
   if (!nrow(out)) {
@@ -110,7 +129,10 @@ fastmr_io_map <- function(paths, keys, columns, io_threads) {
         stop("batched compressed read failed: ", conditionMessage(error), call. = FALSE)
       }
     )
-    return(lapply(result, fastmr_finalize_compressed_read, columns = columns))
+    source_bytes_read <- attr(result, "source_bytes_read", exact = TRUE)
+    result <- lapply(result, fastmr_finalize_compressed_read, columns = columns)
+    attr(result, "source_bytes_read") <- source_bytes_read
+    return(result)
   }
   reader <- function(index) {
     tryCatch(
@@ -235,10 +257,7 @@ fast_read_compressed <- function(
     stop("path must identify one existing CompreSSoR store", call. = FALSE)
   }
   store <- CompreSSoR::open_compressor(path)
-  if (!identical(store$manifest$backend, "pcodec")) {
-    stop("canonical-key FastMR input currently requires a Pcodec CompreSSoR store",
-         call. = FALSE)
-  }
+  fastmr_validate_compressed_store(store)
   columns <- unique(as.character(columns))
   if (!length(columns) || anyNA(columns) || any(!nzchar(columns))) {
     stop("columns must contain at least one non-empty column name", call. = FALSE)
@@ -246,7 +265,10 @@ fast_read_compressed <- function(
   identity <- c("chromosome", "base_pair_location", "effect_allele", "other_allele")
   requested <- unique(c(columns, identity))
   out <- CompreSSoR::read_sumstats(store, variants = variants, columns = requested)
-  fastmr_finalize_compressed_read(out, columns)
+  source_bytes_read <- attr(out, "source_bytes_read", exact = TRUE)
+  out <- fastmr_finalize_compressed_read(out, columns)
+  attr(out, "source_bytes_read") <- source_bytes_read
+  out
 }
 
 #' Run FastMR directly from compressed GWAS files
@@ -269,8 +291,9 @@ fast_read_compressed <- function(
 #' @param io_threads Number of stores decoded concurrently inside the shared
 #'   CompreSSoR process.
 #' @param minimum_snps Minimum matched instruments required for every pair.
-#' @param strict If `TRUE`, fail on invalid beta/standard-error values and when
-#'   a pair has fewer than `minimum_snps`; otherwise omit them with warnings.
+#' @param strict If `TRUE`, fail when any requested instrument is missing, on
+#'   invalid beta/standard-error values, and when a pair has fewer than
+#'   `minimum_snps`; otherwise omit unavailable or invalid rows with warnings.
 #' @param ... Additional options passed to [fast_mr()].
 #' @return A tidy FastMR result with extraction metadata in the
 #'   `compressed_input` attribute.
@@ -305,12 +328,24 @@ fast_mr_compressed <- function(
                "beta", "standard_error")
   outcome_keys <- rep(list(union_keys), length(outcome_files))
   io_started <- unname(proc.time()[["elapsed"]])
+  invisible(lapply(
+    unique(c(unname(exposure_files), unname(outcome_files))),
+    function(path) fastmr_validate_compressed_store(
+      CompreSSoR::open_compressor(path)
+    )
+  ))
   all_data <- fastmr_io_map(
     c(unname(exposure_files), unname(outcome_files)),
     c(unname(instrument_sets), unname(outcome_keys)),
     columns,
     as.integer(io_threads)
   )
+  source_bytes_read <- attr(all_data, "source_bytes_read", exact = TRUE)
+  source_bytes_read <- if (is.null(source_bytes_read)) {
+    NA_real_
+  } else {
+    as.numeric(source_bytes_read)
+  }
   io_seconds <- unname(proc.time()[["elapsed"]]) - io_started
   exposure_count <- length(exposure_files)
   exposure_data <- all_data[seq_len(exposure_count)]
@@ -328,7 +363,8 @@ fast_mr_compressed <- function(
     metadata$timing <- list(
       io_seconds = io_seconds,
       estimator_seconds = unname(proc.time()[["elapsed"]]) - estimator_started,
-      total_seconds = unname(proc.time()[["elapsed"]]) - total_started
+      total_seconds = unname(proc.time()[["elapsed"]]) - total_started,
+      source_bytes_read = source_bytes_read
     )
     attr(grid_result, "compressed_input") <- metadata
     return(grid_result)
@@ -338,12 +374,29 @@ fast_mr_compressed <- function(
   counts <- list()
   skipped <- character()
   invalid_omitted <- character()
+  missing_omitted <- character()
   row_index <- 0L
   count_index <- 0L
   for (exposure_name in names(exposure_data)) {
     exposure <- exposure_data[[exposure_name]]
     wanted <- instrument_sets[[exposure_name]]
-    exposure <- exposure[match(wanted, exposure$variant_key, nomatch = 0L), , drop = FALSE]
+    exposure_match <- match(wanted, exposure$variant_key, nomatch = 0L)
+    exposure_found <- sum(exposure_match > 0L)
+    if (isTRUE(strict) && exposure_found < length(wanted)) {
+      stop(
+        "missing requested exposure instrument(s) for ", exposure_name,
+        " (found ", exposure_found, " of ", length(wanted), ")",
+        call. = FALSE
+      )
+    }
+    if (!isTRUE(strict) && exposure_found < length(wanted)) {
+      missing_omitted <- c(
+        missing_omitted,
+        paste0(exposure_name, " exposure (found ", exposure_found, " of ",
+               length(wanted), ")")
+      )
+    }
+    exposure <- exposure[exposure_match[exposure_match > 0L], , drop = FALSE]
     exposure_valid <- is.finite(exposure$beta) & is.finite(exposure$standard_error) &
       exposure$standard_error > 0
     for (outcome_name in names(outcome_data)) {
@@ -356,6 +409,21 @@ fast_mr_compressed <- function(
         outcome_valid[found] <- is.finite(outcome$beta[outcome_rows]) &
           is.finite(outcome$standard_error[outcome_rows]) &
           outcome$standard_error[outcome_rows] > 0
+      }
+      outcome_found <- sum(found)
+      if (isTRUE(strict) && outcome_found < length(wanted)) {
+        stop(
+          "missing requested outcome instrument(s) for ", exposure_name,
+          " -> ", outcome_name, " (found ", outcome_found, " of ",
+          length(wanted), ")", call. = FALSE
+        )
+      }
+      if (!isTRUE(strict) && outcome_found < length(wanted)) {
+        missing_omitted <- c(
+          missing_omitted,
+          paste0(exposure_name, " -> ", outcome_name, " outcome (found ",
+                 outcome_found, " of ", length(wanted), ")")
+        )
       }
       invalid_exposure <- sum(!exposure_valid)
       invalid_outcome <- sum(found & !outcome_valid)
@@ -378,8 +446,8 @@ fast_mr_compressed <- function(
       count_index <- count_index + 1L
       counts[[count_index]] <- data.frame(
         id.exposure = exposure_name, id.outcome = outcome_name,
-        requested = length(wanted), exposure_found = nrow(exposure),
-        outcome_found = sum(found), invalid_exposure = invalid_exposure,
+        requested = length(wanted), exposure_found = exposure_found,
+        outcome_found = outcome_found, invalid_exposure = invalid_exposure,
         invalid_outcome = invalid_outcome, matched = sum(keep),
         stringsAsFactors = FALSE
       )
@@ -414,6 +482,12 @@ fast_mr_compressed <- function(
     warning("omitted invalid instrument value(s): ",
             paste(unique(invalid_omitted), collapse = "; "), call. = FALSE)
   }
+  if (length(missing_omitted)) {
+    warning(
+      "omitted missing requested instrument(s): ",
+      paste(unique(missing_omitted), collapse = "; "), call. = FALSE
+    )
+  }
   result <- do.call(fast_mr, c(list(
     data = do.call(rbind, rows), methods = methods, nboot = controls$nboot,
     seed = controls$seed, threads = controls$threads
@@ -428,7 +502,8 @@ fast_mr_compressed <- function(
     timing = list(
       io_seconds = io_seconds,
       estimator_seconds = unname(proc.time()[["elapsed"]]) - estimator_started,
-      total_seconds = unname(proc.time()[["elapsed"]]) - total_started
+      total_seconds = unname(proc.time()[["elapsed"]]) - total_started,
+      source_bytes_read = source_bytes_read
     )
   )
   result

@@ -19,6 +19,7 @@ spec <- fromJSON(args[[1L]], simplifyVector = FALSE)
 result_path <- args[[2L]]
 
 elapsed <- function() unname(proc.time()[["elapsed"]])
+`%||%` <- function(x, y) if (is.null(x)) y else x
 as_character_vector <- function(value) unname(unlist(value, use.names = FALSE))
 paths <- as_character_vector(spec$paths)
 keys <- as_character_vector(spec$keys)
@@ -33,9 +34,11 @@ stopifnot(length(io_threads) == 1L, is.finite(io_threads), io_threads >= 1L)
 stopifnot(length(paths) == exposures + outcomes || workload == "full_load")
 
 options(
-  CompreSSoR.persistent_worker = TRUE,
+  CompreSSoR.persistent_worker = FALSE,
   CompreSSoR.native_bridge = TRUE,
   CompreSSoR.coalesce_batch_reads = FALSE,
+  CompreSSoR.reload_batch_contexts = TRUE,
+  CompreSSoR.report_source_bytes = TRUE,
   CompreSSoR.tempdir = as.character(spec$tempdir)
 )
 Sys.setenv(
@@ -137,17 +140,20 @@ read_pcodec_sparse <- function(path) {
   data <- fast_read_compressed(
     path, variants = keys, columns = c("beta", "standard_error")
   )
+  source_bytes_read <- attr(data, "source_bytes_read", exact = TRUE)
   data <- as.data.table(data)
   data <- data[match(keys, variant_key)]
   stopifnot(
     nrow(data) == length(keys),
     identical(unname(data$variant_key), unname(keys))
   )
-  data[, .(
+  data <- data[, .(
     variant_key,
     beta = as.numeric(beta),
     standard_error = as.numeric(standard_error)
   )]
+  attr(data, "source_bytes_read") <- source_bytes_read
+  data
 }
 
 run_grid <- function(studies) {
@@ -186,7 +192,10 @@ serialize_mr <- function(result) {
     nsnp = as.integer(nsnp),
     b = as.numeric(b),
     se = as.numeric(se),
-    pval = as.numeric(pval)
+    pval = as.numeric(pval),
+    Q = as.numeric(Q),
+    Q_pval = as.numeric(Q_pval),
+    sigma = as.numeric(sigma)
   )]
 }
 
@@ -219,6 +228,10 @@ touch_full <- function(data) {
     se_sum = sum(data$standard_error, na.rm = TRUE),
     eaf_sum = sum(data$effect_allele_frequency, na.rm = TRUE),
     z_sum = sum(z, na.rm = TRUE),
+    beta_missing = sum(!is.finite(data$beta)),
+    se_missing = sum(!is.finite(data$standard_error)),
+    eaf_missing = sum(!is.finite(data$effect_allele_frequency)),
+    z_missing = sum(!is.finite(z)),
     first_key = compressor_variant_key(
       data$chromosome[[1L]], data$base_pair_location[[1L]],
       data$reference_allele[[1L]], data$alternate_allele[[1L]]
@@ -291,6 +304,7 @@ if (workload == "full_load") {
     vcf_full = read_full_vcf(paths[[1L]]),
     stop("unsupported full-load format: ", format, call. = FALSE)
   )
+  source_bytes_read <- attr(data, "source_bytes_read", exact = TRUE)
   read_seconds <- elapsed() - read_started
   touch_started <- elapsed()
   checksum <- touch_full(data)
@@ -303,6 +317,7 @@ if (workload == "full_load") {
     estimator_seconds = 0,
     touch_seconds = touch_seconds,
     object_bytes = as.numeric(object.size(data)),
+    source_bytes_read = as.numeric(source_bytes_read %||% NA_real_),
     checksum = checksum
   )
 } else if (format == "pcodec_direct") {
@@ -323,6 +338,7 @@ if (workload == "full_load") {
     total_seconds = elapsed() - total_started,
     io_seconds = internal$io_seconds,
     estimator_seconds = internal$estimator_seconds,
+    source_bytes_read = internal$source_bytes_read,
     io_threads = io_threads,
     touch_seconds = 0,
     pairs = nrow(mr),
@@ -339,6 +355,18 @@ if (workload == "full_load") {
   io_started <- elapsed()
   studies <- lapply(paths, reader)
   io_seconds <- elapsed() - io_started
+  source_bytes_read <- sum(vapply(
+    studies,
+    function(study) as.numeric(
+      attr(study, "source_bytes_read", exact = TRUE) %||% 0
+    ),
+    numeric(1L)
+  ))
+  input_signature <- list(
+    variant_key = studies[[1L]]$variant_key,
+    beta = as.numeric(studies[[1L]]$beta),
+    standard_error = as.numeric(studies[[1L]]$standard_error)
+  )
   estimator_started <- elapsed()
   mr <- run_grid(studies)
   estimator_seconds <- elapsed() - estimator_started
@@ -348,8 +376,14 @@ if (workload == "full_load") {
     total_seconds = elapsed() - total_started,
     io_seconds = io_seconds,
     estimator_seconds = estimator_seconds,
+    source_bytes_read = if (identical(format, "pcodec_explicit")) {
+      source_bytes_read
+    } else {
+      NA_real_
+    },
     touch_seconds = 0,
     pairs = nrow(mr),
+    input_signature = input_signature,
     mr = serialize_mr(mr)
   )
 }
@@ -360,4 +394,7 @@ result$package_versions <- list(
   fastMR = as.character(packageVersion("fastMR")),
   data.table = as.character(packageVersion("data.table"))
 )
-write_json(result, result_path, auto_unbox = TRUE, pretty = TRUE, digits = NA)
+write_json(
+  result, result_path, auto_unbox = TRUE, pretty = TRUE, digits = NA,
+  na = "null"
+)
