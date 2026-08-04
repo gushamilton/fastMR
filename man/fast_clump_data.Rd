@@ -4,18 +4,41 @@
 \alias{fast_clump_data}
 \title{Fast local LD clumping}
 \usage{
-fast_clump_data(dat, clump_kb = 10000, clump_r2 = 0.001, clump_p1 = 1,
-  ld_matrix = NULL, ld_snps = NULL, bfile = NULL, plink_bin = NULL)
+fast_clump_data(
+  dat,
+  clump_kb = 10000,
+  clump_r2 = 0.001,
+  clump_p1 = 1,
+  ld_matrix = NULL,
+  ld_snps = NULL,
+  bfile = NULL,
+  plink_bin = NULL
+)
 }
 \arguments{
-\item{dat}{Data frame containing \code{SNP}, optionally \code{pval.exposure}, and optionally \code{id.exposure}, \code{chr_name}, and \code{chrom_start}.}
+\item{dat}{Data frame containing \code{SNP}, optionally \code{pval.exposure}, and
+optionally \code{id.exposure}, \code{chr_name}, and \code{chrom_start}.}
+
 \item{clump_kb}{Maximum physical distance between index and secondary SNPs.}
+
 \item{clump_r2}{Minimum LD r-squared for removal.}
+
 \item{clump_p1}{Maximum p-value for index SNPs.}
+
 \item{ld_matrix}{Optional dense local correlation matrix.}
+
 \item{ld_snps}{Optional SNP names for \code{ld_matrix}.}
+
 \item{bfile}{Optional PLINK binary-prefix for local clumping.}
+
 \item{plink_bin}{Optional PLINK 1.9 executable path.}
 }
-\value{The input data frame filtered to retained index SNPs.}
-\description{Local greedy LD clumping from a supplied LD matrix, or delegation to a local PLINK reference panel.}
+\value{
+\code{dat} filtered to retained index SNPs.
+}
+\description{
+With \code{bfile} and \code{plink_bin}, delegates LD calculation to local PLINK.
+With \code{ld_matrix}, performs deterministic greedy index-SNP clumping in R
+without network access. The matrix row names (or \code{ld_snps}) must identify
+the SNPs and be in the same order as its rows and columns.
+}

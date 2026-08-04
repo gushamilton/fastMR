@@ -1220,6 +1220,33 @@ struct GridData {
   std::vector<double> mode_z;
 };
 
+double stable_grid_rss(const GridData& grid, int exposure, int outcome,
+                       double beta) {
+  const std::size_t exposure_offset =
+    static_cast<std::size_t>(exposure) * grid.snp_count;
+  const std::size_t outcome_offset =
+    static_cast<std::size_t>(outcome) * grid.snp_count;
+  long double sum = 0.0L;
+  long double correction = 0.0L;
+  const long double coefficient = static_cast<long double>(beta);
+  for (int snp = 0; snp < grid.snp_count; ++snp) {
+    const std::size_t exposure_index = exposure_offset + snp;
+    const std::size_t outcome_index = outcome_offset + snp;
+    const long double residual =
+      static_cast<long double>(grid.out_beta[outcome_index]) -
+      coefficient * static_cast<long double>(grid.exp_beta[exposure_index]);
+    const long double standard_error =
+      static_cast<long double>(grid.out_se[outcome_index]);
+    const long double term =
+      (residual / standard_error) * (residual / standard_error);
+    const long double adjusted = term - correction;
+    const long double updated = sum + adjusted;
+    correction = (updated - sum) - adjusted;
+    sum = updated;
+  }
+  return static_cast<double>(sum);
+}
+
 bool only_ivw_methods(const std::vector<std::string>& methods) {
   if (methods.empty()) return false;
   for (const std::string& method : methods) {
@@ -1312,9 +1339,16 @@ std::vector<Result> compute_ivw_grid_blas(
       if (std::isfinite(beta_value)) {
         const double y2 = out_y2[static_cast<std::size_t>(outcome)];
         rss = y2 - 2.0 * beta_value * num + beta_value * beta_value * den;
-        // BLAS reduction order can leave a tiny negative residue at an exact
-        // fit. Preserve the scalar path's non-negative RSS contract.
-        if (rss < 0.0 && rss > -1e-12 * std::max(1.0, y2)) rss = 0.0;
+        // The normal-equation subtraction is fast but loses precision for
+        // nearly exact fits. Recompute only cancellation-prone pairs from
+        // their residuals, using compensated long-double accumulation.
+        const double cancellation_scale = std::max({
+          1.0, std::abs(y2), std::abs(2.0 * beta_value * num),
+          std::abs(beta_value * beta_value * den)
+        });
+        if (rss < 0.0 || std::abs(rss) <= 1e-10 * cancellation_scale) {
+          rss = stable_grid_rss(grid, exposure, outcome, beta_value);
+        }
         if (rss >= 0.0 && std::isfinite(rss)) {
           sigma = std::sqrt(rss / static_cast<double>(snp_count - 1));
           base_se = std::sqrt(1.0 / den);
@@ -1434,7 +1468,13 @@ Rcpp::List compute_ivw_grid_compact(const GridData& grid,
         if (std::isfinite(beta_value)) {
           const double y2 = out_y2[static_cast<std::size_t>(outcome)];
           rss = y2 - 2.0 * beta_value * num + beta_value * beta_value * den;
-          if (rss < 0.0 && rss > -1e-12 * std::max(1.0, y2)) rss = 0.0;
+          const double cancellation_scale = std::max({
+            1.0, std::abs(y2), std::abs(2.0 * beta_value * num),
+            std::abs(beta_value * beta_value * den)
+          });
+          if (rss < 0.0 || std::abs(rss) <= 1e-10 * cancellation_scale) {
+            rss = stable_grid_rss(grid, exposure, outcome, beta_value);
+          }
           if (rss >= 0.0 && std::isfinite(rss)) {
             sigma_value = std::sqrt(rss / static_cast<double>(snp_count - 1));
             base_se = std::sqrt(1.0 / den);

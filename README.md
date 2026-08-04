@@ -27,7 +27,7 @@ OpenGWAS extraction, study metadata, or the broader TwoSampleMR ecosystem.
 
 ## Installation
 
-Install the development release from GitHub with:
+Install the current release from GitHub with:
 
 ```r
 install.packages("remotes")
@@ -128,6 +128,124 @@ binary. Parquet readers are available through optional `arrow` support:
 ```r
 fast_mr_parquet("summary_stats.parquet", methods = "ivw")
 ```
+
+## Direct MR from compressed GWAS files
+
+FastMR resolves canonical GRCh38 instruments from self-contained Pcodec
+[CompreSSoR](https://github.com/gushamilton/CompreSSoR) stores. Install both
+packages from GitHub and the pinned Python codec runtime:
+
+```sh
+Rscript -e 'remotes::install_github("gushamilton/CompreSSoR")'
+Rscript -e 'remotes::install_github("gushamilton/fastMR")'
+python3 -m pip install 'numpy==1.26.4' 'pcodec==1.0.3' 'zstandard==0.25.0'
+```
+
+Set `COMPRESSOR_PYTHON` when `python3` is not the intended interpreter. Then:
+
+```r
+instruments <- list(
+  bmi = c("1:12345:A:G", "2:67890:C:T"),
+  crp = c("1:54321:G:A", "6:112233:C:G")
+)
+
+result <- fast_mr_compressed(
+  exposure_files = c(bmi = "bmi.cpr", crp = "crp.cpr"),
+  outcome_files = c(cad = "cad.cpr", stroke = "stroke.cpr"),
+  instruments = instruments,
+  methods = "ivw",
+  io_threads = 1
+)
+
+attr(result, "compressed_input")$timing
+attr(result, "compressed_input")$counts
+```
+
+Each exposure is read only for its own instruments. Each outcome is read once
+for their union. All exposure and outcome requests share one codec process;
+ordinary reads may reuse validated indexes and identical requests. The matched
+beta/SE rows are passed directly to the compiled FastMR estimator: sparse MR
+does not reconstruct p-values and does not load a whole GWAS. The canonical key is
+`chromosome:position:REF:ALT`; beta, Z, and frequency in every CompreSSoR file
+refer to ALT, so matching keys are
+already aligned and no rsID dictionary is involved. Instrument discovery,
+association-threshold selection, and LD clumping remain explicit upstream
+steps. The reproducible I/O benchmark uses a frozen panel of 25 real FinnGen
+index variants selected at p < 1e-5 and clumped against GRCh38 1000 Genomes
+EUR (r2 < 0.001, 10 Mb); it does not ask the compressed reader to discover
+instruments. This path deliberately rejects legacy Parquet CompreSSoR stores
+because their variant-ID lookup does not implement the canonical-key index.
+
+The CompreSSoR README documents the complete import, GRCh38 liftover,
+canonical-reference harmonisation, Pcodec accuracy contract, store layout,
+and validation workflow. FastMR begins after those files have been created;
+it does not silently select instruments or reinterpret their allele identity.
+It also rejects a store unless its manifest explicitly declares GRCh38,
+self-contained REF/ALT identity, and ALT-oriented effects. With the default
+`strict = TRUE`, any missing requested exposure/outcome instrument or invalid
+beta/SE stops the analysis. `strict = FALSE` reports requested, found, invalid,
+and matched counts in the `compressed_input` attribute before omitting rows.
+
+When every exposure uses the same complete instrument panel and the requested
+methods do not need pair-specific bootstrap draws, `fast_mr_compressed()`
+constructs the matrices once and enters `fast_mr_grid()` directly. Otherwise
+it preserves the ordinary pairwise `fast_mr()` contract. In both cases the
+returned timing separates compressed I/O, estimation, total elapsed time, and,
+when enabled by CompreSSoR, compressed source bytes read.
+
+### Full-FinnGen compressed I/O benchmark
+
+This end-to-end Mac mini benchmark used a real 14,923,434-variant FinnGen GWAS
+and a frozen panel of 25 real, clumped index variants. It covers one exposure
+to one outcome, 5x5 and 25x25 grids, plus a complete-load endpoint. Association
+values are reused, but every logical study in every format is a distinct fresh
+`.noindex` scratch copy written through `F_NOCACHE`. Every trial starts a fresh
+R process; Pcodec request coalescing and its software page cache are disabled,
+reader contexts are fresh, and Pcodec read descriptors use `F_NOCACHE`.
+Staging is outside the timer. The 75 workload/format trials are randomized
+within five repetitions. The user-owned macOS media-analysis daemon was paused
+during timed trials and resumed afterwards; no root service or Spotlight
+configuration was changed.
+
+| Input path | 1x1 MR | 5x5 MR | 25x25 MR |
+|---|---:|---:|---:|
+| **CompreSSoR + FastMR direct** | **0.264 s** (0.255–0.309) | **0.479 s** (0.461–0.626) | **1.274 s** (1.249–1.378) |
+| CompreSSoR, explicit sequential reads | 0.387 s (0.379–0.389) | 1.581 s (1.535–1.612) | 7.624 s (7.535–7.653) |
+| VCF.gz + Tabix | 0.085 s (0.084–0.097) | 0.330 s (0.326–0.332) | 1.537 s (1.518–1.544) |
+| TSV.gz full scans | 6.747 s (6.692–6.777) | 32.830 s (32.412–33.883) | 165.266 s (163.466–173.130) |
+
+Cells are five-run median seconds with the complete range in parentheses.
+Direct compressed MR is 25.6x, 68.5x, and 129.7x faster than TSV.gz. Tabix
+wins the 1x1 and 5x5 sparse cases, while direct Pcodec crosses over by 25x25
+and is 1.21x faster than Tabix. It is 6.0x faster than explicit sequential
+Pcodec at that grid size. The 20-worker direct path was chosen from a current
+12/16/18/20-worker sweep; its 1.258 s median was only 0.55% ahead of 12 workers,
+which uses 219 MB rather than 270 MB median peak RSS.
+
+The complete-load endpoint traverses every returned vector and computes a
+checksum:
+
+| Format | Median total | Range | Median read/materialise | Median peak RSS |
+|---|---:|---:|---:|---:|
+| **CompreSSoR Pcodec** | **3.182 s** | 3.139–3.200 | **0.845 s** | 2.17 GB |
+| TSV.gz | 3.954 s | 3.938–4.036 | 1.690 s | 2.09 GB |
+| VCF.gz | 10.163 s | 9.834–10.356 | 7.623 s | 2.01 GB |
+
+The self-contained CompreSSoR store is 58,033,297 bytes, versus 201,658,018
+bytes for the eight-column TSV.gz and 228,634,485 bytes for VCF.gz plus `.tbi`.
+All trials passed cross-format identity and complete-load checksum gates,
+direct/explicit Pcodec equality, TSV/VCF exact numeric parity, and the declared
+Pcodec lossy-profile tolerances against raw beta/SE/Z.
+
+Reproduce the suite with
+[`benchmarks/run_cold_io_suite.py`](benchmarks/run_cold_io_suite.py) and
+[`benchmarks/cold_io_trial.R`](benchmarks/cold_io_trial.R). The committed
+[summary](outputs/compressed_io_cold_final_summary.csv),
+[all 75 runs](outputs/compressed_io_cold_final_runs.csv),
+[protocol/parity metadata](outputs/compressed_io_cold_final_metadata.json), and
+[I/O-worker sweep](outputs/pcodec_io_thread_sweep.csv) are the authoritative
+records. The older warm, same-inode benchmark remains in `outputs/` only as
+historical engineering evidence.
 
 ## Benchmarks
 

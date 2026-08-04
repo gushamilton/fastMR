@@ -1,3 +1,30 @@
+# fastMR 0.1.8
+
+- Uses CompreSSoR's persistent wrapped-Pcodec reader and exact canonical keys
+  for direct compressed-input MR.
+- Adds a shared-instrument native IVW grid shortcut while retaining the
+  established pair-specific seed stream for bootstrap-dependent methods.
+- Separates explicit ten-read, optimized same-store deduplication, Tabix, and
+  TSV.gz paths in the real FinnGen benchmark and applies the same IVW grid
+  estimator to every fair-comparison path.
+
+# fastMR 0.1.7
+
+- Batches every compressed exposure and outcome read through one CompreSSoR
+  process, removing repeated Python startup and reusing identical requests.
+- Adds a corrected full-FinnGen 5 x 5 benchmark: median 0.140 seconds from
+  Pcodec, 0.196 seconds from VCF.gz plus Tabix, and 18.175 seconds from ten
+  TSV.gz scans, with all 25 REF/ALT keys and IVW results checked.
+
+# fastMR 0.1.6
+
+- Adds `fast_read_compressed()` and `fast_mr_compressed()` for indexed,
+  canonical-key MR directly from self-contained CompreSSoR stores.
+- Reads each exposure only for its instruments and each outcome once for the
+  union, with optional file-level parallelism and explicit overlap counts.
+- Fails clearly on unsupported backends, duplicate keys, corrupt parallel
+  reads, and invalid statistics; non-strict runs report every omitted value.
+
 # fastMR 0.1.5
 
 * Added fast heterogeneity, MR-Egger pleiotropy, single-SNP, and leave-one-out

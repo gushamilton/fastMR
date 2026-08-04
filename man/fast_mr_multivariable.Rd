@@ -2,11 +2,17 @@
 % Please edit documentation in R/multivariable.R
 \name{fast_mr_multivariable}
 \alias{fast_mr_multivariable}
-\title{Multivariable IVW MR with shared or specific instruments}
+\title{Multivariable IVW with shared or exposure-specific instrument sets}
 \usage{
-fast_mr_multivariable(exposure_beta, outcome_beta, outcome_se,
-  exposure_pval = NULL, pval_threshold = 5e-08, intercept = FALSE,
-  instrument_specific = FALSE)
+fast_mr_multivariable(
+  exposure_beta,
+  outcome_beta,
+  outcome_se,
+  exposure_pval = NULL,
+  pval_threshold = 5e-08,
+  intercept = FALSE,
+  instrument_specific = FALSE
+)
 }
 \arguments{
 \item{exposure_beta}{Numeric matrix, SNPs by exposures.}
@@ -23,8 +29,11 @@ fast_mr_multivariable(exposure_beta, outcome_beta, outcome_se,
 
 \item{instrument_specific}{Fit each coefficient using its own passing SNPs.}
 }
-\value{A tidy data frame with one row per exposure.}
+\value{
+A tidy data frame with one row per exposure.
+}
 \description{
-Local matrix equivalent of the common TwoSampleMR \code{mv_multiple()} path.
-Native plotting objects are intentionally omitted.
+This is the local matrix equivalent of the common \code{mv_multiple()} path in
+TwoSampleMR. It supports an intercept and the native \code{instrument_specific}
+choice, but deliberately omits native plotting objects.
 }

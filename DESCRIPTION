@@ -1,28 +1,34 @@
 Package: fastMR
 Title: Exact and Fast Summary-Statistics Mendelian Randomization
-Version: 0.1.5
-Date: 2026-08-02
+Version: 0.1.8
+Date: 2026-08-04
 Authors@R: person("Fergus", "Hamilton", email = "fergushamilton@users.noreply.github.com", role = c("aut", "cre"))
 Author: Fergus Hamilton [aut, cre]
 Maintainer: Fergus Hamilton <fergushamilton@users.noreply.github.com>
 Description: Exact summary-statistics Mendelian randomization methods with a
     registered C++ shared-grid backend. The package provides a small,
     dependency-light R interface for TwoSampleMR-style tidy data, including
-    local harmonisation, LD clumping, and optional Arrow Parquet input.
+    local harmonisation, LD clumping, optional Arrow Parquet input, and direct
+    canonical-key MR from self-contained CompreSSoR stores.
 License: MIT + file LICENSE
 URL: https://github.com/gushamilton/fastMR
 BugReports: https://github.com/gushamilton/fastMR/issues
+Remotes:
+    gushamilton/CompreSSoR
 Encoding: UTF-8
 Roxygen: list(markdown = TRUE)
 RoxygenNote: 7.3.3
 Depends:
     R (>= 4.1.0)
 Imports:
-    Rcpp
+    Rcpp,
+    parallel
 LinkingTo:
     Rcpp
 Suggests:
     arrow,
+    CompreSSoR (>= 0.3.0),
     testthat (>= 3.0.0)
 Config/testthat/edition: 3
-SystemRequirements: C++17
+SystemRequirements: C++17; Python (>= 3.10) with numpy 1.26, pcodec 1.0,
+    and zstandard 0.25 for optional compressed-GWAS input
