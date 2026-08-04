@@ -14,7 +14,7 @@ License: MIT + file LICENSE
 URL: https://github.com/gushamilton/fastMR
 BugReports: https://github.com/gushamilton/fastMR/issues
 Remotes:
-    gushamilton/CompreSSoR@agent/pcodec-r-package
+    gushamilton/CompreSSoR
 Encoding: UTF-8
 Roxygen: list(markdown = TRUE)
 RoxygenNote: 7.3.3

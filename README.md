@@ -27,16 +27,12 @@ OpenGWAS extraction, study metadata, or the broader TwoSampleMR ecosystem.
 
 ## Installation
 
-Install the current compressed-GWAS development release from its pull-request
-branch with:
+Install the current release from GitHub with:
 
 ```r
 install.packages("remotes")
-remotes::install_github("gushamilton/fastMR@agent/compressed-gwas-mr")
+remotes::install_github("gushamilton/fastMR")
 ```
-
-After that branch is merged, `remotes::install_github("gushamilton/fastMR")`
-installs the same functionality from the main branch.
 
 For a local checkout:
 
@@ -136,13 +132,12 @@ fast_mr_parquet("summary_stats.parquet", methods = "ivw")
 ## Direct MR from compressed GWAS files
 
 FastMR resolves canonical GRCh38 instruments from self-contained Pcodec
-[CompreSSoR](https://github.com/gushamilton/CompreSSoR/tree/agent/pcodec-r-package)
-stores. Until both pull-request branches are merged, install the matching
-development versions and the pinned Python codec runtime:
+[CompreSSoR](https://github.com/gushamilton/CompreSSoR) stores. Install both
+packages from GitHub and the pinned Python codec runtime:
 
 ```sh
-Rscript -e 'remotes::install_github("gushamilton/CompreSSoR@agent/pcodec-r-package")'
-Rscript -e 'remotes::install_github("gushamilton/fastMR@agent/compressed-gwas-mr")'
+Rscript -e 'remotes::install_github("gushamilton/CompreSSoR")'
+Rscript -e 'remotes::install_github("gushamilton/fastMR")'
 python3 -m pip install 'numpy==1.26.4' 'pcodec==1.0.3' 'zstandard==0.25.0'
 ```
 
