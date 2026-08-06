@@ -325,13 +325,14 @@ fastmr_compressed_candidate_data <- function(paths, labels, pvalue_threshold,
                                     pval.exposure = numeric(), chr_name = character(),
                                     chrom_start = numeric(), stringsAsFactors = FALSE))
     key <- CompreSSoR::compressor_variant_key(
-      x$chromosome, x$base_pair_location, x$other_allele, x$effect_allele
+      x[["chromosome"]], x[["base_pair_location"]],
+      x[["other_allele"]], x[["effect_allele"]]
     )
-    p <- suppressWarnings(as.numeric(x$p_value))
+    p <- suppressWarnings(as.numeric(x[["p_value"]]))
     keep <- is.finite(p) & p <= pvalue_threshold
     data.frame(SNP = key[keep], id.exposure = labels[[i]], pval.exposure = p[keep],
-               chr_name = as.character(x$chromosome[keep]),
-               chrom_start = as.numeric(x$base_pair_location[keep]),
+               chr_name = as.character(x[["chromosome"]][keep]),
+               chrom_start = as.numeric(x[["base_pair_location"]][keep]),
                stringsAsFactors = FALSE)
   })
   names(data) <- labels
