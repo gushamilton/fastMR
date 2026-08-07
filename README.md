@@ -448,6 +448,11 @@ with the reproducible script at
 
 - Use `fast_mr_grid()` when scanning many exposure/outcome pairs; for one pair,
   R/data-frame overhead becomes a larger share of elapsed time.
+- Use `fast_mr_masked_ivw()` for dense beta blocks with pair-specific logical
+  instrument masks, or `fast_mr_sparse_ivw()` when exposure instruments are
+  naturally stored as a zero-based CSR panel. Both return compact `E x O`
+  matrices and reject oversized output/native workspaces before allocation;
+  process outcomes in batches when the limits are exceeded.
 - Pre-harmonise and clump once, then reuse the resulting matrices across scans.
 - Increase `threads` for large grids, but do not expect linear scaling on tiny
   workloads.
