@@ -100,6 +100,10 @@ fastmr_validate_compressed_store <- function(store) {
 }
 
 fastmr_finalize_compressed_read <- function(out, columns) {
+  if (!is.data.frame(out)) {
+    detail <- if (inherits(out, "condition")) conditionMessage(out) else as.character(out)
+    stop("compressed reader returned an invalid result: ", detail, call. = FALSE)
+  }
   identity <- c("chromosome", "base_pair_location", "effect_allele", "other_allele")
   if (!nrow(out)) {
     out$variant_key <- character()
@@ -129,6 +133,21 @@ fastmr_io_map <- function(paths, keys, columns, io_threads) {
         stop("batched compressed read failed: ", conditionMessage(error), call. = FALSE)
       }
     )
+    failed <- !vapply(result, is.data.frame, logical(1))
+    if (any(failed)) {
+      first <- which(failed)[1L]
+      failed_result <- result[[first]]
+      condition <- attr(failed_result, "condition", exact = TRUE)
+      detail <- if (inherits(condition, "condition")) {
+        conditionMessage(condition)
+      } else {
+        as.character(failed_result)
+      }
+      stop(
+        "batched compressed read failed for ", paths[[first]], ": ", detail,
+        call. = FALSE
+      )
+    }
     source_bytes_read <- attr(result, "source_bytes_read", exact = TRUE)
     result <- lapply(result, fastmr_finalize_compressed_read, columns = columns)
     attr(result, "source_bytes_read") <- source_bytes_read
@@ -294,6 +313,9 @@ fast_read_compressed <- function(
 #' @param strict If `TRUE`, fail when any requested instrument is missing, on
 #'   invalid beta/standard-error values, and when a pair has fewer than
 #'   `minimum_snps`; otherwise omit unavailable or invalid rows with warnings.
+#' @param output Optional path for a Zstandard-compressed Parquet copy of the
+#'   result. The path must not already exist; use [fast_write_parquet()] when
+#'   an overwrite or another compression codec is required.
 #' @param ... Additional options passed to [fast_mr()].
 #' @return A tidy FastMR result with extraction metadata in the
 #'   `compressed_input` attribute.
@@ -309,6 +331,7 @@ fast_mr_compressed <- function(
     io_threads = 1,
     minimum_snps = 1L,
     strict = TRUE,
+    output = NULL,
     ...) {
   total_started <- unname(proc.time()[["elapsed"]])
   fastmr_require_compressor()
@@ -367,7 +390,7 @@ fast_mr_compressed <- function(
       source_bytes_read = source_bytes_read
     )
     attr(grid_result, "compressed_input") <- metadata
-    return(grid_result)
+    return(fastmr_write_result(grid_result, output))
   }
 
   rows <- list()
@@ -506,5 +529,5 @@ fast_mr_compressed <- function(
       source_bytes_read = source_bytes_read
     )
   )
-  result
+  fastmr_write_result(result, output)
 }

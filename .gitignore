@@ -8,9 +8,12 @@
 *.o
 *.dll
 *.dylib
+src/symbols.rds
 benchmarks/_installed/
 outputs/*.rds
 outputs/*.parquet
+results/two_sample_mr_gzip_benchmark/*
+!results/two_sample_mr_gzip_benchmark/.gitkeep
 tests/testthat/_snaps/
 .local/
 *.Rcheck/

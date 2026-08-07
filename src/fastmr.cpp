@@ -10,6 +10,7 @@
 #include <numeric>
 #include <string>
 #include <thread>
+#include <unordered_set>
 #include <utility>
 #include <vector>
 
@@ -1521,6 +1522,246 @@ Rcpp::List compute_ivw_grid_compact(const GridData& grid,
   return output;
 }
 
+Rcpp::List compute_masked_ivw_grid(
+    Rcpp::NumericMatrix exp_beta, Rcpp::NumericMatrix out_beta,
+    Rcpp::NumericMatrix out_se, Rcpp::LogicalMatrix exp_present,
+    Rcpp::LogicalMatrix out_present) {
+  const int exposure_count = exp_beta.nrow();
+  const int outcome_count = out_beta.nrow();
+  const int snp_count = exp_beta.ncol();
+  if (exposure_count == 0 || outcome_count == 0 || snp_count == 0 ||
+      exp_present.nrow() != exposure_count || exp_present.ncol() != snp_count ||
+      out_present.nrow() != outcome_count || out_present.ncol() != snp_count ||
+      out_se.nrow() != outcome_count || out_se.ncol() != snp_count) {
+    Rcpp::stop("masked IVW matrices must have matching non-empty dimensions");
+  }
+
+  const std::size_t exp_size = static_cast<std::size_t>(exposure_count) * snp_count;
+  const std::size_t out_size = static_cast<std::size_t>(outcome_count) * snp_count;
+  std::vector<double> exp_values(exp_size, 0.0);
+  std::vector<double> exp_squared(exp_size, 0.0);
+  std::vector<double> exp_presence(exp_size, 0.0);
+  std::vector<double> out_weight(out_size, 0.0);
+  std::vector<double> out_weighted(out_size, 0.0);
+  std::vector<double> out_y2_weighted(out_size, 0.0);
+  std::vector<double> out_valid(out_size, 0.0);
+
+  for (int exposure = 0; exposure < exposure_count; ++exposure) {
+    for (int snp = 0; snp < snp_count; ++snp) {
+      const std::size_t index = static_cast<std::size_t>(exposure) * snp_count + snp;
+      if (!exp_present(exposure, snp)) continue;
+      const double value = exp_beta(exposure, snp);
+      if (!std::isfinite(value)) Rcpp::stop("present exposure values must be finite");
+      exp_values[index] = value;
+      exp_squared[index] = value * value;
+      exp_presence[index] = 1.0;
+    }
+  }
+  for (int outcome = 0; outcome < outcome_count; ++outcome) {
+    for (int snp = 0; snp < snp_count; ++snp) {
+      const std::size_t index = static_cast<std::size_t>(outcome) * snp_count + snp;
+      if (!out_present(outcome, snp)) continue;
+      const double value = out_beta(outcome, snp);
+      const double se = out_se(outcome, snp);
+      if (!std::isfinite(value) || !std::isfinite(se) || se <= 0.0) {
+        Rcpp::stop("present outcome values must be finite with positive standard errors");
+      }
+      const double weight = 1.0 / (se * se);
+      out_weight[index] = weight;
+      out_weighted[index] = weight * value;
+      out_y2_weighted[index] = weight * value * value;
+      out_valid[index] = 1.0;
+    }
+  }
+
+  const std::size_t pair_count = static_cast<std::size_t>(exposure_count) * outcome_count;
+  std::vector<double> numerator(pair_count, 0.0);
+  std::vector<double> denominator(pair_count, 0.0);
+  std::vector<double> yy(pair_count, 0.0);
+  std::vector<double> nsnp(pair_count, 0.0);
+  const char transposed = 'T';
+  const char normal = 'N';
+  const int m = exposure_count;
+  const int n = outcome_count;
+  const int k = snp_count;
+  const int lda = snp_count;
+  const int ldb = snp_count;
+  const int ldc = exposure_count;
+  const double alpha = 1.0;
+  const double beta_zero = 0.0;
+  F77_CALL(dgemm)(&transposed, &normal, &m, &n, &k, &alpha,
+                  exp_values.data(), &lda, out_weighted.data(), &ldb,
+                  &beta_zero, numerator.data(), &ldc FCONE FCONE);
+  F77_CALL(dgemm)(&transposed, &normal, &m, &n, &k, &alpha,
+                  exp_squared.data(), &lda, out_weight.data(), &ldb,
+                  &beta_zero, denominator.data(), &ldc FCONE FCONE);
+  F77_CALL(dgemm)(&transposed, &normal, &m, &n, &k, &alpha,
+                  exp_presence.data(), &lda, out_y2_weighted.data(), &ldb,
+                  &beta_zero, yy.data(), &ldc FCONE FCONE);
+  F77_CALL(dgemm)(&transposed, &normal, &m, &n, &k, &alpha,
+                  exp_presence.data(), &lda, out_valid.data(), &ldb,
+                  &beta_zero, nsnp.data(), &ldc FCONE FCONE);
+
+  Rcpp::NumericMatrix result_beta(exposure_count, outcome_count);
+  Rcpp::NumericMatrix result_se(exposure_count, outcome_count);
+  Rcpp::NumericMatrix result_q(exposure_count, outcome_count);
+  Rcpp::NumericMatrix result_sigma(exposure_count, outcome_count);
+  Rcpp::NumericMatrix result_nsnp(exposure_count, outcome_count);
+  std::fill(result_beta.begin(), result_beta.end(), NA_VALUE);
+  std::fill(result_se.begin(), result_se.end(), NA_VALUE);
+  std::fill(result_q.begin(), result_q.end(), NA_VALUE);
+  std::fill(result_sigma.begin(), result_sigma.end(), NA_VALUE);
+  std::fill(result_nsnp.begin(), result_nsnp.end(), 0.0);
+  for (int exposure = 0; exposure < exposure_count; ++exposure) {
+    for (int outcome = 0; outcome < outcome_count; ++outcome) {
+      const std::size_t index = static_cast<std::size_t>(exposure) +
+                                static_cast<std::size_t>(exposure_count) * outcome;
+      const double count = nsnp[index];
+      result_nsnp(exposure, outcome) = count;
+      if (count < 2.0 || !std::isfinite(denominator[index]) || denominator[index] <= 0.0) continue;
+      const double beta_value = numerator[index] / denominator[index];
+      if (!std::isfinite(beta_value)) continue;
+      double q_value = yy[index] - 2.0 * beta_value * numerator[index] +
+                       beta_value * beta_value * denominator[index];
+      if (q_value < 0.0) q_value = 0.0;
+      const double sigma = std::sqrt(q_value / (count - 1.0));
+      const double base_se = std::sqrt(1.0 / denominator[index]);
+      if (!std::isfinite(sigma) || !std::isfinite(base_se)) continue;
+      result_beta(exposure, outcome) = beta_value;
+      result_sigma(exposure, outcome) = sigma;
+      result_se(exposure, outcome) = base_se * std::max(1.0, sigma);
+      result_q(exposure, outcome) = q_value;
+    }
+  }
+  Rcpp::List output = Rcpp::List::create(
+    Rcpp::_["nsnp"] = result_nsnp,
+    Rcpp::_["beta"] = result_beta,
+    Rcpp::_["se"] = result_se,
+    Rcpp::_["Q"] = result_q,
+    Rcpp::_["sigma"] = result_sigma
+  );
+  output.attr("class") = "fastmr_masked_ivw_compact";
+  return output;
+}
+
+// Fused sparse exposure-by-dense outcome IVW.  The exposure instruments are
+// supplied as a CSR matrix: row_ptr has E + 1 entries and col_index contains
+// zero-based SNP column indices.  Outcome matrices are B x U in ordinary R
+// layout (outcome rows, SNP columns).  This avoids materialising the very
+// sparse E x U exposure panel and performs the four IVW accumulations in one
+// pass over the non-zero exposure instruments.
+Rcpp::List compute_sparse_ivw_grid(
+    Rcpp::IntegerVector row_ptr, Rcpp::IntegerVector col_index,
+    Rcpp::NumericVector exposure_beta, Rcpp::NumericMatrix outcome_beta,
+    Rcpp::NumericMatrix outcome_se, Rcpp::LogicalMatrix outcome_present,
+    int threads) {
+  const int exposure_count = row_ptr.size() - 1;
+  const int outcome_count = outcome_beta.nrow();
+  const int snp_count = outcome_beta.ncol();
+  if (exposure_count <= 0 || outcome_count <= 0 || snp_count <= 0) {
+    Rcpp::stop("sparse IVW inputs must have positive dimensions");
+  }
+  if (outcome_se.nrow() != outcome_count || outcome_se.ncol() != snp_count ||
+      outcome_present.nrow() != outcome_count || outcome_present.ncol() != snp_count) {
+    Rcpp::stop("sparse IVW outcome matrices must have matching dimensions");
+  }
+  if (row_ptr[0] != 0 || row_ptr[exposure_count] != col_index.size() ||
+      exposure_beta.size() != col_index.size()) {
+    Rcpp::stop("invalid sparse IVW CSR offsets or values");
+  }
+  for (int exposure = 0; exposure < exposure_count; ++exposure) {
+    if (row_ptr[exposure] < 0 || row_ptr[exposure + 1] < row_ptr[exposure]) {
+      Rcpp::stop("CSR row_ptr must be non-decreasing and non-negative");
+    }
+    std::unordered_set<int> seen;
+    seen.reserve(static_cast<std::size_t>(row_ptr[exposure + 1] - row_ptr[exposure]));
+    for (int index = row_ptr[exposure]; index < row_ptr[exposure + 1]; ++index) {
+      if (!seen.insert(col_index[index]).second) {
+        Rcpp::stop("sparse IVW CSR rows must not contain duplicate SNP indices");
+      }
+    }
+  }
+  for (int index = 0; index < col_index.size(); ++index) {
+    if (col_index[index] < 0 || col_index[index] >= snp_count ||
+        !std::isfinite(exposure_beta[index])) {
+      Rcpp::stop("sparse IVW exposure entries must have valid SNP indices and finite betas");
+    }
+  }
+  for (int outcome = 0; outcome < outcome_count; ++outcome) {
+    for (int snp = 0; snp < snp_count; ++snp) {
+      if (!outcome_present(outcome, snp)) continue;
+      const double beta = outcome_beta(outcome, snp);
+      const double se = outcome_se(outcome, snp);
+      if (!std::isfinite(beta) || !std::isfinite(se) || se <= 0.0) {
+        Rcpp::stop("present outcome values must be finite with positive standard errors");
+      }
+    }
+  }
+
+  Rcpp::NumericMatrix result_beta(exposure_count, outcome_count);
+  Rcpp::NumericMatrix result_se(exposure_count, outcome_count);
+  Rcpp::NumericMatrix result_q(exposure_count, outcome_count);
+  Rcpp::NumericMatrix result_sigma(exposure_count, outcome_count);
+  Rcpp::NumericMatrix result_nsnp(exposure_count, outcome_count);
+  std::fill(result_beta.begin(), result_beta.end(), NA_VALUE);
+  std::fill(result_se.begin(), result_se.end(), NA_VALUE);
+  std::fill(result_q.begin(), result_q.end(), NA_VALUE);
+  std::fill(result_sigma.begin(), result_sigma.end(), NA_VALUE);
+  std::fill(result_nsnp.begin(), result_nsnp.end(), 0.0);
+
+#ifdef _OPENMP
+  const int thread_count = std::max(1, std::min(threads, exposure_count));
+#pragma omp parallel for schedule(static) num_threads(thread_count)
+#endif
+  for (int exposure = 0; exposure < exposure_count; ++exposure) {
+    const int first = row_ptr[exposure];
+    const int last = row_ptr[exposure + 1];
+    for (int outcome = 0; outcome < outcome_count; ++outcome) {
+      double numerator = 0.0;
+      double denominator = 0.0;
+      double yy = 0.0;
+      double count = 0.0;
+      for (int index = first; index < last; ++index) {
+        const int snp = col_index[index];
+        if (!outcome_present(outcome, snp)) continue;
+        const double x = exposure_beta[index];
+        const double y = outcome_beta(outcome, snp);
+        const double se = outcome_se(outcome, snp);
+        const double weight = 1.0 / (se * se);
+        numerator += x * weight * y;
+        denominator += x * x * weight;
+        yy += weight * y * y;
+        count += 1.0;
+      }
+      const std::size_t result_index = static_cast<std::size_t>(exposure) +
+                                       static_cast<std::size_t>(exposure_count) * outcome;
+      result_nsnp[ result_index ] = count;
+      if (count < 2.0 || !std::isfinite(denominator) || denominator <= 0.0) continue;
+      const double beta_value = numerator / denominator;
+      if (!std::isfinite(beta_value)) continue;
+      double q_value = yy - 2.0 * beta_value * numerator +
+                       beta_value * beta_value * denominator;
+      if (q_value < 0.0) q_value = 0.0;
+      const double sigma_value = std::sqrt(q_value / (count - 1.0));
+      const double base_se = std::sqrt(1.0 / denominator);
+      if (!std::isfinite(sigma_value) || !std::isfinite(base_se)) continue;
+      result_beta[ result_index ] = beta_value;
+      result_sigma[ result_index ] = sigma_value;
+      result_se[ result_index ] = base_se * std::max(1.0, sigma_value);
+      result_q[ result_index ] = q_value;
+    }
+  }
+  Rcpp::List output = Rcpp::List::create(
+    Rcpp::_["nsnp"] = result_nsnp,
+    Rcpp::_["beta"] = result_beta,
+    Rcpp::_["se"] = result_se,
+    Rcpp::_["Q"] = result_q,
+    Rcpp::_["sigma"] = result_sigma
+  );
+  output.attr("class") = "fastmr_sparse_ivw_compact";
+  return output;
+}
+
 GridData copy_grid(Rcpp::NumericMatrix exp_beta, Rcpp::NumericMatrix out_beta,
                   Rcpp::NumericMatrix exp_se, Rcpp::NumericMatrix out_se) {
   validate_grid_shapes(exp_beta, out_beta, exp_se, out_se);
@@ -1962,4 +2203,26 @@ Rcpp::List fastmr_grid_native(Rcpp::NumericMatrix exposure_beta,
   defer_r_math.store(false, std::memory_order_relaxed);
   for (Result& result : results) populate_result_pvalues(result);
   return results_to_compact_grid(results, parsed_methods);
+}
+
+// [[Rcpp::export]]
+Rcpp::List fastmr_masked_ivw_native(
+    Rcpp::NumericMatrix exposure_beta, Rcpp::NumericMatrix outcome_beta,
+    Rcpp::NumericMatrix outcome_se, Rcpp::LogicalMatrix exposure_present,
+    Rcpp::LogicalMatrix outcome_present, int threads = 1) {
+  validate_controls(0, threads, 1.0);
+  return compute_masked_ivw_grid(
+    exposure_beta, outcome_beta, outcome_se, exposure_present, outcome_present);
+}
+
+// [[Rcpp::export]]
+Rcpp::List fastmr_sparse_ivw_native(
+    Rcpp::IntegerVector row_ptr, Rcpp::IntegerVector col_index,
+    Rcpp::NumericVector exposure_beta, Rcpp::NumericMatrix outcome_beta,
+    Rcpp::NumericMatrix outcome_se, Rcpp::LogicalMatrix outcome_present,
+    int threads = 1) {
+  validate_controls(0, threads, 1.0);
+  return compute_sparse_ivw_grid(row_ptr, col_index, exposure_beta,
+                                 outcome_beta, outcome_se, outcome_present,
+                                 threads);
 }

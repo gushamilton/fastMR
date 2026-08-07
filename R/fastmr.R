@@ -10,6 +10,9 @@
 #'   ratio bootstrap layout per pair.
 #' @param threads Maximum native worker count. It is most useful for
 #'   [fast_mr_grid()]; single-pair calls remain bounded and deterministic.
+#' @param output Optional path for a Zstandard-compressed Parquet copy of the
+#'   result. The path must not already exist; use [fast_write_parquet()] when
+#'   an overwrite or another compression codec is required.
 #' @param ... Optional `phi` bandwidth multiplier for mode methods and `penk`
 #'   penalty multiplier for penalised weighted median (default 20).
 #' @return A tidy data frame using TwoSampleMR-compatible result columns.
@@ -19,6 +22,7 @@ fast_mr <- function(data,
                     nboot = 1000,
                     seed = NULL,
                     threads = 1,
+                    output = NULL,
                     ...) {
   if (!is.data.frame(data)) stop("data must be a data.frame", call. = FALSE)
   controls <- fastmr_validate_controls(nboot, seed, threads)
@@ -75,8 +79,8 @@ fast_mr <- function(data,
     rows[[i]] <- fastmr_tidy_native(native, methods, id.exp[representative], id.out[representative],
                                      exposure_label = label.exp, outcome_label = label.out)
   }
-  if (!length(rows)) return(fastmr_tidy_native(list(), methods))
-  do.call(rbind, rows)
+  if (!length(rows)) return(fastmr_write_result(fastmr_tidy_native(list(), methods), output))
+  fastmr_write_result(do.call(rbind, rows), output)
 }
 
 #' Run every exposure/outcome pair in a shared exact grid
@@ -92,13 +96,16 @@ fast_mr <- function(data,
 #' @param nboot Number of bootstrap draws.
 #' @param seed Optional integer seed.
 #' @param threads Maximum native worker count.
+#' @param output Optional path for a Zstandard-compressed Parquet copy of the
+#'   result. The path must not already exist; use [fast_write_parquet()] when
+#'   an overwrite or another compression codec is required.
 #' @param ... Optional `phi` bandwidth multiplier for mode methods and `penk`
 #'   penalty multiplier for penalised weighted median (default 20).
 #' @return A tidy data frame with one row per method and grid pair.
 #' @export
 fast_mr_grid <- function(exposure_beta, outcome_beta, exposure_se, outcome_se,
                          methods = c("ivw", "egger", "weighted_median", "simple_mode", "weighted_mode"),
-                         nboot = 1000, seed = NULL, threads = 1, ...) {
+                         nboot = 1000, seed = NULL, threads = 1, output = NULL, ...) {
   controls <- fastmr_validate_controls(nboot, seed, threads)
   methods <- fastmr_normalize_methods(methods)
   dots <- list(...)
@@ -141,5 +148,5 @@ fast_mr_grid <- function(exposure_beta, outcome_beta, exposure_se, outcome_se,
   out.labels <- rownames(arrays$outcome_beta)
   if (is.null(exp.labels)) exp.labels <- as.character(seq_len(nrow(arrays$exposure_beta)))
   if (is.null(out.labels)) out.labels <- as.character(seq_len(nrow(arrays$outcome_beta)))
-  fastmr_tidy_grid_native(native, methods, exp.labels, out.labels)
+  fastmr_write_result(fastmr_tidy_grid_native(native, methods, exp.labels, out.labels), output)
 }

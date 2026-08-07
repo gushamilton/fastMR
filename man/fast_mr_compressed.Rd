@@ -7,7 +7,7 @@ exposure-outcome analysis without rsID lookup or whole-GWAS materialisation.}
 \usage{
 fast_mr_compressed(exposure_files, outcome_files, instruments,
   methods = "ivw", nboot = 0, seed = NULL, threads = 1,
-  io_threads = 1, minimum_snps = 1L, strict = TRUE, ...)
+  io_threads = 1, minimum_snps = 1L, strict = TRUE, output = NULL, ...)
 }
 \arguments{
   \item{exposure_files}{Named character vector of Pcodec CompreSSoR stores.}
@@ -23,6 +23,9 @@ fast_mr_compressed(exposure_files, outcome_files, instruments,
   \item{minimum_snps}{Minimum matched instruments required for each pair.}
   \item{strict}{Fail on invalid beta/standard-error values and on pairs below
   \code{minimum_snps}; otherwise omit them with explicit warnings.}
+  \item{output}{Optional path for a Zstandard-compressed Parquet copy of the
+  result. The path must not already exist; use \code{\link{fast_write_parquet}}
+  when an overwrite or another compression codec is required.}
   \item{...}{Additional options passed to \code{fast_mr()}.}
 }
 \value{A tidy FastMR result. Extraction counts and input details are retained
