@@ -25,3 +25,11 @@ diagnostic_fixture <- function() {
   d$mr_keep <- TRUE
   d
 }
+skip_if_compressor_unconfigured <- function() {
+  skip_if_not_installed("CompreSSoR")
+  reference <- Sys.getenv("COMPRESSOR_CANONICAL_REFERENCE", unset = "")
+  skip_if(
+    !nzchar(reference) || !file.exists(reference),
+    "CompreSSoR native tests require COMPRESSOR_CANONICAL_REFERENCE"
+  )
+}

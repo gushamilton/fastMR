@@ -15,7 +15,7 @@ compressed_fixture <- function(multiplier = 1) {
 }
 
 test_that("FastMR reads canonical keys from CompreSSoR", {
-  skip_if_not_installed("CompreSSoR")
+  skip_if_compressor_unconfigured()
 
   input <- compressed_fixture()
   store <- tempfile("fastmr-compressed-read-")
@@ -35,7 +35,7 @@ test_that("FastMR reads canonical keys from CompreSSoR", {
 })
 
 test_that("compressed 2 x 2 MR equals the explicitly decoded workflow", {
-  skip_if_not_installed("CompreSSoR")
+  skip_if_compressor_unconfigured()
 
   stores <- vapply(c(1, 1.3, 0.7, -0.4), function(multiplier) {
     path <- tempfile("fastmr-compressed-grid-")
@@ -162,7 +162,7 @@ test_that("shared compressed instruments use the exact native grid path", {
 })
 
 test_that("compressed MR rejects malformed contracts and missing instruments", {
-  skip_if_not_installed("CompreSSoR")
+  skip_if_compressor_unconfigured()
   expect_error(fastMR:::fastmr_normalize_variant_keys("rs123"),
                "chromosome:position:REF:ALT")
   expect_error(fastMR:::fastmr_normalize_variant_keys(c("1:1:A:C", "1:1:A:C")),
@@ -182,7 +182,7 @@ test_that("compressed MR rejects malformed contracts and missing instruments", {
 })
 
 test_that("compressed reads reject incompatible effect-orientation contracts", {
-  skip_if_not_installed("CompreSSoR")
+  skip_if_compressor_unconfigured()
 
   path <- tempfile("fastmr-incompatible-contract-")
   CompreSSoR::compress_sumstats(compressed_fixture(), path, overwrite = TRUE)
@@ -195,7 +195,7 @@ test_that("compressed reads reject incompatible effect-orientation contracts", {
 })
 
 test_that("compressed MR reports missing instruments and parallel read failures", {
-  skip_if_not_installed("CompreSSoR")
+  skip_if_compressor_unconfigured()
 
   outcome_input <- compressed_fixture(0.5)
   outcome <- tempfile("fastmr-valid-outcome-")
