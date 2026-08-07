@@ -259,6 +259,80 @@ fast_clump_data_batched <- function(
                           fallback = FALSE, reference_manifest_md5 = reference_md5))
 }
 
+#' Chromosome-partitioned batched PLINK2 LD clumping
+#'
+#' This is the scalable form of [fast_clump_data_batched()].  Variants on
+#' different chromosomes cannot be in LD, so each chromosome can be clumped
+#' independently.  The partition keeps the PLINK target union local to one
+#' chromosome while preserving the exact exposure-specific greedy decisions.
+#'
+#' @param dat Data frame containing `SNP`, `id.exposure`, p-values,
+#'   `chr_name`, and `chrom_start`.
+#' @param ... Arguments forwarded to [fast_clump_data_batched()].
+#' @return A list with `data`, named `instruments`, and aggregated diagnostics.
+#' @export
+fast_clump_data_batched_chromosomal <- function(dat, ...) {
+  if (!is.data.frame(dat) || !all(c("chr_name", "chrom_start") %in% names(dat))) {
+    stop("chromosome-partitioned clumping requires chr_name and chrom_start", call. = FALSE)
+  }
+  chr <- as.character(dat[["chr_name"]])
+  bp <- suppressWarnings(as.numeric(as.character(dat[["chrom_start"]])))
+  if (anyNA(chr) || any(!nzchar(trimws(chr))) || any(!is.finite(bp))) {
+    stop("chr_name and chrom_start must be complete for chromosome-partitioned clumping", call. = FALSE)
+  }
+  dots <- list(...)
+  workdir <- dots$workdir
+  workdir_owned <- is.null(workdir)
+  if (workdir_owned) workdir <- tempfile("fastMR_chromosomal_")
+  dir.create(workdir, recursive = TRUE, showWarnings = FALSE)
+  if (workdir_owned) on.exit(unlink(workdir, recursive = TRUE, force = TRUE), add = TRUE)
+  chromosomes <- unique(chr)
+  pieces <- lapply(seq_along(chromosomes), function(k) {
+    cc <- chromosomes[[k]]
+    idx <- which(chr == cc)
+    part <- dat[idx, , drop = FALSE]
+    part$.fastmr_row_id <- idx
+    part_dots <- dots
+    part_dots$workdir <- file.path(workdir, paste0("chr_", gsub("[^A-Za-z0-9_.-]", "_", cc)))
+    ans <- do.call(fast_clump_data_batched, c(list(dat = part), part_dots))
+    ans$chromosome <- cc
+    ans
+  })
+  names(pieces) <- chromosomes
+  retained <- lapply(pieces, `[[`, "data")
+  retained <- retained[vapply(retained, nrow, integer(1)) > 0L]
+  if (length(retained)) {
+    combined <- do.call(rbind, retained)
+    combined <- combined[order(combined$.fastmr_row_id), , drop = FALSE]
+    combined$.fastmr_row_id <- NULL
+    rownames(combined) <- NULL
+  } else {
+    combined <- dat[FALSE, , drop = FALSE]
+  }
+  instruments <- lapply(split(combined$SNP, combined$id.exposure, drop = TRUE), as.character)
+  diagnostics <- lapply(pieces, `[[`, "diagnostics")
+  sum_diag <- function(name, default = 0) {
+    vals <- vapply(diagnostics, function(x) if (is.null(x[[name]])) default else x[[name]], numeric(1))
+    sum(vals)
+  }
+  reference_manifest <- dots$reference_manifest
+  list(
+    data = combined,
+    instruments = instruments,
+    diagnostics = list(
+      exposures = length(unique(as.character(if ("id.exposure" %in% names(dat)) dat$id.exposure else "exposure"))),
+      candidate_rows = nrow(dat), retained = nrow(combined),
+      rounds = sum_diag("rounds"), plink_calls = sum_diag("plink_calls"),
+      logical_pairs = sum_diag("logical_pairs"), positive_pairs = sum_diag("positive_pairs"),
+      exact = all(vapply(diagnostics, function(x) isTRUE(x$exact), logical(1))),
+      fallback = any(vapply(diagnostics, function(x) isTRUE(x$fallback), logical(1))),
+      partition = "chromosome", chromosomes = diagnostics,
+      reference_manifest_md5 = if (!is.null(reference_manifest) && file.exists(reference_manifest))
+        unname(tools::md5sum(reference_manifest)) else NULL
+    )
+  )
+}
+
 fastmr_compressed_candidate_data <- function(paths, labels, pvalue_threshold,
                                               candidate_source, pvalue_order,
                                               io_threads) {
@@ -354,18 +428,22 @@ fastmr_compressed_candidate_data <- function(paths, labels, pvalue_threshold,
 #' @param candidate_source `"pvalue_flag"` (default) or `"full"`.
 #' @param pvalue_order `"reconstructed"` (default) or `"require_exact"`.
 #' @param output Optional Parquet path for the clumped candidate table.
-#' @param ... Arguments forwarded to [fast_clump_data_batched()].
+#' @param partition `"global"` (default) or `"chromosome"`.  Chromosome
+#'   partitioning avoids an unnecessarily large cross-chromosome target union.
+#' @param ... Arguments forwarded to the selected batched clumping function.
 #' @return A list with `data`, named `instruments`, and `diagnostics`.
 #' @export
 fast_clump_compressed <- function(
     exposure_files, pvalue_threshold = 5e-8,
     candidate_source = c("pvalue_flag", "full"),
-    pvalue_order = c("reconstructed", "require_exact"), output = NULL, ...) {
+    pvalue_order = c("reconstructed", "require_exact"), output = NULL,
+    partition = c("global", "chromosome"), ...) {
   fastmr_require_compressor()
   paths <- fastmr_normalize_compressed_files(exposure_files, "exposure_files")
   pvalue_threshold <- fastmr_clump_number(pvalue_threshold, "pvalue_threshold", 0, 1)
   candidate_source <- match.arg(candidate_source)
   pvalue_order <- match.arg(pvalue_order)
+  partition <- match.arg(partition)
   stores <- lapply(paths, CompreSSoR::open_compressor)
   invisible(lapply(stores, fastmr_validate_compressed_store))
   dots <- list(...)
@@ -378,12 +456,18 @@ fast_clump_compressed <- function(
   )
   dots$io_threads <- NULL
   reference_manifest <- dots$reference_manifest
-  clumped <- do.call(fast_clump_data_batched, c(list(dat = candidates$data), dots))
+  clump_fun <- if (identical(partition, "chromosome")) {
+    fast_clump_data_batched_chromosomal
+  } else {
+    fast_clump_data_batched
+  }
+  clumped <- do.call(clump_fun, c(list(dat = candidates$data), dots))
   if (!is.null(output)) fast_write_parquet(clumped$data, output)
   clumped$diagnostics$compressed_input <- list(
     stores = unname(paths), pvalue_threshold = pvalue_threshold,
     candidate_source = candidates$source,
     pvalue_order = pvalue_order,
+    partition = partition,
     pvalue_order_exact = candidates$exact,
     reference_manifest_md5 = if (!is.null(reference_manifest) && file.exists(reference_manifest))
       unname(tools::md5sum(reference_manifest)) else NULL
