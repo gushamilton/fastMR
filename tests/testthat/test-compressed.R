@@ -1,25 +1,15 @@
-compressed_fixture <- function(multiplier = 1) {
-  n <- 80L
-  data.frame(
-    chromosome = rep("1", n),
-    base_pair_location = seq.int(100001L, length.out = n),
-    reference_allele = "A",
-    alternate_allele = rep(c("C", "G", "T"), length.out = n),
-    effect_allele = rep(c("C", "G", "T"), length.out = n),
-    other_allele = "A",
-    beta = multiplier * seq(-0.2, 0.2, length.out = n),
-    standard_error = 0.02 + (seq_len(n) %% 7L) / 1000,
-    effect_allele_frequency = seq(0.05, 0.95, length.out = n),
-    stringsAsFactors = FALSE
-  )
-}
-
 test_that("FastMR reads canonical keys from CompreSSoR", {
-  skip_if_compressor_unconfigured()
+  skip_if_compressor_unavailable()
 
-  input <- compressed_fixture()
+  input <- compressor_canonical_fixture()
   store <- tempfile("fastmr-compressed-read-")
-  CompreSSoR::compress_sumstats(input, store, overwrite = TRUE)
+  written <- CompreSSoR::compress_sumstats(input, store, overwrite = TRUE)
+  expect_identical(written$manifest$genome_build, "GRCh38")
+  expect_identical(written$manifest$variant_storage,
+                   "self_contained_identity_key")
+  expect_false(isTRUE(written$manifest$identity$external_reference_required))
+  expect_identical(written$manifest$reference$status, "not_used")
+  expect_false(isTRUE(written$manifest$reference$external_reference_required))
   keys <- CompreSSoR::compressor_variant_key(
     input$chromosome, input$base_pair_location,
     input$other_allele, input$effect_allele
@@ -35,16 +25,16 @@ test_that("FastMR reads canonical keys from CompreSSoR", {
 })
 
 test_that("compressed 2 x 2 MR equals the explicitly decoded workflow", {
-  skip_if_compressor_unconfigured()
+  skip_if_compressor_unavailable()
 
   stores <- vapply(c(1, 1.3, 0.7, -0.4), function(multiplier) {
     path <- tempfile("fastmr-compressed-grid-")
-    CompreSSoR::compress_sumstats(compressed_fixture(multiplier), path, overwrite = TRUE)
+    CompreSSoR::compress_sumstats(compressor_canonical_fixture(multiplier), path, overwrite = TRUE)
     path
   }, character(1))
   exposures <- setNames(stores[1:2], c("exposure_a", "exposure_b"))
   outcomes <- setNames(stores[3:4], c("outcome_a", "outcome_b"))
-  identity <- compressed_fixture()
+  identity <- compressor_canonical_fixture()
   all_keys <- CompreSSoR::compressor_variant_key(
     identity$chromosome, identity$base_pair_location,
     identity$other_allele, identity$effect_allele
@@ -162,7 +152,7 @@ test_that("shared compressed instruments use the exact native grid path", {
 })
 
 test_that("compressed MR rejects malformed contracts and missing instruments", {
-  skip_if_compressor_unconfigured()
+  skip_if_compressor_unavailable()
   expect_error(fastMR:::fastmr_normalize_variant_keys("rs123"),
                "chromosome:position:REF:ALT")
   expect_error(fastMR:::fastmr_normalize_variant_keys(c("1:1:A:C", "1:1:A:C")),
@@ -182,10 +172,10 @@ test_that("compressed MR rejects malformed contracts and missing instruments", {
 })
 
 test_that("compressed reads reject incompatible effect-orientation contracts", {
-  skip_if_compressor_unconfigured()
+  skip_if_compressor_unavailable()
 
   path <- tempfile("fastmr-incompatible-contract-")
-  CompreSSoR::compress_sumstats(compressed_fixture(), path, overwrite = TRUE)
+  CompreSSoR::compress_sumstats(compressor_canonical_fixture(), path, overwrite = TRUE)
   manifest_path <- file.path(path, "manifest.json")
   manifest <- CompreSSoR:::read_manifest(manifest_path)
   manifest$identity$effect_allele_is_alt <- FALSE
@@ -195,9 +185,9 @@ test_that("compressed reads reject incompatible effect-orientation contracts", {
 })
 
 test_that("compressed MR reports missing instruments and parallel read failures", {
-  skip_if_compressor_unconfigured()
+  skip_if_compressor_unavailable()
 
-  outcome_input <- compressed_fixture(0.5)
+  outcome_input <- compressor_canonical_fixture(0.5)
   outcome <- tempfile("fastmr-valid-outcome-")
   broken <- tempfile("fastmr-broken-exposure-")
   for (path in c(outcome, broken)) {

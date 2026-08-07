@@ -147,7 +147,7 @@ test_that("batched clumping enforces bounded work", {
 })
 
 test_that("compressed candidate extraction records reconstructed p-value provenance", {
-  skip_if_compressor_unconfigured()
+  skip_if_compressor_unavailable()
   skip_on_os("windows")
   input <- data.frame(
     chromosome = "1", base_pair_location = 1:3,

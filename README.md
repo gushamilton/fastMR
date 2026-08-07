@@ -219,6 +219,12 @@ self-contained REF/ALT identity, and ALT-oriented effects. With the default
 beta/SE stops the analysis. `strict = FALSE` reports requested, found, invalid,
 and matched counts in the `compressed_input` attribute before omitting rows.
 
+The native integration tests generate a small deterministic prepared GRCh38
+fixture with explicit REF/ALT identity. CompreSSoR 0.5 writes that identity into
+the self-contained store, so CI does not need `COMPRESSOR_CANONICAL_REFERENCE`
+or any private EBI/dbSNP path. Reference-backed preparation remains an external
+workflow, as described above.
+
 When every exposure uses the same complete instrument panel and the requested
 methods do not need pair-specific bootstrap draws, `fast_mr_compressed()`
 constructs the matrices once and enters `fast_mr_grid()` directly. Otherwise
