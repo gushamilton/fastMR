@@ -14,5 +14,5 @@ A data frame returned by \code{arrow::read_parquet()}.
 }
 \description{
 Arrow is optional so that the core package remains small. Install it with
-\code{install.packages("arrow")} when Parquet input is needed.
+\code{install.packages("arrow")} when Parquet input or output is needed.
 }

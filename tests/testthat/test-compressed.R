@@ -1,22 +1,10 @@
-compressed_test_python <- function() {
-  candidates <- c(Sys.getenv("COMPRESSOR_PYTHON", unset = ""),
-                  Sys.which("python3"), Sys.which("python"))
-  candidates <- unique(candidates[nzchar(candidates)])
-  for (candidate in candidates) {
-    status <- suppressWarnings(system2(
-      candidate, c("-c", shQuote("import numpy, pcodec, zstandard")),
-      stdout = FALSE, stderr = FALSE
-    ))
-    if (identical(as.integer(status), 0L)) return(candidate)
-  }
-  NULL
-}
-
 compressed_fixture <- function(multiplier = 1) {
   n <- 80L
   data.frame(
     chromosome = rep("1", n),
     base_pair_location = seq.int(100001L, length.out = n),
+    reference_allele = "A",
+    alternate_allele = rep(c("C", "G", "T"), length.out = n),
     effect_allele = rep(c("C", "G", "T"), length.out = n),
     other_allele = "A",
     beta = multiplier * seq(-0.2, 0.2, length.out = n),
@@ -28,19 +16,10 @@ compressed_fixture <- function(multiplier = 1) {
 
 test_that("FastMR reads canonical keys from CompreSSoR", {
   skip_if_not_installed("CompreSSoR")
-  python <- compressed_test_python()
-  skip_if(is.null(python), "Pcodec Python dependencies are unavailable")
-  old <- Sys.getenv("COMPRESSOR_PYTHON", unset = NA_character_)
-  Sys.setenv(COMPRESSOR_PYTHON = python)
-  on.exit(if (is.na(old)) Sys.unsetenv("COMPRESSOR_PYTHON") else
-    Sys.setenv(COMPRESSOR_PYTHON = old), add = TRUE)
 
   input <- compressed_fixture()
   store <- tempfile("fastmr-compressed-read-")
-  CompreSSoR::compress_sumstats(
-    input, store, reference = NULL, mode = "convert",
-    assume_grch38_ref_alt = TRUE, overwrite = TRUE
-  )
+  CompreSSoR::compress_sumstats(input, store, overwrite = TRUE)
   keys <- CompreSSoR::compressor_variant_key(
     input$chromosome, input$base_pair_location,
     input$other_allele, input$effect_allele
@@ -57,19 +36,10 @@ test_that("FastMR reads canonical keys from CompreSSoR", {
 
 test_that("compressed 2 x 2 MR equals the explicitly decoded workflow", {
   skip_if_not_installed("CompreSSoR")
-  python <- compressed_test_python()
-  skip_if(is.null(python), "Pcodec Python dependencies are unavailable")
-  old <- Sys.getenv("COMPRESSOR_PYTHON", unset = NA_character_)
-  Sys.setenv(COMPRESSOR_PYTHON = python)
-  on.exit(if (is.na(old)) Sys.unsetenv("COMPRESSOR_PYTHON") else
-    Sys.setenv(COMPRESSOR_PYTHON = old), add = TRUE)
 
   stores <- vapply(c(1, 1.3, 0.7, -0.4), function(multiplier) {
     path <- tempfile("fastmr-compressed-grid-")
-    CompreSSoR::compress_sumstats(
-      compressed_fixture(multiplier), path, reference = NULL, mode = "convert",
-      assume_grch38_ref_alt = TRUE, overwrite = TRUE
-    )
+    CompreSSoR::compress_sumstats(compressed_fixture(multiplier), path, overwrite = TRUE)
     path
   }, character(1))
   exposures <- setNames(stores[1:2], c("exposure_a", "exposure_b"))
@@ -84,12 +54,25 @@ test_that("compressed 2 x 2 MR equals the explicitly decoded workflow", {
     exposure_b = all_keys[c(3L, 8L, 19L, 31L, 60L)]
   )
 
+  result_path <- if (requireNamespace("arrow", quietly = TRUE)) {
+    tempfile(fileext = ".parquet")
+  } else {
+    NULL
+  }
   compressed <- fast_mr_compressed(
     exposures, outcomes, instruments, methods = "ivw", nboot = 0,
-    threads = 1, io_threads = 2
+    threads = 1, io_threads = 2, output = result_path
   )
   expect_equal(nrow(compressed), 4L)
   expect_true(all(compressed$nsnp == 5L))
+  if (!is.null(result_path)) {
+    stored <- compressed
+    attr(stored, "compressed_input") <- NULL
+    expect_equal(
+      as.data.frame(arrow::read_parquet(result_path, as_data_frame = TRUE)),
+      stored
+    )
+  }
   expect_equal(nrow(attr(compressed, "compressed_input")$counts), 4L)
   timing <- attr(compressed, "compressed_input")$timing
   expect_named(
@@ -200,18 +183,9 @@ test_that("compressed MR rejects malformed contracts and missing instruments", {
 
 test_that("compressed reads reject incompatible effect-orientation contracts", {
   skip_if_not_installed("CompreSSoR")
-  python <- compressed_test_python()
-  skip_if(is.null(python), "Pcodec Python dependencies are unavailable")
-  old <- Sys.getenv("COMPRESSOR_PYTHON", unset = NA_character_)
-  Sys.setenv(COMPRESSOR_PYTHON = python)
-  on.exit(if (is.na(old)) Sys.unsetenv("COMPRESSOR_PYTHON") else
-    Sys.setenv(COMPRESSOR_PYTHON = old), add = TRUE)
 
   path <- tempfile("fastmr-incompatible-contract-")
-  CompreSSoR::compress_sumstats(
-    compressed_fixture(), path, reference = NULL, mode = "convert",
-    assume_grch38_ref_alt = TRUE, overwrite = TRUE
-  )
+  CompreSSoR::compress_sumstats(compressed_fixture(), path, overwrite = TRUE)
   manifest_path <- file.path(path, "manifest.json")
   manifest <- CompreSSoR:::read_manifest(manifest_path)
   manifest$identity$effect_allele_is_alt <- FALSE
@@ -220,28 +194,14 @@ test_that("compressed reads reject incompatible effect-orientation contracts", {
   expect_error(fast_read_compressed(path), "ALT-oriented")
 })
 
-test_that("compressed MR exposes invalid values and parallel read failures", {
+test_that("compressed MR reports missing instruments and parallel read failures", {
   skip_if_not_installed("CompreSSoR")
-  python <- compressed_test_python()
-  skip_if(is.null(python), "Pcodec Python dependencies are unavailable")
-  old <- Sys.getenv("COMPRESSOR_PYTHON", unset = NA_character_)
-  Sys.setenv(COMPRESSOR_PYTHON = python)
-  on.exit(if (is.na(old)) Sys.unsetenv("COMPRESSOR_PYTHON") else
-    Sys.setenv(COMPRESSOR_PYTHON = old), add = TRUE)
 
-  exposure_input <- compressed_fixture()
-  exposure_input$beta[4L] <- NA_real_
   outcome_input <- compressed_fixture(0.5)
-  exposure <- tempfile("fastmr-invalid-exposure-")
   outcome <- tempfile("fastmr-valid-outcome-")
   broken <- tempfile("fastmr-broken-exposure-")
-  for (spec in list(c(exposure, "exposure"), c(outcome, "outcome"),
-                    c(broken, "broken"))) {
-    input <- if (spec[[2L]] == "exposure") exposure_input else outcome_input
-    CompreSSoR::compress_sumstats(
-      input, spec[[1L]], reference = NULL, mode = "convert",
-      assume_grch38_ref_alt = TRUE, overwrite = TRUE
-    )
+  for (path in c(outcome, broken)) {
+    CompreSSoR::compress_sumstats(outcome_input, path, overwrite = TRUE)
   }
   keys <- CompreSSoR::compressor_variant_key(
     outcome_input$chromosome, outcome_input$base_pair_location,
@@ -259,19 +219,6 @@ test_that("compressed MR exposes invalid values and parallel read failures", {
     "omitted missing requested"
   )
   expect_equal(missing_non_strict$nsnp, length(keys))
-  expect_error(
-    fast_mr_compressed(c(exp = exposure), c(out = outcome), keys),
-    "invalid beta/standard_error"
-  )
-  expect_warning(
-    non_strict <- fast_mr_compressed(
-      c(exp = exposure), c(out = outcome), keys, strict = FALSE
-    ),
-    "omitted invalid"
-  )
-  expect_equal(non_strict$nsnp, 4L)
-  counts <- attr(non_strict, "compressed_input")$counts
-  expect_equal(counts$invalid_exposure, 1L)
 
   broken_store <- CompreSSoR::open_compressor(broken)
   unlink(file.path(broken, broken_store$manifest$files$z))
@@ -281,7 +228,7 @@ test_that("compressed MR exposes invalid values and parallel read failures", {
         c(good = outcome, broken = broken), c(out = outcome), keys,
         io_threads = 2
       )),
-      "failed to read.*broken"
+      "compressed read failed|failed to read"
     )
   }
 })

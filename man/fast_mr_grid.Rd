@@ -13,6 +13,7 @@ fast_mr_grid(
   nboot = 1000,
   seed = NULL,
   threads = 1,
+  output = NULL,
   ...
 )
 }
@@ -32,6 +33,10 @@ fast_mr_grid(
 \item{seed}{Optional integer seed.}
 
 \item{threads}{Maximum native worker count.}
+
+\item{output}{Optional path for a Zstandard-compressed Parquet copy of the
+result. The path must not already exist; use \code{\link{fast_write_parquet}} when
+an overwrite or another compression codec is required.}
 
 \item{...}{Optional \code{phi} bandwidth multiplier for mode methods and \code{penk}
 penalty multiplier for penalised weighted median (default 20).}

@@ -41,7 +41,7 @@ R CMD INSTALL .
 ```
 
 The core package requires R (≥ 4.1), `Rcpp`, and a C++17 compiler. Arrow is
-optional and is only needed for Parquet input.
+optional and is only needed for Parquet input or output.
 
 ## Quick start
 
@@ -123,25 +123,32 @@ Harmonisation supports the native TwoSampleMR actions 1, 2, and 3, strand and
 complement handling, palindromic-frequency checks, indel recoding, incomplete
 allele information, and outcome-specific action vectors. Clumping can use an
 in-memory LD matrix or delegate LD calculation to a locally installed PLINK
-binary. Parquet readers are available through optional `arrow` support:
+binary. Optional `arrow` support reads Parquet inputs and writes compact,
+Zstandard-compressed Parquet results:
 
 ```r
 fast_mr_parquet("summary_stats.parquet", methods = "ivw")
+result <- fast_mr(dat, methods = "ivw", nboot = 0, output = "mr-results.parquet")
+# Or write an existing result, choosing a codec or allowing replacement:
+fast_write_parquet(result, "mr-results.parquet", compression = "zstd", overwrite = TRUE)
 ```
 
 ## Direct MR from compressed GWAS files
 
-FastMR resolves canonical GRCh38 instruments from self-contained Pcodec
-[CompreSSoR](https://github.com/gushamilton/CompreSSoR) stores. Install both
-packages from GitHub and the pinned Python codec runtime:
+FastMR resolves canonical GRCh38 instruments from self-contained native Pcodec
+[CompreSSoR](https://github.com/gushamilton/CompreSSoR) stores. CompreSSoR
+0.5 accepts strictly prepared summary statistics: upstream preparation must
+already supply GRCh38 coordinates, explicit REF/ALT, and ALT-oriented effect
+alleles. Install Rust/Cargo before installing CompreSSoR from source, then
+install both packages from GitHub:
 
 ```sh
+brew install rust
 Rscript -e 'remotes::install_github("gushamilton/CompreSSoR")'
 Rscript -e 'remotes::install_github("gushamilton/fastMR")'
-python3 -m pip install 'numpy==1.26.4' 'pcodec==1.0.3' 'zstandard==0.25.0'
 ```
 
-Set `COMPRESSOR_PYTHON` when `python3` is not the intended interpreter. Then:
+The native reader has no Python runtime or `COMPRESSOR_PYTHON` setting. Then:
 
 ```r
 instruments <- list(
@@ -170,7 +177,33 @@ does not reconstruct p-values and does not load a whole GWAS. The canonical key 
 refer to ALT, so matching keys are
 already aligned and no rsID dictionary is involved. Instrument discovery,
 association-threshold selection, and LD clumping remain explicit upstream
-steps. The reproducible I/O benchmark uses a frozen panel of 25 real FinnGen
+steps. For many exposures, the opt-in `fast_clump_compressed()` helper reads
+Pcodec candidate rows and shares one exposure-grouped PLINK2 LD frontier across
+all current leads while preserving each exposure's greedy decisions:
+
+```r
+clumped <- fast_clump_compressed(
+  exposure_files = c(bmi = "bmi.cpr", crp = "crp.cpr"),
+  pvalue_threshold = 5e-8,
+  candidate_source = "pvalue_flag",
+  pfile = "reference/1kg_eur_grch38",
+  reference_manifest = "reference/1kg_eur_grch38.manifest.json",
+  threads = 4, io_threads = 4
+)
+clumped$instruments
+```
+
+The candidate flag is a fast row selector; current Pcodec stores reconstruct
+p-values from Z, so the result is explicitly labelled
+`pvalue_order = "reconstructed"` until CompreSSoR's exact ordering domain is
+available. Safety limits stop an unexpectedly large frontier rather than
+silently producing a partial result. The reference build, ancestry, PLINK2 LD
+mode, window, threshold, and manifest hash should be recorded with the run.
+For p-value thresholds such as 0.01, use `candidate_source = "full"` only for
+small stores or a future regional cis-selection helper; the 5e-8 flag is not a
+general p <= 0.01 index.
+
+The reproducible I/O benchmark uses a frozen panel of 25 real FinnGen
 index variants selected at p < 1e-5 and clumped against GRCh38 1000 Genomes
 EUR (r2 < 0.001, 10 Mb); it does not ask the compressed reader to discover
 instruments. This path deliberately rejects legacy Parquet CompreSSoR stores

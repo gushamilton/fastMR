@@ -6,7 +6,7 @@
 \alias{fastMR-package}
 \title{fastMR: exact summary-statistics Mendelian randomization}
 \description{
-Exact summary-statistics Mendelian randomization methods with a registered C++ shared-grid backend. The package provides a small, dependency-light R interface for TwoSampleMR-style tidy data, including local harmonisation, LD clumping, optional Arrow Parquet input, and direct canonical-key MR from self-contained CompreSSoR stores.
+Exact summary-statistics Mendelian randomization methods with a registered C++ shared-grid backend. The package provides a small, dependency-light R interface for TwoSampleMR-style tidy data, including local harmonisation, LD clumping, optional Arrow Parquet I/O, and direct canonical-key MR from self-contained CompreSSoR stores.
 }
 \seealso{
 Useful links:

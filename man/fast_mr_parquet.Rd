@@ -9,7 +9,8 @@ fast_mr_parquet(path, ...)
 \arguments{
 \item{path}{Path to a Parquet file with TwoSampleMR-style columns.}
 
-\item{...}{Arguments forwarded to \code{\link[=fast_mr]{fast_mr()}}.}
+\item{...}{Arguments forwarded to \code{\link[=fast_mr]{fast_mr()}}, including its
+optional \code{output} Parquet result path.}
 }
 \value{
 A tidy fastMR result data frame.

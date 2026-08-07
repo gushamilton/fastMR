@@ -1,3 +1,19 @@
+# fastMR 0.1.9
+
+- Updates the optional compressed-input integration for CompreSSoR 0.5's
+  native Pcodec stores and strict prepared-input contract. The retired Python
+  codec runtime is no longer required.
+- Adds safe Zstandard-compressed Parquet result output through
+  `fast_write_parquet()` and the `output` argument of `fast_mr()`,
+  `fast_mr_grid()`, and `fast_mr_compressed()`.
+- Adds opt-in `fast_clump_data_batched()` and `fast_clump_compressed()` APIs:
+  exposure-specific greedy clumping is retained while PLINK2 LD queries are
+  shared across all current exposure leads. Bounded work limits, reference
+  manifest provenance, and explicit reconstructed-p-value labelling prevent
+  silent approximation on large Pcodec runs.
+- Adds tested internal masked and CSR IVW kernels for sparse exposure panels;
+  the stable public wrapper and benchmark contract will follow separately.
+
 # fastMR 0.1.8
 
 - Uses CompreSSoR's persistent wrapped-Pcodec reader and exact canonical keys
