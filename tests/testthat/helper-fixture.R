@@ -25,11 +25,29 @@ diagnostic_fixture <- function() {
   d$mr_keep <- TRUE
   d
 }
-skip_if_compressor_unconfigured <- function() {
+skip_if_compressor_unavailable <- function() {
   skip_if_not_installed("CompreSSoR")
-  reference <- Sys.getenv("COMPRESSOR_CANONICAL_REFERENCE", unset = "")
   skip_if(
-    !nzchar(reference) || !file.exists(reference),
-    "CompreSSoR native tests require COMPRESSOR_CANONICAL_REFERENCE"
+    utils::packageVersion("CompreSSoR") < "0.5.0",
+    "CompreSSoR native tests require version 0.5.0 or newer"
+  )
+}
+
+# This is deliberately a prepared, explicit-identity GRCh38 fixture.  In
+# CompreSSoR 0.5 the canonical identity is stored in the native store itself;
+# no dbSNP/EBI dictionary or COMPRESSOR_CANONICAL_REFERENCE path is needed.
+compressor_canonical_fixture <- function(multiplier = 1) {
+  n <- 80L
+  data.frame(
+    chromosome = rep("1", n),
+    base_pair_location = seq.int(100001L, length.out = n),
+    reference_allele = "A",
+    alternate_allele = rep(c("C", "G", "T"), length.out = n),
+    effect_allele = rep(c("C", "G", "T"), length.out = n),
+    other_allele = "A",
+    beta = multiplier * seq(-0.2, 0.2, length.out = n),
+    standard_error = 0.02 + (seq_len(n) %% 7L) / 1000,
+    effect_allele_frequency = seq(0.05, 0.95, length.out = n),
+    stringsAsFactors = FALSE
   )
 }

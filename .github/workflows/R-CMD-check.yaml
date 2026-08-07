@@ -30,6 +30,8 @@ jobs:
       - name: Install Pcodec runtime
         run: python3 -m pip install 'numpy==1.26.4' 'pcodec==1.0.3' 'zstandard==0.25.0'
 
+      - uses: dtolnay/rust-toolchain@stable
+
       - uses: r-lib/actions/setup-r@v2
         with:
           r-version: ${{ matrix.r }}
@@ -40,8 +42,13 @@ jobs:
           extra-packages: |
             any::rcmdcheck
             any::testthat
-            github::gushamilton/CompreSSoR@agent/pcodec-r-package
+            github::gushamilton/CompreSSoR@96bcbeeff07056f8bce054039ec017a26ca66522
           needs: check
+
+      - name: Verify CompreSSoR 0.5 native fixture dependency
+        run: >-
+          Rscript -e
+          'stopifnot(utils::packageVersion("CompreSSoR") >= "0.5.0")'
 
       - uses: r-lib/actions/check-r-package@v2
         env:
