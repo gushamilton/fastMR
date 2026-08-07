@@ -8,7 +8,7 @@ fast_clump_compressed(
   exposure_files, pvalue_threshold = 5e-08,
   candidate_source = c("pvalue_flag", "full"),
   pvalue_order = c("reconstructed", "require_exact"), output = NULL,
-  partition = c("global", "chromosome"), ...
+  partition = c("global", "chromosome", "lead_row"), ...
 )
 }
 \arguments{
@@ -17,7 +17,7 @@ fast_clump_compressed(
 \item{candidate_source}{\code{"pvalue_flag"} or \code{"full"}.}
 \item{pvalue_order}{\code{"reconstructed"} or \code{"require_exact"}.}
 \item{output}{Optional Parquet path for the clumped candidate table.}
-\item{partition}{\code{"global"} (default) or \code{"chromosome"}.}
+\item{partition}{\code{"global"} (default), \code{"chromosome"}, or \code{"lead_row"}.}
 \item{...}{Arguments forwarded to the selected batched clumping function, including the PLINK reference.}
 }
 \value{A list with \code{data}, named \code{instruments}, and \code{diagnostics}.}
