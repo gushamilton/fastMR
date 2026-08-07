@@ -12,7 +12,9 @@
   manifest provenance, and explicit reconstructed-p-value labelling prevent
   silent approximation on large Pcodec runs.
 - Adds tested internal masked and CSR IVW kernels for sparse exposure panels;
-  the stable public wrapper and benchmark contract will follow separately.
+  adds exported `fast_mr_masked_ivw()` and `fast_mr_sparse_ivw()` wrappers with
+  explicit masks/CSR contracts, duplicate-index checks, and output/native
+  workspace bounds, plus a generic parity benchmark.
 
 # fastMR 0.1.8
 
