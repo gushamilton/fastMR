@@ -26,6 +26,12 @@ fastmr_clump_run_graph <- function(snps, reference_args, plink2_bin, clump_kb,
   status <- attr(output, "status")
   if (is.null(status)) status <- 0L
   path <- paste0(stem, ".vcor.zst")
+  if (status != 0L && any(grepl("No variants remaining after", output, fixed = TRUE))) {
+    # None of these candidates is in the reference: no LD edges (lead-row
+    # semantics keep such SNPs, so the graph must not abort).
+    unlink(extract_file)
+    return(data.frame(lead = character(), target = character(), stringsAsFactors = FALSE))
+  }
   if (status != 0L || !file.exists(path)) {
     detail <- attr(output, "error")
     if (is.null(detail)) detail <- paste(utils::tail(output, 8L), collapse = " | ")
@@ -166,10 +172,15 @@ fast_clump_data_graph <- function(
         chromosomes[[cc]] <- info
         next
       }
-      graph_calls <- graph_calls + 1L
       tag <- gsub("[^A-Za-z0-9_.-]", "_", cc)
-      ld <- fastmr_clump_run_graph(usnp, reference_args, plink2_bin, clump_kb, clump_r2,
-                                   threads, workdir, tag)
+      ld <- if (est > 0) {
+        graph_calls <- graph_calls + 1L
+        fastmr_clump_run_graph(usnp, reference_args, plink2_bin, clump_kb, clump_r2,
+                               threads, workdir, tag)
+      } else {
+        # No candidate pair within the window: the graph is empty.
+        data.frame(lead = character(), target = character(), stringsAsFactors = FALSE)
+      }
       a <- match(as.character(ld$lead), usnp)
       b <- match(as.character(ld$target), usnp)
       ok <- !is.na(a) & !is.na(b) & a != b

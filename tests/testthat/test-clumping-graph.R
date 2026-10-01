@@ -279,3 +279,35 @@ test_that(".fastmr_vcor_ids is GC-safe under gctorture", {
   expect_identical(r$lead, sprintf("idA_%d_x", 1:n))
   expect_identical(r$target, sprintf("idB_%d_y", 1:n))
 })
+
+test_that("graph run treats 'No variants remaining' as an empty graph", {
+  skip_on_os("windows")
+  plink2 <- tempfile("fastMR_plink2_novar_")
+  writeLines(c("#!/bin/sh",
+               "case \"$*\" in *--version*) echo 'PLINK v2.0.0-stub'; exit 0;; esac",
+               "echo 'Error: No variants remaining after --extract.'", "exit 3"), plink2)
+  Sys.chmod(plink2, "0755")
+  wd <- tempfile("wd"); dir.create(wd)
+  ld <- fastMR:::fastmr_clump_run_graph(c("A", "B"), c("--bfile", "panel"), plink2, 500, 0.01, 1L, wd, "1")
+  expect_identical(nrow(ld), 0L)
+  expect_named(ld, c("lead", "target"))
+  # other failures still abort
+  writeLines(c("#!/bin/sh", "echo 'Error: boom'", "exit 3"), plink2)
+  expect_error(fastMR:::fastmr_clump_run_graph(c("A", "B"), c("--bfile", "panel"), plink2, 500, 0.01, 1L, wd, "1"),
+               "failed")
+})
+
+test_that("graph clumping skips PLINK when no candidate pairs exist", {
+  skip_on_os("windows")
+  plink2 <- tempfile("fastMR_plink2_never_")
+  log <- tempfile("never_args_")
+  writeLines(c("#!/bin/sh", sprintf("echo \"$@\" >> %s", log),
+               "case \"$*\" in *--version*) echo 'PLINK v2.0.0-stub'; exit 0;; esac",
+               "echo 'Error: No variants remaining after --extract.'", "exit 3"), plink2)
+  Sys.chmod(plink2, "0755")
+  dat <- data.frame(SNP = c("A", "B"), id.exposure = "E", pval.exposure = c(1e-8, 1e-7),
+                    chr_name = "1", chrom_start = c(1000, 900000))
+  res <- fast_clump_data_graph(dat, clump_kb = 1, clump_r2 = 0.01, bfile = "panel", plink2_bin = plink2)
+  expect_identical(res$instruments$E, c("A", "B"))
+  expect_false(any(grepl("--r2-unphased", readLines(log))))
+})
