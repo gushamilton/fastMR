@@ -253,6 +253,235 @@ fastmr_compressed_grid_fast_path <- function(
   result
 }
 
+# Sparse CSR dispatch for IVW-only compressed input.  Reproduces the pairwise
+# loop's counts, strict-mode errors, warnings, minimum_snps drops and row order
+# without building a data frame per exposure-outcome pair.  Returns NULL when
+# the problem is outside the kernel's contract so the caller falls back to the
+# pairwise path.
+fastmr_compressed_sparse_ivw <- function(
+    exposure_data, outcome_data, instrument_sets, union_keys, minimum_snps,
+    strict, controls) {
+  exposure_names <- names(exposure_data)
+  outcome_names <- names(outcome_data)
+  exposure_count <- length(exposure_names)
+  outcome_count <- length(outcome_names)
+  snp_count <- length(union_keys)
+  if (!exposure_count || !outcome_count || !snp_count) return(NULL)
+  bounds_ok <- tryCatch({
+    fastmr_check_batch_bounds(
+      exposure_count, outcome_count, snp_count, 1e8, 2048, sparse = TRUE
+    )
+    TRUE
+  }, error = function(e) FALSE)
+  if (!bounds_ok) return(NULL)
+  valid_values <- function(data) {
+    is.finite(data$beta) & is.finite(data$standard_error) &
+      data$standard_error > 0
+  }
+  # Outcome union matrices (outcomes x union instruments).
+  outcome_beta <- matrix(0, outcome_count, snp_count)
+  outcome_se <- matrix(1, outcome_count, snp_count)
+  outcome_found <- matrix(FALSE, outcome_count, snp_count)
+  outcome_present <- matrix(FALSE, outcome_count, snp_count)
+  for (o in seq_len(outcome_count)) {
+    data <- outcome_data[[o]]
+    hit <- match(union_keys, data$variant_key, nomatch = 0L)
+    found <- hit > 0L
+    outcome_found[o, ] <- found
+    if (any(found)) {
+      rows <- hit[found]
+      valid <- valid_values(data)[rows]
+      present <- logical(snp_count)
+      present[found] <- valid
+      outcome_present[o, ] <- present
+      cols <- which(found)[valid]
+      outcome_beta[o, cols] <- data$beta[rows[valid]]
+      outcome_se[o, cols] <- data$standard_error[rows[valid]]
+    }
+  }
+  # CSR over exposure-found and exposure-valid instruments, in instrument
+  # order; per-pair outcome counts over all exposure-found instruments.
+  requested <- integer(exposure_count)
+  exposure_found <- integer(exposure_count)
+  invalid_exposure <- integer(exposure_count)
+  outcome_found_count <- matrix(0L, exposure_count, outcome_count)
+  invalid_outcome <- matrix(0L, exposure_count, outcome_count)
+  row_ptr <- integer(exposure_count + 1L)
+  col_parts <- vector("list", exposure_count)
+  beta_parts <- vector("list", exposure_count)
+  for (e in seq_len(exposure_count)) {
+    data <- exposure_data[[e]]
+    wanted <- instrument_sets[[exposure_names[[e]]]]
+    requested[[e]] <- length(wanted)
+    hit <- match(wanted, data$variant_key, nomatch = 0L)
+    present <- hit > 0L
+    exposure_found[[e]] <- sum(present)
+    cols <- match(wanted[present], union_keys)
+    rows <- hit[present]
+    valid <- valid_values(data)[rows]
+    invalid_exposure[[e]] <- sum(!valid)
+    if (length(cols)) {
+      found_block <- outcome_found[, cols, drop = FALSE]
+      present_block <- outcome_present[, cols, drop = FALSE]
+      outcome_found_count[e, ] <- as.integer(rowSums(found_block))
+      invalid_outcome[e, ] <- as.integer(rowSums(found_block & !present_block))
+    }
+    col_parts[[e]] <- cols[valid] - 1L
+    beta_parts[[e]] <- data$beta[rows[valid]]
+    row_ptr[[e + 1L]] <- row_ptr[[e]] + sum(valid)
+  }
+  col_index <- as.integer(unlist(col_parts, use.names = FALSE))
+  if (!length(col_index)) return(NULL)
+  sparse <- fast_mr_sparse_ivw(
+    row_ptr, col_index, as.numeric(unlist(beta_parts, use.names = FALSE)),
+    outcome_beta, outcome_se, outcome_present, threads = controls$threads
+  )
+  matched <- matrix(as.integer(sparse$nsnp), exposure_count, outcome_count)
+
+  # Everything below is exposure-major (exposure outer, outcome inner).
+  flat <- function(m) as.vector(t(m))
+  exposure_of <- rep(seq_len(exposure_count), each = outcome_count)
+  outcome_of <- rep(seq_len(outcome_count), times = exposure_count)
+  pair_exposure <- exposure_names[exposure_of]
+  pair_outcome <- outcome_names[outcome_of]
+  pair_requested <- requested[exposure_of]
+  pair_exposure_found <- exposure_found[exposure_of]
+  pair_outcome_found <- flat(outcome_found_count)
+  pair_invalid_exposure <- invalid_exposure[exposure_of]
+  pair_invalid_outcome <- flat(invalid_outcome)
+  pair_matched <- flat(matched)
+
+  missing_exposure <- exposure_found < requested
+  missing_outcome <- pair_outcome_found < pair_requested
+  invalid_pair <- (pair_invalid_exposure > 0L) | (pair_invalid_outcome > 0L)
+  too_few <- pair_matched < minimum_snps
+
+  if (isTRUE(strict)) {
+    pair_error <- missing_outcome | invalid_pair | too_few
+    first_pair <- if (any(pair_error)) which(pair_error)[[1L]] else NA_integer_
+    first_exposure <- if (any(missing_exposure)) which(missing_exposure)[[1L]] else NA_integer_
+    if (!is.na(first_exposure) &&
+        (is.na(first_pair) || first_exposure <= exposure_of[[first_pair]])) {
+      stop(
+        "missing requested exposure instrument(s) for ",
+        exposure_names[[first_exposure]], " (found ",
+        exposure_found[[first_exposure]], " of ", requested[[first_exposure]],
+        ")", call. = FALSE
+      )
+    }
+    if (!is.na(first_pair)) {
+      i <- first_pair
+      if (missing_outcome[[i]]) {
+        stop(
+          "missing requested outcome instrument(s) for ", pair_exposure[[i]],
+          " -> ", pair_outcome[[i]], " (found ", pair_outcome_found[[i]],
+          " of ", pair_requested[[i]], ")", call. = FALSE
+        )
+      }
+      if (invalid_pair[[i]]) {
+        stop(
+          "invalid beta/standard_error for ", pair_exposure[[i]], " -> ",
+          pair_outcome[[i]], " (exposure=", pair_invalid_exposure[[i]],
+          ", outcome=", pair_invalid_outcome[[i]], ")", call. = FALSE
+        )
+      }
+      stop("fewer than minimum_snps for ", pair_exposure[[i]], " -> ",
+           pair_outcome[[i]], " (", pair_matched[[i]], " matched)", call. = FALSE)
+    }
+  }
+
+  retained <- !too_few
+  if (!any(retained)) {
+    stop("no exposure-outcome pair retained enough matched instruments", call. = FALSE)
+  }
+  if (!isTRUE(strict)) {
+    skipped <- if (any(too_few)) paste0(
+      pair_exposure[too_few], " -> ", pair_outcome[too_few],
+      " (", pair_matched[too_few], " matched)"
+    ) else character()
+    invalid_omitted <- if (any(invalid_pair)) paste0(
+      pair_exposure[invalid_pair], " -> ", pair_outcome[invalid_pair],
+      " (exposure=", pair_invalid_exposure[invalid_pair], ", outcome=",
+      pair_invalid_outcome[invalid_pair], ")"
+    ) else character()
+    # Per exposure: the exposure message, then its outcome messages.
+    messages <- matrix(NA_character_, outcome_count + 1L, exposure_count)
+    if (any(missing_exposure)) {
+      messages[1L, missing_exposure] <- paste0(
+        exposure_names[missing_exposure], " exposure (found ",
+        exposure_found[missing_exposure], " of ", requested[missing_exposure], ")"
+      )
+    }
+    outcome_messages <- matrix(NA_character_, outcome_count, exposure_count)
+    if (any(missing_outcome)) {
+      outcome_messages[matrix(missing_outcome, outcome_count, exposure_count)] <- paste0(
+        pair_exposure[missing_outcome], " -> ", pair_outcome[missing_outcome],
+        " outcome (found ", pair_outcome_found[missing_outcome], " of ",
+        pair_requested[missing_outcome], ")"
+      )
+    }
+    messages[-1L, ] <- outcome_messages
+    missing_omitted <- as.vector(messages)
+    missing_omitted <- missing_omitted[!is.na(missing_omitted)]
+    if (length(skipped)) {
+      warning("omitted pair(s) below minimum_snps: ",
+              paste(skipped, collapse = "; "), call. = FALSE)
+    }
+    if (length(invalid_omitted)) {
+      warning("omitted invalid instrument value(s): ",
+              paste(unique(invalid_omitted), collapse = "; "), call. = FALSE)
+    }
+    if (length(missing_omitted)) {
+      warning("omitted missing requested instrument(s): ",
+              paste(unique(missing_omitted), collapse = "; "), call. = FALSE)
+    }
+  }
+
+  counts <- data.frame(
+    id.exposure = pair_exposure, id.outcome = pair_outcome,
+    requested = pair_requested, exposure_found = pair_exposure_found,
+    outcome_found = pair_outcome_found,
+    invalid_exposure = pair_invalid_exposure,
+    invalid_outcome = pair_invalid_outcome, matched = pair_matched,
+    stringsAsFactors = FALSE
+  )
+
+  n <- pair_matched[retained]
+  b <- flat(sparse$beta)[retained]
+  se <- flat(sparse$se)[retained]
+  q <- flat(sparse$Q)[retained]
+  sigma <- flat(sparse$sigma)[retained]
+  has_fit <- is.finite(b)
+  usable <- has_fit & is.finite(se) & se != 0
+  pval <- rep(NA_real_, length(b))
+  pval[usable] <- 2 * stats::pnorm(abs(b[usable] / se[usable]), lower.tail = FALSE)
+  q_df <- ifelse(has_fit, n - 1, NA_real_)
+  q_pval <- rep(NA_real_, length(b))
+  ok_q <- has_fit & is.finite(q)
+  q_pval[ok_q] <- stats::pchisq(q[ok_q], q_df[ok_q], lower.tail = FALSE)
+  na <- rep(NA_real_, length(b))
+  registry <- fastmr_method_registry()
+  result <- data.frame(
+    id.exposure = pair_exposure[retained],
+    id.outcome = pair_outcome[retained],
+    method = registry$method[match("ivw", registry$code)],
+    method_code = "ivw",
+    nsnp = as.numeric(n),
+    b = ifelse(has_fit, b, NA_real_),
+    se = ifelse(has_fit & is.finite(se), se, NA_real_),
+    pval = pval,
+    Q = ifelse(has_fit & is.finite(q), q, NA_real_),
+    Q_df = q_df,
+    Q_pval = q_pval,
+    sigma = ifelse(has_fit & is.finite(sigma), sigma, NA_real_),
+    intercept = na, intercept_se = na, intercept_pval = na,
+    ratio_se_mean = na, bootstrap = na, phi = na, flipped = na,
+    se_exposure_mean = na,
+    stringsAsFactors = FALSE
+  )
+  list(result = result, counts = counts)
+}
+
 #' Read selected variants from a Pcodec CompreSSoR GWAS
 #'
 #' This is the FastMR-facing reader for a self-contained CompreSSoR store. It
@@ -316,6 +545,16 @@ fast_read_compressed <- function(
 #' @param output Optional path for a Zstandard-compressed Parquet copy of the
 #'   result. The path must not already exist; use [fast_write_parquet()] when
 #'   an overwrite or another compression codec is required.
+#' @param estimator `"auto"` (default) or `"pairwise"`. With `"auto"`, runs
+#'   requesting only `methods = "ivw"` (and no extra `...` options) whose
+#'   instrument sets are not shared by all exposures use the sparse CSR kernel
+#'   [fast_mr_sparse_ivw()] instead of an R loop calling [fast_mr()] per pair.
+#'   Counts, errors, warnings, `minimum_snps` handling and row order are
+#'   identical, but estimates may differ from `"pairwise"` at about 1e-16
+#'   relative because the kernels sum in different arithmetic. `"pairwise"`
+#'   (and every other method set) always uses the per-pair path. The path used
+#'   is reported as `estimator_path` in the `compressed_input` attribute
+#'   (`"sparse_ivw"`, `"pairwise"` or `"shared_instrument_grid"`).
 #' @param ... Additional options passed to [fast_mr()].
 #' @return A tidy FastMR result with extraction metadata in the
 #'   `compressed_input` attribute.
@@ -332,7 +571,9 @@ fast_mr_compressed <- function(
     minimum_snps = 1L,
     strict = TRUE,
     output = NULL,
+    estimator = c("auto", "pairwise"),
     ...) {
+  estimator <- match.arg(estimator)
   total_started <- unname(proc.time()[["elapsed"]])
   fastmr_require_compressor()
   exposure_files <- fastmr_normalize_compressed_files(exposure_files, "exposure_files")
@@ -391,6 +632,31 @@ fast_mr_compressed <- function(
     )
     attr(grid_result, "compressed_input") <- metadata
     return(fastmr_write_result(grid_result, output))
+  }
+
+  if (identical(estimator, "auto") && identical(methods, "ivw") && !length(dots)) {
+    sparse <- fastmr_compressed_sparse_ivw(
+      exposure_data, outcome_data, instrument_sets, union_keys, minimum_snps,
+      strict, controls
+    )
+    if (!is.null(sparse)) {
+      result <- sparse$result
+      attr(result, "compressed_input") <- list(
+        exposure_files = exposure_files,
+        outcome_files = outcome_files,
+        instruments = instrument_sets,
+        counts = sparse$counts,
+        io_threads = as.integer(io_threads),
+        estimator_path = "sparse_ivw",
+        timing = list(
+          io_seconds = io_seconds,
+          estimator_seconds = unname(proc.time()[["elapsed"]]) - estimator_started,
+          total_seconds = unname(proc.time()[["elapsed"]]) - total_started,
+          source_bytes_read = source_bytes_read
+        )
+      )
+      return(fastmr_write_result(result, output))
+    }
   }
 
   rows <- list()
