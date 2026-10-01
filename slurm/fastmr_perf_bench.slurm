@@ -8,8 +8,7 @@
 #   export BASELINE_SHA=9f573d4 CANDIDATE_SHA=<sha> REPLICATES=5
 #   export SCENARIOS="grid_ivw,fast_mr_groups,sparse_ivw,steiger_filtering,clump_mock,compressed_pairwise"
 #   sbatch --array=0-$((2*REPLICATES-1)) --export=ALL slurm/fastmr_perf_bench.slurm
-# Tasks 0..R-1 run BASELINE_SHA, R..2R-1 run CANDIDATE_SHA.  Interleave by
-# passing --array with a stride if you want the two SHAs mixed in time.
+# Even tasks run BASELINE_SHA, odd tasks CANDIDATE_SHA (interleaved).
 # Results: ${BENCH_ROOT}/results/<run-id>/task_<id>.csv  (merge with rbind).
 
 #SBATCH --job-name=fastmr-perf
@@ -34,8 +33,13 @@ THREADS="${THREADS:-${SLURM_CPUS_PER_TASK:-1}}"
 RUN_ID="${RUN_ID:-${SLURM_ARRAY_JOB_ID:-manual}}"
 TASK="${SLURM_ARRAY_TASK_ID:-0}"
 
-if (( TASK < REPLICATES )); then SHA="${BASELINE_SHA}"; LABEL=baseline; REP=$((TASK + 1))
-else SHA="${CANDIDATE_SHA}"; LABEL=candidate; REP=$((TASK - REPLICATES + 1)); fi
+# Even tasks run BASELINE_SHA, odd tasks CANDIDATE_SHA, so both SHAs are
+# interleaved in time and spread over the same pool of nodes.
+if (( TASK % 2 == 0 )); then SHA="${BASELINE_SHA}"; LABEL=baseline
+else SHA="${CANDIDATE_SHA}"; LABEL=candidate; fi
+REP=$((TASK / 2 + 1))
+# Optional extra library (e.g. a CompreSSoR build) for compressed scenarios.
+if [[ -n "${EXTRA_R_LIBS:-}" ]]; then export R_LIBS="${EXTRA_R_LIBS}${R_LIBS:+:${R_LIBS}}"; fi
 
 mkdir -p "${BENCH_ROOT}/builds" "${BENCH_ROOT}/results/${RUN_ID}" logs
 SRC="${BENCH_ROOT}/builds/src-${SHA}"
@@ -44,9 +48,12 @@ LIB="${BENCH_ROOT}/builds/lib-${SHA}"
 (
   flock 9
   if [[ ! -f "${LIB}/.built" ]]; then
-    rm -rf "${SRC}" "${LIB}"; mkdir -p "${LIB}"
-    git -C "${REPO}" worktree add --detach "${SRC}" "${SHA}" 2>/dev/null || \
+    rm -rf "${LIB}"; mkdir -p "${LIB}"
+    # Compute nodes may lack git: export ${SRC} on the login node beforehand
+    # (git -C "$REPO" archive "$SHA" | tar -x -C "$SRC"); clone only as fallback.
+    if [[ ! -d "${SRC}" ]]; then
       git -C "${REPO}" archive "${SHA}" | (mkdir -p "${SRC}" && tar -x -C "${SRC}")
+    fi
     R CMD INSTALL --no-test-load --library="${LIB}" "${SRC}"
     touch "${LIB}/.built"
   fi
