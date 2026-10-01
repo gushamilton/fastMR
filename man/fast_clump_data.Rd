@@ -12,7 +12,8 @@ fast_clump_data(
   ld_matrix = NULL,
   ld_snps = NULL,
   bfile = NULL,
-  plink_bin = NULL
+  plink_bin = NULL,
+  min_ref_maf = 0.01
 )
 }
 \arguments{
@@ -32,9 +33,23 @@ optionally \code{id.exposure}, \code{chr_name}, and \code{chrom_start}.}
 \item{bfile}{Optional PLINK binary-prefix for local clumping.}
 
 \item{plink_bin}{Optional PLINK 1.9 executable path.}
+
+\item{min_ref_maf}{Minimum minor-allele frequency in the LD reference
+(default \code{0.01}).  With \code{bfile}, reference MAF is computed by PLINK
+\code{--freq} (founders) and candidates absent from the reference or below
+the floor are dropped before clumping: a monomorphic or very rare
+reference variant has undefined LD with every lead and would otherwise
+be retained as a spurious "independent" instrument.  With \code{ld_matrix},
+no allele frequencies are available, so instead a non-finite
+correlation between an index SNP and an in-window candidate is treated
+as "cannot assess" and the candidate is dropped.  \code{min_ref_maf = 0}
+reproduces the legacy behaviour (nothing dropped for these reasons) but
+still reports absent variants.}
 }
 \value{
-\code{dat} filtered to retained index SNPs.
+\code{dat} filtered to retained index SNPs.  The reference filter
+summary is stored in the \code{"reference_maf"} attribute and reported with
+\code{\link[=message]{message()}}.
 }
 \description{
 With \code{bfile} and \code{plink_bin}, delegates LD calculation to local PLINK.

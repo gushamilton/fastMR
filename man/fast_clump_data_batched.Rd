@@ -5,28 +5,74 @@
 \title{Batched multi-exposure PLINK2 LD clumping}
 \usage{
 fast_clump_data_batched(
-  dat, clump_kb = 10000, clump_r2 = 0.001, clump_p1 = 1,
-  bfile = NULL, pfile = NULL, plink2_bin = NULL, threads = 1L,
-  max_pair_requests = 2e+08, max_target_variants = 2e+06,
-  max_rounds = 10000L, on_limit = c("error", "fallback"),
-  workdir = NULL, reference_manifest = NULL
+  dat,
+  clump_kb = 10000,
+  clump_r2 = 0.001,
+  clump_p1 = 1,
+  bfile = NULL,
+  pfile = NULL,
+  plink2_bin = NULL,
+  threads = 1L,
+  max_pair_requests = 2e+08,
+  max_target_variants = 2e+06,
+  max_rounds = 10000L,
+  on_limit = c("error", "fallback"),
+  workdir = NULL,
+  reference_manifest = NULL,
+  min_ref_maf = 0.01
 )
 }
 \arguments{
 \item{dat}{Data frame containing \code{SNP}, \code{id.exposure}, and a p-value column.}
+
 \item{clump_kb}{Maximum index/target distance in kilobases.}
+
 \item{clump_r2}{Minimum LD r-squared for removing a target.}
+
 \item{clump_p1}{Maximum p-value for an index SNP.}
+
 \item{bfile}{PLINK binary reference prefix, or use \code{pfile}.}
+
 \item{pfile}{PLINK2 pgen reference prefix, or use \code{bfile}.}
-\item{plink2_bin}{PLINK2 executable.}
+
+\item{plink2_bin}{PLINK2 executable.  Defaults to \code{plink2} on \code{PATH}.}
+
 \item{threads}{Threads passed to each PLINK2 query.}
-\item{max_pair_requests}{Safety limit on logical LD pairs.}
-\item{max_target_variants}{Safety limit on one frontier target union.}
+
+\item{max_pair_requests}{Safety limit on the number of logical LD pairs.}
+
+\item{max_target_variants}{Safety limit on a single frontier target union.}
+
 \item{max_rounds}{Safety limit on frontier rounds.}
-\item{on_limit}{Either \code{"error"} or \code{"fallback"}.}
+
+\item{on_limit}{Either \code{"error"} (default) or \code{"fallback"}; fallback uses
+the existing per-exposure PLINK workflow and requires \code{bfile}.}
+
 \item{workdir}{Optional directory for temporary frontier files.}
-\item{reference_manifest}{Optional reference-panel manifest recorded by MD5.}
+
+\item{reference_manifest}{Optional reference-panel manifest whose MD5 is
+recorded in diagnostics.}
+
+\item{min_ref_maf}{Minimum minor-allele frequency in the LD reference
+(default \code{0.01}), computed with PLINK2 \code{--freq} on the reference founders.
+Candidates absent from the reference, or with reference MAF below this
+floor (including undefined frequencies), are dropped before clumping.  A
+monomorphic or very rare reference variant has undefined LD with every
+lead, so it can never be pruned and would otherwise be retained as a
+spurious "independent" instrument.  \code{min_ref_maf = 0} reproduces the
+legacy behaviour (nothing dropped) but still reports absent variants.}
 }
-\value{A list with \code{data}, named \code{instruments}, and \code{diagnostics}.}
-\description{Clumps each exposure independently while sharing PLINK2 LD queries across all exposures.}
+\value{
+A list with \code{data}, \code{instruments}, and \code{diagnostics}.  The
+reference filter summary (\code{min_ref_maf}, \code{candidate_rows}, \code{absent_rows},
+\code{below_floor_rows}, \code{kept_rows}, and the corresponding variant counts) is
+stored both as \code{diagnostics$reference_maf} and as the \code{"reference_maf"}
+attribute of the result, and is also reported with \code{\link[=message]{message()}}.
+}
+\description{
+Clump each exposure independently while sharing PLINK2 LD queries across
+all exposures.  The function is an opt-in replacement for repeatedly
+calling \code{\link[=fast_clump_data]{fast_clump_data()}} with a PLINK reference.  It retains the exact
+greedy index-SNP decisions of the per-exposure workflow and returns the
+original rows for retained SNPs.
+}

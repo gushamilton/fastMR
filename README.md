@@ -203,6 +203,19 @@ For p-value thresholds such as 0.01, use `candidate_source = "full"` only for
 small stores or a future regional cis-selection helper; the 5e-8 flag is not a
 general p <= 0.01 index.
 
+All clumpers drop candidates that are absent from the LD reference, or have
+reference minor-allele frequency below `min_ref_maf` (default `0.01`, from
+PLINK `--freq` on the reference founders), before clumping. A variant that is
+monomorphic or very rare in the reference has undefined LD with every lead, so
+it can never be pruned and would otherwise survive as a spurious
+"independent" instrument (#19). In the UKB-PPP cis set clumped against 1000
+Genomes EUR (n = 633), the floor removed 4% of candidates but cut instruments
+from 18,388 to 5,964, and the maximum per exposure from 280 to 8. The counts
+(absent, below floor, kept) are reported with `message()` and stored in the
+`"reference_maf"` attribute (and `diagnostics$reference_maf`) of the result.
+`min_ref_maf = 0` reproduces the legacy behaviour while still reporting absent
+variants.
+
 The reproducible I/O benchmark uses a frozen panel of 25 real FinnGen
 index variants selected at p < 1e-5 and clumped against GRCh38 1000 Genomes
 EUR (r2 < 0.001, 10 Mb); it does not ask the compressed reader to discover

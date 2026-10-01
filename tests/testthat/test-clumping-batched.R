@@ -2,7 +2,7 @@ test_that("batched PLINK2 clumping preserves exposure-specific greedy decisions"
   skip_on_os("windows")
   plink2 <- tempfile("fastMR_plink2_stub_")
   writeLines(c(
-    "#!/bin/sh",
+    "#!/bin/sh", freq_stub_lines(),
     "out=''",
     "while [ \"$#\" -gt 0 ]; do",
     "  case \"$1\" in",
@@ -32,7 +32,7 @@ test_that("chromosome-partitioned clumping aggregates exact results", {
   skip_on_os("windows")
   plink2 <- tempfile("fastMR_plink2_chr_stub_")
   writeLines(c(
-    "#!/bin/sh",
+    "#!/bin/sh", freq_stub_lines(),
     "out=''",
     "while [ \"$#\" -gt 0 ]; do",
     "  case \"$1\" in",
@@ -65,7 +65,7 @@ test_that("lead-row clumping reuses a row for exposures with the same lead", {
   skip_on_os("windows")
   plink2 <- tempfile("fastMR_plink2_lead_row_stub_")
   writeLines(c(
-    "#!/bin/sh",
+    "#!/bin/sh", freq_stub_lines(),
     "out=''",
     "while [ \"$#\" -gt 0 ]; do",
     "  case \"$1\" in",
@@ -97,7 +97,7 @@ test_that("lead-row follow-up queries keep the lead in --extract", {
   skip_on_os("windows")
   plink2 <- tempfile("fastMR_plink2_lead_extract_stub_")
   writeLines(c(
-    "#!/bin/sh",
+    "#!/bin/sh", freq_stub_lines(),
     "out=''",
     "lead_file=''",
     "extract_file=''",
@@ -135,7 +135,7 @@ test_that("lead-row follow-up queries keep the lead in --extract", {
 test_that("batched clumping enforces bounded work", {
   skip_on_os("windows")
   plink2 <- tempfile("fastMR_plink2_limit_stub_")
-  writeLines(c("#!/bin/sh", "exit 0"), plink2)
+  writeLines(c("#!/bin/sh", freq_stub_lines(), "exit 0"), plink2)
   Sys.chmod(plink2, "0755")
   dat <- data.frame(SNP = paste0("rs", 1:3), id.exposure = "E",
                     pval.exposure = c(1e-8, 2e-8, 3e-8))
@@ -160,7 +160,7 @@ test_that("compressed candidate extraction records reconstructed p-value provena
   CompreSSoR::compress_sumstats(input, store, overwrite = TRUE)
   plink2 <- tempfile("fastMR_plink2_empty_stub-")
   writeLines(c(
-    "#!/bin/sh", "out=''",
+    "#!/bin/sh", freq_stub_lines(), "out=''",
     "while [ \"$#\" -gt 0 ]; do case \"$1\" in --out) out=\"$2\"; shift 2;; *) shift;; esac; done",
     "printf '' > \"${out}.vcor\"",
     "zstd -q -f \"${out}.vcor\" -o \"${out}.vcor.zst\""

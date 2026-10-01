@@ -2,31 +2,70 @@
 % Please edit documentation in R/clumping.R
 \name{fast_clump_data_lead_rows}
 \alias{fast_clump_data_lead_rows}
-\title{Exact lead-row multi-exposure PLINK2 LD clumping}
+\title{Exact lead-row LD clumping with a shared pair cache}
 \usage{
 fast_clump_data_lead_rows(
-  dat, clump_kb = 10000, clump_r2 = 0.001, clump_p1 = 1,
-  bfile = NULL, pfile = NULL, plink2_bin = NULL, threads = 1L,
-  max_pair_requests = 2e+08, max_target_variants = 2e+06,
-  max_rounds = 10000L, on_limit = c("error", "fallback"),
-  workdir = NULL, reference_manifest = NULL
+  dat,
+  clump_kb = 10000,
+  clump_r2 = 0.001,
+  clump_p1 = 1,
+  bfile = NULL,
+  pfile = NULL,
+  plink2_bin = NULL,
+  threads = 1L,
+  max_pair_requests = 2e+08,
+  max_target_variants = 2e+06,
+  max_rounds = 10000L,
+  on_limit = c("error", "fallback"),
+  workdir = NULL,
+  reference_manifest = NULL,
+  min_ref_maf = 0.01
 )
 }
 \arguments{
 \item{dat}{Data frame containing \code{SNP}, \code{id.exposure}, and a p-value column.}
+
 \item{clump_kb}{Maximum index/target distance in kilobases.}
+
 \item{clump_r2}{Minimum LD r-squared for removing a target.}
+
 \item{clump_p1}{Maximum p-value for an index SNP.}
+
 \item{bfile}{PLINK binary reference prefix, or use \code{pfile}.}
+
 \item{pfile}{PLINK2 pgen reference prefix, or use \code{bfile}.}
-\item{plink2_bin}{PLINK2 executable.}
+
+\item{plink2_bin}{PLINK2 executable. Defaults to \code{plink2} on \code{PATH}.}
+
 \item{threads}{Threads passed to each PLINK query.}
+
 \item{max_pair_requests}{Safety limit on logical LD pairs.}
-\item{max_target_variants}{Safety limit on one lead-row target set.}
+
+\item{max_target_variants}{Safety limit for one lead-row target set.}
+
 \item{max_rounds}{Safety limit on frontier rounds.}
-\item{on_limit}{Either \code{"error"} or \code{"fallback"}.}
+
+\item{on_limit}{Either \code{"error"} (default) or \code{"fallback"}.}
+
 \item{workdir}{Optional directory for query files.}
-\item{reference_manifest}{Optional reference-panel manifest recorded by MD5.}
+
+\item{reference_manifest}{Optional reference-panel manifest whose MD5 is
+recorded in diagnostics.}
+
+\item{min_ref_maf}{Minimum reference minor-allele frequency; candidates
+absent from the reference or below the floor are dropped before
+clumping.  See \code{\link[=fast_clump_data_batched]{fast_clump_data_batched()}}.}
 }
-\value{A list with \code{data}, named \code{instruments}, and \code{diagnostics}.}
-\description{Clumps exposures independently while querying and caching only LD rows relevant to the current lead SNPs. Exposures sharing a lead reuse its row.}
+\value{
+A list with \code{data}, named \code{instruments}, and \code{diagnostics}; the
+reference filter summary is in \code{diagnostics$reference_maf} and the
+\code{"reference_maf"} attribute.
+}
+\description{
+This variant asks PLINK for one LD row whenever a SNP first becomes the
+current lead of one or more exposures.  Exposures sharing that lead share
+the row, and the symmetric pair cache prevents an LD decision from being
+requested again when the same pair is encountered later.  Unlike the global
+frontier implementation, each query contains only targets relevant to that
+lead group; this is the direct implementation of the lead-row strategy.
+}

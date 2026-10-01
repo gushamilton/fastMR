@@ -329,12 +329,26 @@ fast_harmonise_data <- function(exposure_dat, outcome_dat, action = 2,
 #' @param ld_snps Optional SNP names for `ld_matrix`.
 #' @param bfile Optional PLINK binary-prefix for local clumping.
 #' @param plink_bin Optional PLINK 1.9 executable path.
-#' @return `dat` filtered to retained index SNPs.
+#' @param min_ref_maf Minimum minor-allele frequency in the LD reference
+#'   (default `0.01`).  With `bfile`, reference MAF is computed by PLINK
+#'   `--freq` (founders) and candidates absent from the reference or below
+#'   the floor are dropped before clumping: a monomorphic or very rare
+#'   reference variant has undefined LD with every lead and would otherwise
+#'   be retained as a spurious "independent" instrument.  With `ld_matrix`,
+#'   no allele frequencies are available, so instead a non-finite
+#'   correlation between an index SNP and an in-window candidate is treated
+#'   as "cannot assess" and the candidate is dropped.  `min_ref_maf = 0`
+#'   reproduces the legacy behaviour (nothing dropped for these reasons) but
+#'   still reports absent variants.
+#' @return `dat` filtered to retained index SNPs.  The reference filter
+#'   summary is stored in the `"reference_maf"` attribute and reported with
+#'   [message()].
 #' @export
 fast_clump_data <- function(dat, clump_kb = 10000, clump_r2 = 0.001,
                             clump_p1 = 1, ld_matrix = NULL, ld_snps = NULL,
-                            bfile = NULL, plink_bin = NULL) {
+                            bfile = NULL, plink_bin = NULL, min_ref_maf = 0.01) {
   if (!is.data.frame(dat) || !"SNP" %in% names(dat)) stop("dat must contain SNP", call. = FALSE)
+  min_ref_maf <- fastmr_clump_min_ref_maf(min_ref_maf)
   if (length(clump_kb) != 1L || !is.finite(clump_kb) || clump_kb < 0 ||
       length(clump_r2) != 1L || !is.finite(clump_r2) || clump_r2 < 0 || clump_r2 > 1 ||
       length(clump_p1) != 1L || !is.finite(clump_p1) || clump_p1 < 0 || clump_p1 > 1) {
@@ -370,6 +384,19 @@ fast_clump_data <- function(dat, clump_kb = 10000, clump_r2 = 0.001,
   if (!is.null(bfile)) {
     if (is.null(plink_bin)) plink_bin <- Sys.which("plink")
     if (!nzchar(plink_bin)) stop("PLINK executable not found; provide plink_bin", call. = FALSE)
+    freq_dir <- tempfile("fastMR_clump_freq_")
+    on.exit(unlink(freq_dir, recursive = TRUE, force = TRUE), add = TRUE)
+    reference_maf <- fastmr_clump_reference_maf(dat$SNP, c("--bfile", fastmr_clump_quote(bfile)),
+                                                plink_bin, freq_dir)
+    floor <- fastmr_clump_reference_floor(dat$SNP, min_ref_maf, reference_maf,
+                                          "PLINK --freq on the reference bfile (founders)")
+    fastmr_clump_reference_message(floor$summary)
+    dat <- dat[floor$keep, , drop = FALSE]
+    if (!nrow(dat)) {
+      out <- original_dat[FALSE, , drop = FALSE]
+      attr(out, "reference_maf") <- floor$summary
+      return(out)
+    }
     pieces <- lapply(split(seq_len(nrow(dat)), dat$id.exposure, drop = TRUE), function(index) {
       stem <- tempfile("fastMR_clump_")
       input <- paste0(stem, ".txt")
@@ -411,7 +438,9 @@ fast_clump_data <- function(dat, clump_kb = 10000, clump_r2 = 0.001,
       }
       index[dat$SNP[index] %in% clumped$SNP]
     })
-    return(restore_rows(dat[sort(unlist(pieces, use.names = FALSE)), , drop = FALSE]))
+    out <- restore_rows(dat[sort(unlist(pieces, use.names = FALSE)), , drop = FALSE])
+    attr(out, "reference_maf") <- floor$summary
+    return(out)
   }
   if (is.null(ld_matrix)) stop("provide ld_matrix for dependency-free local clumping or bfile for PLINK", call. = FALSE)
   ld_matrix <- as.matrix(ld_matrix)
@@ -429,6 +458,7 @@ fast_clump_data <- function(dat, clump_kb = 10000, clump_r2 = 0.001,
   bp <- if ("chrom_start" %in% names(dat)) as_numeric(dat$chrom_start) else rep(NA_real_, nrow(dat))
   p <- as_numeric(dat[[pval_column]])
   keep <- logical(nrow(dat))
+  undefined <- logical(nrow(dat))
   for (group in split(seq_len(nrow(dat)), dat$id.exposure, drop = TRUE)) {
     candidates <- group[!is.na(positions[group]) & is.finite(p[group]) & p[group] <= clump_p1]
     candidates <- candidates[order(p[candidates], as.character(dat$SNP[candidates]))]
@@ -448,9 +478,32 @@ fast_clump_data <- function(dat, clump_kb = 10000, clump_r2 = 0.001,
       close <- is.na(bp[i]) | is.na(bp[remaining_idx]) |
         abs(bp[i] - bp[remaining_idx]) <= clump_kb * 1000
       r2 <- ld_matrix[positions[i], positions[remaining_idx]]^2
-      blocked[remaining] <- blocked[remaining] |
-        (same_chr & close & is.finite(r2) & r2 >= clump_r2)
+      in_window <- same_chr & close
+      # Undefined LD (e.g. a monomorphic reference variant) cannot show that a
+      # candidate is independent of the index SNP: drop it unless the legacy
+      # behaviour is requested with min_ref_maf = 0.
+      unknown <- if (min_ref_maf > 0) in_window & !is.finite(r2) & !blocked[remaining] else
+        logical(length(remaining))
+      undefined[remaining_idx[unknown]] <- TRUE
+      blocked[remaining] <- blocked[remaining] | unknown |
+        (in_window & is.finite(r2) & r2 >= clump_r2)
     }
   }
-  restore_rows(dat[keep, , drop = FALSE])
+  absent <- is.na(positions)
+  summary <- list(
+    min_ref_maf = min_ref_maf, maf_basis = "not available (ld_matrix); undefined LD treated as not independent",
+    candidate_rows = nrow(dat), absent_rows = sum(absent),
+    below_floor_rows = 0L, undefined_ld_rows = sum(undefined),
+    kept_rows = sum(!absent & !undefined),
+    candidate_variants = length(unique(as.character(dat$SNP))),
+    absent_variants = length(unique(as.character(dat$SNP[absent]))),
+    below_floor_variants = 0L, absent_dropped = TRUE
+  )
+  if (summary$absent_rows || summary$undefined_ld_rows) {
+    message("fastMR clumping: ", summary$absent_rows, " candidate rows absent from ld_matrix dropped, ",
+            summary$undefined_ld_rows, " dropped for undefined LD with an index SNP")
+  }
+  out <- restore_rows(dat[keep, , drop = FALSE])
+  attr(out, "reference_maf") <- summary
+  out
 }
