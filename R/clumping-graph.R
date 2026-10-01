@@ -17,7 +17,7 @@ fastmr_clump_run_graph <- function(snps, reference_args, plink2_bin, clump_kb,
   extract_file <- paste0(stem, ".extract.txt")
   writeLines(as.character(snps), extract_file)
   args <- c(reference_args, "--extract", fastmr_clump_quote(extract_file),
-            "--r2-unphased", "zs", "--ld-window-kb", format(clump_kb, trim = TRUE, scientific = FALSE),
+            "--r2-unphased", "zs", "cols=id,unphased", "--ld-window-kb", format(clump_kb, trim = TRUE, scientific = FALSE),
             "--ld-window", format(ld_window_variants, trim = TRUE, scientific = FALSE),
             "--ld-window-r2", format(clump_r2, trim = TRUE),
             "--threads", as.integer(threads), "--out", fastmr_clump_quote(stem))
@@ -44,11 +44,38 @@ fastmr_clump_run_graph <- function(snps, reference_args, plink2_bin, clump_kb,
     if (!nzchar(zstdcat)) stop("PLINK produced a .vcor.zst file but neither zstdcat nor zstd is available", call. = FALSE)
     cmd_args <- c("-dc", shQuote(path))
   }
-  lines <- system2(zstdcat, cmd_args, stdout = TRUE, stderr = TRUE)
-  if (!is.null(attr(lines, "status")) && attr(lines, "status") != 0L) {
+  # Stream the decompressed table in blocks so that only a block of lines (not
+  # the whole ~200 B/edge line vector) is ever resident; each block is reduced
+  # to its two ID columns, which share interned CHARSXPs.
+  con <- pipe(paste(shQuote(zstdcat), paste(cmd_args, collapse = " ")), "r")
+  closed <- FALSE
+  on.exit(if (!closed) try(close(con), silent = TRUE), add = TRUE)
+  fa <- 3L; fb <- 6L  # default layout when the header is unrecognised
+  first <- TRUE
+  leads <- list(); targets <- list()
+  repeat {
+    block <- readLines(con, n = 1000000L, warn = FALSE)
+    if (!length(block)) break
+    if (first) {
+      first <- FALSE
+      if (startsWith(block[[1L]], "#")) {
+        header <- strsplit(sub("^#", "", block[[1L]]), "\t", fixed = TRUE)[[1L]]
+        ia <- match("ID_A", header); ib <- match("ID_B", header)
+        if (!is.na(ia) && !is.na(ib) && ia < ib) { fa <- ia; fb <- ib }
+      }
+    }
+    ids <- .fastmr_vcor_ids(block, fa, fb)
+    leads[[length(leads) + 1L]] <- ids$lead
+    targets[[length(targets) + 1L]] <- ids$target
+  }
+  status <- close(con)
+  closed <- TRUE
+  if (!is.null(status) && !identical(as.integer(status), 0L)) {
     stop("could not decompress PLINK LD output", call. = FALSE)
   }
-  as.data.frame(.fastmr_vcor_ids(lines), stringsAsFactors = FALSE)
+  data.frame(lead = as.character(unlist(leads, use.names = FALSE)),
+             target = as.character(unlist(targets, use.names = FALSE)),
+             stringsAsFactors = FALSE)
 }
 
 fastmr_clump_plink_version <- function(plink2_bin) {
@@ -206,7 +233,7 @@ fast_clump_data_graph <- function(
   ld_provenance <- list(
     plink2_version = fastmr_clump_plink_version(plink2_bin),
     mode = "all_pairs_graph",
-    flags = c("--r2-unphased zs", paste("--ld-window-kb", format(clump_kb, trim = TRUE, scientific = FALSE)),
+    flags = c("--r2-unphased zs cols=id,unphased", paste("--ld-window-kb", format(clump_kb, trim = TRUE, scientific = FALSE)),
               "--ld-window 1000000000", paste("--ld-window-r2", format(clump_r2, trim = TRUE))),
     reference = paste(gsub("'", "", reference_args), collapse = " "),
     reference_manifest_md5 = reference_md5,

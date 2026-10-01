@@ -194,7 +194,7 @@ test_that("graph partition runs through the PLINK2 argument surface", {
   args <- readLines(log)
   expect_length(args, 2L)  # --version + one all-pairs call
   call <- args[grepl("--r2-unphased", args)]
-  expect_match(call, "--r2-unphased zs --ld-window-kb 500 --ld-window 1000000000 --ld-window-r2 0.01", fixed = TRUE)
+  expect_match(call, "--r2-unphased zs cols=id,unphased --ld-window-kb 500 --ld-window 1000000000 --ld-window-r2 0.01", fixed = TRUE)
   expect_match(call, "--extract", fixed = TRUE)
 })
 
@@ -310,4 +310,27 @@ test_that("graph clumping skips PLINK when no candidate pairs exist", {
   res <- fast_clump_data_graph(dat, clump_kb = 1, clump_r2 = 0.01, bfile = "panel", plink2_bin = plink2)
   expect_identical(res$instruments$E, c("A", "B"))
   expect_false(any(grepl("--r2-unphased", readLines(log))))
+})
+
+test_that(".fastmr_vcor_ids honours header-derived ID columns", {
+  ids <- fastMR:::.fastmr_vcor_ids(c("#ID_A\tID_B\tUNPHASED_R2", "rs1\trs2\t0.9", "rs3\trs4"), 1L, 2L)
+  expect_identical(ids$lead, c("rs1", "rs3"))
+  expect_identical(ids$target, c("rs2", "rs4"))
+})
+
+test_that("graph run parses a multi-block zstd stream identically", {
+  skip_on_os("windows")
+  skip_if(!nzchar(Sys.which("zstd")), "zstd unavailable")
+  n <- 25
+  tab <- c("#ID_A\tID_B\tUNPHASED_R2", sprintf("v%d\tw%d\t0.5", 1:n, 1:n))
+  plink2 <- tempfile("fastMR_plink2_cols_")
+  src <- tempfile(); writeLines(tab, src)
+  writeLines(c("#!/bin/sh", "out=''",
+               "while [ \"$#\" -gt 0 ]; do case \"$1\" in --out) out=\"$2\"; shift 2;; *) shift;; esac; done",
+               sprintf("zstd -q -f %s -o \"${out}.vcor.zst\"", src)), plink2)
+  Sys.chmod(plink2, "0755")
+  wd <- tempfile("wd"); dir.create(wd)
+  ld <- fastMR:::fastmr_clump_run_graph(c("v1", "w1"), c("--bfile", "p"), plink2, 500, 0.01, 1L, wd, "1")
+  expect_identical(ld$lead, sprintf("v%d", 1:n))
+  expect_identical(ld$target, sprintf("w%d", 1:n))
 })
