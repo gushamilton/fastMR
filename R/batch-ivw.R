@@ -136,65 +136,6 @@ fastmr_validate_csr <- function(row_ptr, col_index, exposure_beta,
     stop("col_index must contain zero-based SNP indices in the outcome range",
          call. = FALSE)
   }
-  # Duplicate SNP indices within a CSR row are rejected by the native kernel.
-  valid_outcome <- outcome_present &
-    (!is.finite(outcome_beta) | !is.finite(outcome_se) | outcome_se <= 0)
-  if (any(valid_outcome)) {
-    stop("present outcome values must be finite with positive standard errors",
-         call. = FALSE)
-  }
-  invisible(list(exposure_present = exposure_present,
-                 outcome_present = outcome_present))
-}
-
-fastmr_batch_dimnames <- function(result, exposure_beta, outcome_beta) {
-  exposure_names <- rownames(exposure_beta)
-  outcome_names <- rownames(outcome_beta)
-  if (is.null(exposure_names)) exposure_names <- seq_len(nrow(exposure_beta))
-  if (is.null(outcome_names)) outcome_names <- seq_len(nrow(outcome_beta))
-  for (name in c("nsnp", "beta", "se", "Q", "sigma")) {
-    dimnames(result[[name]]) <- list(exposure_names, outcome_names)
-  }
-  result
-}
-
-fastmr_validate_csr_integer <- function(x, name, allow_empty = TRUE) {
-  if (!is.atomic(x) || is.object(x) || is.complex(x) ||
-      (length(x) == 0L && !allow_empty)) {
-    stop(name, " must be an integer vector", call. = FALSE)
-  }
-  if (!is.integer(x)) {
-    if (!is.numeric(x) || any(!is.finite(x)) || any(x != floor(x)) ||
-        any(x < -.Machine$integer.max - 1) || any(x > .Machine$integer.max)) {
-      stop(name, " must contain finite 32-bit integer values", call. = FALSE)
-    }
-    x <- as.integer(x)
-  }
-  if (anyNA(x)) stop(name, " must not contain NA", call. = FALSE)
-  x
-}
-
-fastmr_validate_csr <- function(row_ptr, col_index, exposure_beta,
-                                outcome_beta, outcome_se, outcome_present) {
-  row_ptr <- fastmr_validate_csr_integer(row_ptr, "row_ptr", allow_empty = FALSE)
-  col_index <- fastmr_validate_csr_integer(col_index, "col_index")
-  if (length(row_ptr) < 2L) stop("row_ptr must have at least two entries", call. = FALSE)
-  if (row_ptr[[1L]] != 0L || any(row_ptr < 0L) || any(diff(row_ptr) < 0L)) {
-    stop("row_ptr must start at zero and be non-decreasing", call. = FALSE)
-  }
-  if (row_ptr[[length(row_ptr)]] != length(col_index) ||
-      length(exposure_beta) != length(col_index)) {
-    stop("row_ptr, col_index, and exposure_beta have incompatible lengths",
-         call. = FALSE)
-  }
-  if (any(!is.finite(exposure_beta))) {
-    stop("exposure_beta must contain finite values", call. = FALSE)
-  }
-  snp_count <- ncol(outcome_beta)
-  if (any(col_index < 0L) || any(col_index >= snp_count)) {
-    stop("col_index must contain zero-based SNP indices in the outcome range",
-         call. = FALSE)
-  }
   for (i in seq_len(length(row_ptr) - 1L)) {
     first <- row_ptr[[i]] + 1L
     last <- row_ptr[[i + 1L]]
