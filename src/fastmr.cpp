@@ -1657,7 +1657,11 @@ Rcpp::List compute_sparse_ivw_grid(
     Rcpp::NumericVector exposure_beta, Rcpp::NumericMatrix outcome_beta,
     Rcpp::NumericMatrix outcome_se, Rcpp::LogicalMatrix outcome_present,
     int threads,
-    Rcpp::Nullable<Rcpp::LogicalMatrix> pair_snp_keep = R_NilValue) {
+    Rcpp::Nullable<Rcpp::LogicalMatrix> pair_snp_keep = R_NilValue,
+    Rcpp::Nullable<Rcpp::NumericVector> steiger_exposure_rsq = R_NilValue,
+    Rcpp::Nullable<Rcpp::NumericMatrix> steiger_outcome_rsq = R_NilValue,
+    Rcpp::Nullable<Rcpp::IntegerVector> drop_outcome = R_NilValue,
+    Rcpp::Nullable<Rcpp::IntegerVector> drop_entry = R_NilValue) {
   const int exposure_count = row_ptr.size() - 1;
   const int outcome_count = outcome_beta.nrow();
   const int snp_count = outcome_beta.ncol();
@@ -1686,6 +1690,57 @@ Rcpp::List compute_sparse_ivw_grid(
       }
     }
   }
+  // Steiger masks are evaluated on the fly (no O x N matrix): keep iff
+  // rsq_exposure[entry] > rsq_outcome[outcome, snp]; NA/NaN drops.
+  const bool has_steiger = steiger_exposure_rsq.isNotNull() || steiger_outcome_rsq.isNotNull();
+  Rcpp::NumericVector steiger_exp(0);
+  Rcpp::NumericMatrix steiger_out(0, 0);
+  if (has_steiger) {
+    if (steiger_exposure_rsq.isNull() || steiger_outcome_rsq.isNull()) {
+      Rcpp::stop("steiger_exposure_rsq and steiger_outcome_rsq must be supplied together");
+    }
+    steiger_exp = Rcpp::as<Rcpp::NumericVector>(steiger_exposure_rsq);
+    steiger_out = Rcpp::as<Rcpp::NumericMatrix>(steiger_outcome_rsq);
+    if (steiger_exp.size() != col_index.size()) {
+      Rcpp::stop("steiger_exposure_rsq must have one value per CSR entry");
+    }
+    if (steiger_out.nrow() != outcome_count || steiger_out.ncol() != snp_count) {
+      Rcpp::stop("steiger_outcome_rsq must have the same dimensions as outcome_beta");
+    }
+  }
+  // Sparse drop list, sorted by (outcome, entry) with per-outcome offsets.
+  const bool has_drop = drop_outcome.isNotNull() || drop_entry.isNotNull();
+  std::vector<int> drop_offset;
+  std::vector<int> drop_sorted;
+  if (has_drop) {
+    if (drop_outcome.isNull() || drop_entry.isNull()) {
+      Rcpp::stop("pair_snp_drop must contain both outcome and entry");
+    }
+    Rcpp::IntegerVector d_out = Rcpp::as<Rcpp::IntegerVector>(drop_outcome);
+    Rcpp::IntegerVector d_ent = Rcpp::as<Rcpp::IntegerVector>(drop_entry);
+    if (d_out.size() != d_ent.size()) {
+      Rcpp::stop("pair_snp_drop outcome and entry must have equal length");
+    }
+    drop_offset.assign(static_cast<std::size_t>(outcome_count) + 1, 0);
+    for (R_xlen_t i = 0; i < d_out.size(); ++i) {
+      if (d_out[i] == NA_INTEGER || d_ent[i] == NA_INTEGER ||
+          d_out[i] < 1 || d_out[i] > outcome_count ||
+          d_ent[i] < 1 || d_ent[i] > col_index.size()) {
+        Rcpp::stop("pair_snp_drop indices must be 1-based and within the outcome and CSR entry ranges");
+      }
+      ++drop_offset[static_cast<std::size_t>(d_out[i])];
+    }
+    for (int o = 0; o < outcome_count; ++o) drop_offset[o + 1] += drop_offset[o];
+    drop_sorted.resize(static_cast<std::size_t>(d_out.size()));
+    std::vector<int> cursor(drop_offset.begin(), drop_offset.end() - 1);
+    for (R_xlen_t i = 0; i < d_out.size(); ++i) {
+      drop_sorted[cursor[d_out[i] - 1]++] = d_ent[i] - 1;
+    }
+    for (int o = 0; o < outcome_count; ++o) {
+      std::sort(drop_sorted.begin() + drop_offset[o], drop_sorted.begin() + drop_offset[o + 1]);
+    }
+  }
+  const bool report_prefilter = has_steiger || has_drop;
   for (int exposure = 0; exposure < exposure_count; ++exposure) {
     if (row_ptr[exposure] < 0 || row_ptr[exposure + 1] < row_ptr[exposure]) {
       Rcpp::stop("CSR row_ptr must be non-decreasing and non-negative");
@@ -1725,6 +1780,8 @@ Rcpp::List compute_sparse_ivw_grid(
   std::fill(result_q.begin(), result_q.end(), NA_VALUE);
   std::fill(result_sigma.begin(), result_sigma.end(), NA_VALUE);
   std::fill(result_nsnp.begin(), result_nsnp.end(), 0.0);
+  Rcpp::NumericMatrix result_prefilter(report_prefilter ? exposure_count : 0,
+                                       report_prefilter ? outcome_count : 0);
 
 #ifdef _OPENMP
   const int thread_count = std::max(1, std::min(threads, exposure_count));
@@ -1738,10 +1795,26 @@ Rcpp::List compute_sparse_ivw_grid(
       double denominator = 0.0;
       double yy = 0.0;
       double count = 0.0;
+      double prefilter = 0.0;
+      const int* drop_it = nullptr;
+      const int* drop_end = nullptr;
+      if (has_drop) {
+        const int* base = drop_sorted.data();
+        drop_it = std::lower_bound(base + drop_offset[outcome],
+                                   base + drop_offset[outcome + 1], first);
+        drop_end = base + drop_offset[outcome + 1];
+      }
       for (int index = first; index < last; ++index) {
-        if (has_pair_snp_keep && !pair_snp_keep_matrix(outcome, index)) continue;
         const int snp = col_index[index];
         if (!outcome_present(outcome, snp)) continue;
+        prefilter += 1.0;
+        if (has_pair_snp_keep && !pair_snp_keep_matrix(outcome, index)) continue;
+        if (has_steiger &&
+            !(steiger_exp[index] > steiger_out(outcome, snp))) continue;
+        if (has_drop) {
+          while (drop_it != drop_end && *drop_it < index) ++drop_it;
+          if (drop_it != drop_end && *drop_it == index) continue;
+        }
         const double x = exposure_beta[index];
         const double y = outcome_beta(outcome, snp);
         const double se = outcome_se(outcome, snp);
@@ -1754,6 +1827,7 @@ Rcpp::List compute_sparse_ivw_grid(
       const std::size_t result_index = static_cast<std::size_t>(exposure) +
                                        static_cast<std::size_t>(exposure_count) * outcome;
       result_nsnp[ result_index ] = count;
+      if (report_prefilter) result_prefilter[ result_index ] = prefilter;
       if (count < 2.0 || !std::isfinite(denominator) || denominator <= 0.0) continue;
       const double beta_value = numerator / denominator;
       if (!std::isfinite(beta_value)) continue;
@@ -1776,6 +1850,7 @@ Rcpp::List compute_sparse_ivw_grid(
     Rcpp::_["Q"] = result_q,
     Rcpp::_["sigma"] = result_sigma
   );
+  if (report_prefilter) output["nsnp_prefilter"] = result_prefilter;
   output.attr("class") = "fastmr_sparse_ivw_compact";
   return output;
 }
@@ -2239,9 +2314,14 @@ Rcpp::List fastmr_sparse_ivw_native(
     Rcpp::NumericVector exposure_beta, Rcpp::NumericMatrix outcome_beta,
     Rcpp::NumericMatrix outcome_se, Rcpp::LogicalMatrix outcome_present,
     int threads = 1,
-    Rcpp::Nullable<Rcpp::LogicalMatrix> pair_snp_keep = R_NilValue) {
+    Rcpp::Nullable<Rcpp::LogicalMatrix> pair_snp_keep = R_NilValue,
+    Rcpp::Nullable<Rcpp::NumericVector> steiger_exposure_rsq = R_NilValue,
+    Rcpp::Nullable<Rcpp::NumericMatrix> steiger_outcome_rsq = R_NilValue,
+    Rcpp::Nullable<Rcpp::IntegerVector> drop_outcome = R_NilValue,
+    Rcpp::Nullable<Rcpp::IntegerVector> drop_entry = R_NilValue) {
   validate_controls(0, threads, 1.0);
   return compute_sparse_ivw_grid(row_ptr, col_index, exposure_beta,
                                  outcome_beta, outcome_se, outcome_present,
-                                 threads, pair_snp_keep);
+                                 threads, pair_snp_keep, steiger_exposure_rsq,
+                                 steiger_outcome_rsq, drop_outcome, drop_entry);
 }
