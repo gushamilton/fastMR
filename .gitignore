@@ -17,3 +17,4 @@ results/two_sample_mr_gzip_benchmark/*
 tests/testthat/_snaps/
 .local/
 *.Rcheck/
+.Rlib/

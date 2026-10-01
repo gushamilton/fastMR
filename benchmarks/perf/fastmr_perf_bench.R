@@ -289,13 +289,28 @@ sc$clump_mock <- function() {
     })
     res
   }
+  # One all-pairs call per chromosome (the 'graph' partition's oracle).
+  graph_oracle <- function(snps, reference_args, plink2_bin, clump_kb, clump_r2, threads, workdir, tag, ...) {
+    calls <<- calls + 1L
+    t0 <- proc.time()[["elapsed"]]
+    on.exit(oracle_s <<- oracle_s + proc.time()[["elapsed"]] - t0)
+    i <- match(unique(snps), snp)
+    edges <- ld_edges(i, i, clump_kb, clump_r2)
+    data.frame(lead = snp[edges$l], target = snp[edges$t], stringsAsFactors = FALSE)
+  }
   ns <- asNamespace("fastMR")
   if (!exists("fastmr_clump_run_frontier", ns, inherits = FALSE)) stop("clump_mock needs fastmr_clump_run_frontier")
-  orig <- get("fastmr_clump_run_frontier", ns)
-  unlockBinding("fastmr_clump_run_frontier", ns); assign("fastmr_clump_run_frontier", oracle, ns)
-  on.exit({ assign("fastmr_clump_run_frontier", orig, ns); lockBinding("fastmr_clump_run_frontier", ns) })
-  for (strategy in if (E <= 100L) c("global", "lead_row") else "lead_row") {
-    fun <- if (strategy == "global") fast_clump_data_batched else fast_clump_data_lead_rows
+  swap <- function(name, fun) {
+    orig <- get(name, ns); unlockBinding(name, ns); assign(name, fun, ns)
+    function() { assign(name, orig, ns); lockBinding(name, ns) }
+  }
+  restore <- list(swap("fastmr_clump_run_frontier", oracle))
+  if (exists("fastmr_clump_run_graph", ns, inherits = FALSE)) restore <- c(restore, swap("fastmr_clump_run_graph", graph_oracle))
+  on.exit(for (f in restore) f())
+  strategies <- c(if (E <= 100L) "global", "lead_row", if (exists("fast_clump_data_graph")) "graph")
+  for (strategy in strategies) {
+    fun <- switch(strategy, global = fast_clump_data_batched, lead_row = fast_clump_data_lead_rows,
+                  graph = fast_clump_data_graph)
     calls <- 0L; oracle_s <- 0
     r <- timed(fun(dat, clump_kb = 10000, clump_r2 = 0.01, clump_p1 = 0.01, plink2_bin = "/bin/true", bfile = "mock"))
     emit("clump_mock", strategy, sprintf("E=%d;rows=%d;retained=%d;rounds=%d;oracle_calls=%d;oracle_s=%.2f;logical_pairs=%.0f",
