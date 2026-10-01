@@ -15,7 +15,11 @@ fast_mr_compressed(exposure_files, outcome_files, instruments,
   \item{instruments}{A canonical-key vector shared by all exposures, or one
   canonical-key vector per exposure in a list.}
   \item{methods}{FastMR method codes.}
-  \item{nboot}{Number of bootstrap draws.}
+  \item{nboot}{Number of bootstrap draws. The default of \code{0} suits
+    IVW-type methods; bootstrap-dependent methods (medians, modes,
+    \code{egger_bootstrap}) return \code{NaN} \code{se} and \code{pval} when
+    \code{nboot = 0}, and a warning of class \code{fastmr_nboot_warning} is
+    issued before any files are read.}
   \item{seed}{Optional FastMR seed.}
   \item{threads}{Native FastMR worker count.}
   \item{io_threads}{Number of stores decoded concurrently inside the shared

@@ -6,6 +6,10 @@
 #' @param methods Character vector of method codes. See
 #'   [fastmr_method_registry()].
 #' @param nboot Number of normal bootstrap draws for median and mode methods.
+#'   Methods whose standard error depends on bootstrapping (see
+#'   [fastmr_method_registry()], column `bootstrap`) return `NaN` `se` and
+#'   `pval` when `nboot = 0`; a warning of class `fastmr_nboot_warning` is
+#'   issued in that case.
 #' @param seed Optional integer seed. Seeded median/mode methods share one
 #'   ratio bootstrap layout per pair.
 #' @param threads Maximum native worker count. It is most useful for
@@ -46,6 +50,7 @@ fast_mr <- function(data,
   snp <- as.character(data$SNP)
   snp[is.na(snp)] <- ""
   if (any(keep & !nzchar(snp))) stop("kept rows must have non-empty SNP identifiers", call. = FALSE)
+  fastmr_check_bootstrap_nboot(methods, controls[["nboot"]])
   id.exp <- if ("id.exposure" %in% names(data)) as.character(data$id.exposure) else rep("", n)
   id.out <- if ("id.outcome" %in% names(data)) as.character(data$id.outcome) else rep("", n)
   id.exp[is.na(id.exp)] <- ""
@@ -93,7 +98,8 @@ fast_mr <- function(data,
 #' @param exposure_se Exposure standard-error matrix.
 #' @param outcome_se Outcome standard-error matrix.
 #' @param methods Character vector of method codes.
-#' @param nboot Number of bootstrap draws.
+#' @param nboot Number of bootstrap draws. Bootstrap-dependent methods return
+#'   `NaN` `se` and `pval` when `nboot = 0`, with a `fastmr_nboot_warning`.
 #' @param seed Optional integer seed.
 #' @param threads Maximum native worker count.
 #' @param output Optional path for a Zstandard-compressed Parquet copy of the
@@ -132,6 +138,7 @@ fast_mr_grid <- function(exposure_beta, outcome_beta, exposure_se, outcome_se,
       (!is.null(exp.snps) && !identical(exp.snps, out.snps))) {
     stop("exposure and outcome matrices must use the same SNP column names and order", call. = FALSE)
   }
+  fastmr_check_bootstrap_nboot(methods, controls[["nboot"]])
   native <- fastmr_native_call(
     fastmr_grid_native,
     list(

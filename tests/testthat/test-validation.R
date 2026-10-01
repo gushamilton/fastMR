@@ -16,7 +16,8 @@ test_that("invalid controls and method names fail clearly", {
 test_that("invalid grid shapes and values fail before native compute", {
   g <- grid_fixture(2, 2)
   expect_error(fast_mr_grid(g$exposure_beta, g$outcome_beta[, -1, drop = FALSE],
-                             g$exposure_se, g$outcome_se, nboot = 0), "matching")
+                             g$exposure_se, g$outcome_se, methods = "ivw",
+                             nboot = 0), "matching")
   g$outcome_se[[1]] <- 0
   expect_error(fast_mr_grid(g$exposure_beta, g$outcome_beta, g$exposure_se, g$outcome_se,
                             nboot = 0), "positive standard errors")

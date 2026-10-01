@@ -1,6 +1,7 @@
 test_that("fast_mr returns tidy TwoSampleMR-style results", {
   d <- il6_fixture()
-  result <- fast_mr(d, nboot = 0, seed = 20260801)
+  expect_warning(result <- fast_mr(d, nboot = 0, seed = 20260801),
+                 class = "fastmr_nboot_warning")
   expect_s3_class(result, "data.frame")
   expect_equal(result$method_code, c("ivw", "egger", "weighted_median", "simple_mode", "weighted_mode"))
   expect_equal(result$nsnp, rep(82, 5))
@@ -24,7 +25,8 @@ test_that("dispatcher accepts common TwoSampleMR method spellings", {
 
 test_that("simple median is available through the native kernel", {
   d <- il6_fixture()[1:8, ]
-  result <- fast_mr(d, methods = "mr_simple_median", nboot = 0)
+  expect_warning(result <- fast_mr(d, methods = "mr_simple_median", nboot = 0),
+                 class = "fastmr_nboot_warning")
   expect_equal(result$method_code, "simple_median")
   expect_equal(result$nsnp, 8)
   expect_true(is.finite(result$b))
@@ -83,7 +85,8 @@ test_that("duplicate SNP rows do not change estimates or standard errors", {
 
 test_that("mode diagnostics report the requested phi", {
   d <- il6_fixture()[1:8, ]
-  result <- fast_mr(d, methods = "simple_mode", phi = 0.25, nboot = 0)
+  expect_warning(result <- fast_mr(d, methods = "simple_mode", phi = 0.25, nboot = 0),
+                 class = "fastmr_nboot_warning")
   expect_equal(result$phi, 0.25)
 })
 

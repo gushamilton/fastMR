@@ -22,7 +22,11 @@ fast_mr(
 \item{methods}{Character vector of method codes. See
 \code{\link[=fastmr_method_registry]{fastmr_method_registry()}}.}
 
-\item{nboot}{Number of normal bootstrap draws for median and mode methods.}
+\item{nboot}{Number of normal bootstrap draws for median and mode methods.
+Methods whose standard error depends on bootstrapping (see
+\code{\link[=fastmr_method_registry]{fastmr_method_registry()}}, column \code{bootstrap}) return \code{NaN} \code{se} and
+\code{pval} when \code{nboot = 0}; a warning of class \code{fastmr_nboot_warning} is
+issued in that case.}
 
 \item{seed}{Optional integer seed. Seeded median/mode methods share one
 ratio bootstrap layout per pair.}
@@ -31,7 +35,7 @@ ratio bootstrap layout per pair.}
 \code{\link[=fast_mr_grid]{fast_mr_grid()}}; single-pair calls remain bounded and deterministic.}
 
 \item{output}{Optional path for a Zstandard-compressed Parquet copy of the
-result. The path must not already exist; use \code{\link{fast_write_parquet}} when
+result. The path must not already exist; use \code{\link[=fast_write_parquet]{fast_write_parquet()}} when
 an overwrite or another compression codec is required.}
 
 \item{...}{Optional \code{phi} bandwidth multiplier for mode methods and \code{penk}

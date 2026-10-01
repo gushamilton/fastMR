@@ -232,6 +232,14 @@ it preserves the ordinary pairwise `fast_mr()` contract. In both cases the
 returned timing separates compressed I/O, estimation, total elapsed time, and,
 when enabled by CompreSSoR, compressed source bytes read.
 
+`fast_mr_compressed()` defaults to `nboot = 0`, which suits IVW-type methods.
+Median, mode, and `egger_bootstrap` methods (the rows with `bootstrap = TRUE`
+in `fastmr_method_registry()`) take their standard errors from bootstrap
+draws, so pass `nboot` explicitly (for example `nboot = 1000`) when requesting
+them. With `nboot = 0`, `fast_mr()`, `fast_mr_grid()`, and
+`fast_mr_compressed()` raise a `fastmr_nboot_warning` and return `NaN`/`NA`
+standard errors and p-values for those methods.
+
 ### Full-FinnGen compressed I/O benchmark
 
 This end-to-end Mac mini benchmark used a real 14,923,434-variant FinnGen GWAS
