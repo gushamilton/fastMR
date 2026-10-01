@@ -69,7 +69,7 @@ echo "hostname=$(hostname) sha=${SHA} label=${LABEL} rep=${REP} threads=${THREAD
 
 IFS=',' read -ra SCN <<< "${SCENARIOS}"
 for s in "${SCN[@]}"; do
-  TMP="$(mktemp)"; TV="$(mktemp)"
+  TMP="$(mktemp)"; TV="$(mktemp)"; rm -f "${TMP}"  # bench appends headerless rows to an existing file
   # One process per scenario so /usr/bin/time -v peak RSS is per scenario.
   /usr/bin/time -v -o "${TV}" Rscript "${BENCH_SCRIPT}" --scenario="${s}" --scale="${SCALE}" \
     --label="${LABEL}" --sha="${SHA}" --lib="${LIB}" --replicate="${REP}" \
