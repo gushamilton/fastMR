@@ -7,7 +7,8 @@ exposure-outcome analysis without rsID lookup or whole-GWAS materialisation.}
 \usage{
 fast_mr_compressed(exposure_files, outcome_files, instruments,
   methods = "ivw", nboot = 0, seed = NULL, threads = 1,
-  io_threads = 1, minimum_snps = 1L, strict = TRUE, output = NULL, ...)
+  io_threads = 1, minimum_snps = 1L, strict = TRUE, output = NULL,
+  estimator = c("auto", "pairwise"), ...)
 }
 \arguments{
   \item{exposure_files}{Named character vector of Pcodec CompreSSoR stores.}
@@ -26,6 +27,15 @@ fast_mr_compressed(exposure_files, outcome_files, instruments,
   \item{output}{Optional path for a Zstandard-compressed Parquet copy of the
   result. The path must not already exist; use \code{\link{fast_write_parquet}}
   when an overwrite or another compression codec is required.}
+  \item{estimator}{\code{"auto"} (default) or \code{"pairwise"}. With
+  \code{"auto"}, runs requesting only \code{methods = "ivw"} (and no extra
+  \code{...} options) whose instrument sets are not shared by all exposures use
+  the sparse CSR kernel \code{\link{fast_mr_sparse_ivw}} instead of an R loop
+  calling \code{fast_mr()} per pair. Counts, errors, warnings,
+  \code{minimum_snps} handling and row order are identical, but estimates may
+  differ from \code{"pairwise"} at about 1e-16 relative. \code{"pairwise"} and
+  every other method set always use the per-pair path. The path used is
+  reported as \code{estimator_path} in the \code{compressed_input} attribute.}
   \item{...}{Additional options passed to \code{fast_mr()}.}
 }
 \value{A tidy FastMR result. Extraction counts and input details are retained
