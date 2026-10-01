@@ -17,7 +17,7 @@ fastmr_clump_run_graph <- function(snps, reference_args, plink2_bin, clump_kb,
   extract_file <- paste0(stem, ".extract.txt")
   writeLines(as.character(snps), extract_file)
   args <- c(reference_args, "--extract", fastmr_clump_quote(extract_file),
-            "--r2-unphased", "zs", "cols=id,unphased", "--ld-window-kb", format(clump_kb, trim = TRUE, scientific = FALSE),
+            "--r2-unphased", "zs", "cols=id", "--ld-window-kb", format(clump_kb, trim = TRUE, scientific = FALSE),
             "--ld-window", format(ld_window_variants, trim = TRUE, scientific = FALSE),
             "--ld-window-r2", format(clump_r2, trim = TRUE),
             "--threads", as.integer(threads), "--out", fastmr_clump_quote(stem))
@@ -233,7 +233,7 @@ fast_clump_data_graph <- function(
   ld_provenance <- list(
     plink2_version = fastmr_clump_plink_version(plink2_bin),
     mode = "all_pairs_graph",
-    flags = c("--r2-unphased zs cols=id,unphased", paste("--ld-window-kb", format(clump_kb, trim = TRUE, scientific = FALSE)),
+    flags = c("--r2-unphased zs cols=id", paste("--ld-window-kb", format(clump_kb, trim = TRUE, scientific = FALSE)),
               "--ld-window 1000000000", paste("--ld-window-r2", format(clump_r2, trim = TRUE))),
     reference = paste(gsub("'", "", reference_args), collapse = " "),
     reference_manifest_md5 = reference_md5,

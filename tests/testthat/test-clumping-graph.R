@@ -194,7 +194,7 @@ test_that("graph partition runs through the PLINK2 argument surface", {
   args <- readLines(log)
   expect_length(args, 2L)  # --version + one all-pairs call
   call <- args[grepl("--r2-unphased", args)]
-  expect_match(call, "--r2-unphased zs cols=id,unphased --ld-window-kb 500 --ld-window 1000000000 --ld-window-r2 0.01", fixed = TRUE)
+  expect_match(call, "--r2-unphased zs cols=id --ld-window-kb 500 --ld-window 1000000000 --ld-window-r2 0.01", fixed = TRUE)
   expect_match(call, "--extract", fixed = TRUE)
 })
 
