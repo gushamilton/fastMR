@@ -356,54 +356,83 @@ fastmr_steiger_add_rsq_one <- function(data, what) {
 #' @export
 fast_mr_steiger_filtering <- function(data) {
   if (!is.data.frame(data)) stop("data must be a data.frame", call. = FALSE)
-  groups <- fastmr_diagnostic_groups(data)
-  rows <- lapply(groups, function(group) {
-    x <- group$data
-    if (!"units.exposure" %in% names(x)) x$units.exposure <- NA_character_
-    if (!"units.outcome" %in% names(x)) x$units.outcome <- NA_character_
-    if (!fastmr_steiger_unique(x$exposure) || !fastmr_steiger_unique(x$outcome) ||
-        !fastmr_steiger_unique(x$units.exposure) ||
-        !fastmr_steiger_unique(x$units.outcome)) {
+  fastmr_prepare_vectors(data)
+  g <- fastmr_diagnostic_group_index(data)
+  if (!length(g$rows)) return(data.frame())
+  n <- nrow(data)
+  gid <- rep.int(seq_along(g$rows), lengths(g$rows))
+  x <- data[unlist(g$rows, use.names = FALSE), , drop = FALSE]
+  if (!"units.exposure" %in% names(x)) x$units.exposure <- NA_character_
+  if (!"units.outcome" %in% names(x)) x$units.outcome <- NA_character_
+  first <- cumsum(c(1L, lengths(g$rows)))[seq_along(g$rows)]
+  for (column in c("exposure", "outcome", "units.exposure", "units.outcome")) {
+    value <- x[[column]]
+    if (is.null(value)) {
       stop("each exposure/outcome pair must have unique labels and units",
            call. = FALSE)
     }
-    x <- fastmr_steiger_add_rsq_one(x, "exposure")
-    x <- fastmr_steiger_add_rsq_one(x, "outcome")
-    if (!"effective_n.exposure" %in% names(x)) {
-      x$effective_n.exposure <- NA_real_
+    code <- match(value, unique(value))
+    if (any(code != code[first][gid])) {
+      stop("each exposure/outcome pair must have unique labels and units",
+           call. = FALSE)
     }
-    if (!"effective_n.outcome" %in% names(x)) {
-      x$effective_n.outcome <- NA_real_
+  }
+  for (what in c("exposure", "outcome")) {
+    units <- as.character(x[[paste0("units.", what)]])
+    binary <- !is.na(units) & units == "log odds"
+    standardized <- !binary & !is.na(units) & grepl("SD", units)
+    classes <- list(binary, standardized, !binary & !standardized)
+    original <- names(x)
+    # Compute every model from the pre-update data so a column created for one
+    # model is not mistaken for a supplied rsq column by the next.
+    base <- x
+    for (rows in classes) {
+      if (!any(rows)) next
+      part <- fastmr_steiger_add_rsq_one(base[rows, , drop = FALSE], what)
+      touched <- names(part)[!names(part) %in% original |
+        names(part) %in% paste0(c("rsq.", "pval."), what)]
+      for (column in touched) {
+        value <- part[[column]]
+        if (is.null(x[[column]]) || !identical(typeof(x[[column]]), typeof(value)) ||
+            !is.null(attributes(x[[column]]))) {
+          x[[column]] <- value[rep(NA_integer_, n)]
+        }
+        x[[column]][rows] <- value
+      }
     }
-    x$steiger_dir <- x$rsq.exposure > x$rsq.outcome
-    x$steiger_pval <- fastmr_steiger_rtest_p_vector(
-      sqrt(x$rsq.exposure), sqrt(x$rsq.outcome),
-      x$effective_n.exposure, x$effective_n.outcome)
-    p_reason <- rep("ok", nrow(x))
-    p_reason <- fastmr_steiger_set_reason(
-      p_reason, !x$rsq_valid.exposure,
-      paste0("exposure_", x$rsq_reason.exposure))
-    p_reason <- fastmr_steiger_set_reason(
-      p_reason, !x$rsq_valid.outcome,
-      paste0("outcome_", x$rsq_reason.outcome))
-    p_reason <- fastmr_steiger_set_reason(
-      p_reason, is.na(x$effective_n.exposure), "missing_exposure_n")
-    p_reason <- fastmr_steiger_set_reason(
-      p_reason, !is.finite(x$effective_n.exposure) |
-        x$effective_n.exposure <= 3, "invalid_exposure_n")
-    p_reason <- fastmr_steiger_set_reason(
-      p_reason, is.na(x$effective_n.outcome), "missing_outcome_n")
-    p_reason <- fastmr_steiger_set_reason(
-      p_reason, !is.finite(x$effective_n.outcome) |
-        x$effective_n.outcome <= 3, "invalid_outcome_n")
-    p_reason <- fastmr_steiger_set_reason(
-      p_reason, !is.finite(x$steiger_pval), "invalid_steiger_pval")
-    x$steiger_pval_valid <- p_reason == "ok"
-    x$steiger_pval_reason <- p_reason
-    x
-  })
-  if (!length(rows)) return(data.frame())
-  do.call(rbind, rows)
+  }
+  if (!"effective_n.exposure" %in% names(x)) {
+    x$effective_n.exposure <- NA_real_
+  }
+  if (!"effective_n.outcome" %in% names(x)) {
+    x$effective_n.outcome <- NA_real_
+  }
+  x$steiger_dir <- x$rsq.exposure > x$rsq.outcome
+  x$steiger_pval <- fastmr_steiger_rtest_p_vector(
+    sqrt(x$rsq.exposure), sqrt(x$rsq.outcome),
+    x$effective_n.exposure, x$effective_n.outcome)
+  p_reason <- rep("ok", n)
+  p_reason <- fastmr_steiger_set_reason(
+    p_reason, !x$rsq_valid.exposure,
+    paste0("exposure_", x$rsq_reason.exposure))
+  p_reason <- fastmr_steiger_set_reason(
+    p_reason, !x$rsq_valid.outcome,
+    paste0("outcome_", x$rsq_reason.outcome))
+  p_reason <- fastmr_steiger_set_reason(
+    p_reason, is.na(x$effective_n.exposure), "missing_exposure_n")
+  p_reason <- fastmr_steiger_set_reason(
+    p_reason, !is.finite(x$effective_n.exposure) |
+      x$effective_n.exposure <= 3, "invalid_exposure_n")
+  p_reason <- fastmr_steiger_set_reason(
+    p_reason, is.na(x$effective_n.outcome), "missing_outcome_n")
+  p_reason <- fastmr_steiger_set_reason(
+    p_reason, !is.finite(x$effective_n.outcome) |
+      x$effective_n.outcome <= 3, "invalid_outcome_n")
+  p_reason <- fastmr_steiger_set_reason(
+    p_reason, !is.finite(x$steiger_pval), "invalid_steiger_pval")
+  x$steiger_pval_valid <- p_reason == "ok"
+  x$steiger_pval_reason <- p_reason
+  x
 }
 
 #' Calculate the Steiger directionality test from SNP correlations

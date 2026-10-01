@@ -1,27 +1,48 @@
-fastmr_diagnostic_groups <- function(data) {
-  if (!is.data.frame(data)) stop("data must be a data.frame", call. = FALSE)
-  # Validate the same required columns and numeric conversions as fast_mr.
-  fastmr_prepare_vectors(data)
+# Row indices (in first-appearance order) of each id.exposure/id.outcome pair,
+# with one split() instead of a which() scan per pair. Missing ids are "".
+fastmr_diagnostic_group_index <- function(data) {
   n <- nrow(data)
   id.exp <- if ("id.exposure" %in% names(data)) as.character(data$id.exposure) else rep("", n)
   id.out <- if ("id.outcome" %in% names(data)) as.character(data$id.outcome) else rep("", n)
   id.exp[is.na(id.exp)] <- ""
   id.out[is.na(id.out)] <- ""
-  pairs <- unique(data.frame(id.exposure = id.exp, id.outcome = id.out,
-                             stringsAsFactors = FALSE))
-  groups <- vector("list", nrow(pairs))
-  for (i in seq_len(nrow(pairs))) {
-    index <- which(id.exp == pairs$id.exposure[[i]] & id.out == pairs$id.outcome[[i]])
-    label.exp <- if ("exposure" %in% names(data)) as.character(data$exposure[index[[1L]]]) else pairs$id.exposure[[i]]
-    label.out <- if ("outcome" %in% names(data)) as.character(data$outcome[index[[1L]]]) else pairs$id.outcome[[i]]
-    if (is.na(label.exp)) label.exp <- pairs$id.exposure[[i]]
-    if (is.na(label.out)) label.out <- pairs$id.outcome[[i]]
+  code.exp <- match(id.exp, unique(id.exp))
+  code.out <- match(id.out, unique(id.out))
+  key <- (code.out - 1) * (max(code.exp, 0L) + 1) + code.exp
+  group <- match(key, unique(key))
+  rows <- unname(split(seq_len(n), factor(group, levels = seq_len(max(group, 0L)))))
+  starts <- vapply(rows, function(index) index[[1L]], integer(1))
+  label <- function(column, ids) {
+    out <- ids[starts]
+    if (column %in% names(data)) {
+      value <- as.character(data[[column]][starts])
+      keep <- !is.na(value)
+      out[keep] <- value[keep]
+    }
+    out
+  }
+  list(
+    rows = rows,
+    id.exposure = id.exp[starts],
+    id.outcome = id.out[starts],
+    exposure = label("exposure", id.exp),
+    outcome = label("outcome", id.out)
+  )
+}
+
+fastmr_diagnostic_groups <- function(data) {
+  if (!is.data.frame(data)) stop("data must be a data.frame", call. = FALSE)
+  # Validate the same required columns and numeric conversions as fast_mr.
+  fastmr_prepare_vectors(data)
+  g <- fastmr_diagnostic_group_index(data)
+  groups <- vector("list", length(g$rows))
+  for (i in seq_along(groups)) {
     groups[[i]] <- list(
-      data = data[index, , drop = FALSE],
-      id.exposure = pairs$id.exposure[[i]],
-      id.outcome = pairs$id.outcome[[i]],
-      exposure = label.exp,
-      outcome = label.out
+      data = data[g$rows[[i]], , drop = FALSE],
+      id.exposure = g$id.exposure[[i]],
+      id.outcome = g$id.outcome[[i]],
+      exposure = g$exposure[[i]],
+      outcome = g$outcome[[i]]
     )
   }
   groups
