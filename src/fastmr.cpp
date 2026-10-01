@@ -2245,3 +2245,96 @@ Rcpp::List fastmr_sparse_ivw_native(
                                  outcome_beta, outcome_se, outcome_present,
                                  threads, pair_snp_keep);
 }
+
+// Batched equivalent of calling fastmr_run_native() once per group. Groups are
+// CSR-style slices [offsets[g], offsets[g+1]) of the concatenated vectors. Each
+// group goes through exactly the same one_pair_from_vectors() filtering and
+// compute_pair() code path (including inline p-values), so results are
+// bit-identical to the per-group calls. Only valid when no requested method
+// draws random numbers (callers keep the R loop for bootstrap methods); the
+// calls are therefore serial and `threads` is accepted for API symmetry only.
+// Returns flat vectors in group-major, method-minor order.
+// [[Rcpp::export]]
+Rcpp::List fastmr_run_groups_native(Rcpp::IntegerVector offsets,
+                                    Rcpp::NumericVector exposure_beta,
+                                    Rcpp::NumericVector outcome_beta,
+                                    Rcpp::NumericVector exposure_se,
+                                    Rcpp::NumericVector outcome_se,
+                                    Rcpp::CharacterVector methods,
+                                    int nboot = 0,
+                                    int threads = 1,
+                                    double phi = 1.0,
+                                    double penk = 20.0) {
+  validate_controls(nboot, threads, phi);
+  if (!std::isfinite(penk) || penk <= 0.0) Rcpp::stop("penk must be positive and finite");
+  const std::vector<std::string> parsed_methods = parse_methods(methods);
+  if (offsets.size() < 1 || offsets[0] != 0) Rcpp::stop("offsets must start at 0");
+  const R_xlen_t groups = offsets.size() - 1;
+  const R_xlen_t total_rows = exposure_beta.size();
+  if (outcome_beta.size() != total_rows || exposure_se.size() != total_rows ||
+      outcome_se.size() != total_rows || offsets[groups] != total_rows) {
+    Rcpp::stop("MR vectors must have equal lengths matching offsets");
+  }
+  for (R_xlen_t g = 0; g < groups; ++g) {
+    if (offsets[g + 1] < offsets[g]) Rcpp::stop("offsets must be non-decreasing");
+  }
+  const std::size_t method_count = parsed_methods.size();
+  const std::size_t total = static_cast<std::size_t>(groups) * method_count;
+  Rcpp::CharacterVector method_out(total);
+  Rcpp::NumericVector n_out(total, NA_REAL), beta(total, NA_REAL), se(total, NA_REAL),
+    pval(total, NA_REAL), q(total, NA_REAL), q_df(total, NA_REAL), q_pval(total, NA_REAL),
+    sigma(total, NA_REAL), intercept(total, NA_REAL), intercept_se(total, NA_REAL),
+    intercept_pval(total, NA_REAL), ratio_se_mean(total, NA_REAL), boot(total, NA_REAL),
+    phi_out(total, NA_REAL), flipped(total, NA_REAL), se_exposure_mean(total, NA_REAL);
+  for (R_xlen_t g = 0; g < groups; ++g) {
+    Prepared p;
+    const R_xlen_t begin = offsets[g];
+    const R_xlen_t end = offsets[g + 1];
+    p.x.reserve(end - begin); p.y.reserve(end - begin);
+    p.sx.reserve(end - begin); p.sy.reserve(end - begin);
+    for (R_xlen_t i = begin; i < end; ++i) {
+      const double x = exposure_beta[i], y = outcome_beta[i];
+      const double sx = exposure_se[i], sy = outcome_se[i];
+      if (Rcpp::NumericVector::is_na(x) || Rcpp::NumericVector::is_na(y) ||
+          Rcpp::NumericVector::is_na(sx) || Rcpp::NumericVector::is_na(sy)) continue;
+      if (!std::isfinite(x) || !std::isfinite(y) || !std::isfinite(sx) ||
+          !std::isfinite(sy) || sx <= 0.0 || sy <= 0.0) continue;
+      p.x.push_back(x); p.y.push_back(y); p.sx.push_back(sx); p.sy.push_back(sy);
+    }
+    std::vector<Result> results =
+      compute_pair(std::move(p), parsed_methods, nboot, R_NilValue, true, phi, penk);
+    for (std::size_t m = 0; m < method_count; ++m) {
+      const Result& r = results[m];
+      const std::size_t k = static_cast<std::size_t>(g) * method_count + m;
+      method_out[k] = r.method;
+      n_out[k] = r.n;
+      beta[k] = finite_or_na(r.beta);
+      se[k] = finite_or_na(r.se);
+      pval[k] = finite_or_na(r.pval);
+      if (r.ratio_se_mean) ratio_se_mean[k] = finite_or_na(r.ratio_se_mean_value);
+      if (r.bootstrap) boot[k] = r.bootstrap_value;
+      if (r.phi) phi_out[k] = finite_or_na(r.phi_value);
+      if (r.q) {
+        q[k] = finite_or_na(r.q_value);
+        q_df[k] = r.q_df;
+        q_pval[k] = finite_or_na(r.q_pval);
+      }
+      if (r.sigma) sigma[k] = finite_or_na(r.sigma_value);
+      if (r.intercept) {
+        intercept[k] = finite_or_na(r.intercept_value);
+        intercept_se[k] = finite_or_na(r.intercept_se);
+        intercept_pval[k] = finite_or_na(r.intercept_pval);
+        flipped[k] = r.flipped;
+        se_exposure_mean[k] = finite_or_na(r.se_exposure_mean);
+      }
+    }
+  }
+  return Rcpp::List::create(
+    Rcpp::_["method"] = method_out, Rcpp::_["n"] = n_out, Rcpp::_["beta"] = beta,
+    Rcpp::_["se"] = se, Rcpp::_["pval"] = pval, Rcpp::_["Q"] = q, Rcpp::_["Q_df"] = q_df,
+    Rcpp::_["Q_pval"] = q_pval, Rcpp::_["sigma"] = sigma, Rcpp::_["intercept"] = intercept,
+    Rcpp::_["intercept_se"] = intercept_se, Rcpp::_["intercept_pval"] = intercept_pval,
+    Rcpp::_["ratio_se_mean"] = ratio_se_mean, Rcpp::_["bootstrap"] = boot,
+    Rcpp::_["phi"] = phi_out, Rcpp::_["flipped"] = flipped,
+    Rcpp::_["se_exposure_mean"] = se_exposure_mean);
+}
