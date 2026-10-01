@@ -52,7 +52,13 @@ test_that("streamed Parquet matches tidy output for IVW and mixed methods", {
         path <- tempfile(fileext = ".parquet")
         res <- do.call(run_grid, c(list(g), cs, list(output = path, return = ret, chunk_pairs = cp)))
         if (ret == "none") expect_identical(res, normalizePath(path)) else expect_s3_class(res, "fastmr_compact_grid")
-        expect_identical(read_streamed(path), tidy)
+        # IVW-only return = "none" runs the kernel in exposure blocks; a blocked
+        # BLAS dgemm may differ from the single call by ~1e-17.
+        if (ret == "none" && identical(cs$methods, "ivw")) {
+          expect_equal(read_streamed(path), tidy, tolerance = 1e-12)
+        } else {
+          expect_identical(read_streamed(path), tidy)
+        }
         if (cp == 7 && ret == "compact") {
           expect_equal(arrow::ParquetFileReader$create(path)$num_row_groups,
                        ceiling(20 / 7) * 1L)
