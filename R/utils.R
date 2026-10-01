@@ -280,3 +280,51 @@ fastmr_native_call <- function(native, args, seed) {
   args[["seed"]] <- NULL
   do.call(native, args)
 }
+
+# Integer group codes for (id.exp, id.out) pairs, numbered by first appearance;
+# attr "n" holds the number of groups.
+fastmr_group_ids <- function(id.exp, id.out) {
+  a <- match(id.exp, unique(id.exp))
+  b <- match(id.out, unique(id.out))
+  key <- a + as.numeric(max(a, 0L)) * (b - 1)
+  gid <- match(key, unique(key))
+  attr(gid, "n") <- length(unique(key))
+  gid
+}
+
+# Methods whose native code draws random numbers when nboot > 0.
+fastmr_methods_use_rng <- function(methods, nboot) {
+  nboot > 0 && any(methods %in% c("simple_median", "weighted_median",
+                                  "penalised_weighted_median", "egger_bootstrap",
+                                  "simple_mode", "weighted_mode"))
+}
+
+# Vectorised equivalent of rbind-ing fastmr_tidy_native() per group, from the
+# flat group-major / method-minor output of fastmr_run_groups_native().
+fastmr_tidy_groups_native <- function(native, method_count, id.exposure, id.outcome) {
+  registry <- fastmr_method_registry()
+  code <- native$method
+  data.frame(
+    id.exposure = rep(id.exposure, each = method_count),
+    id.outcome = rep(id.outcome, each = method_count),
+    method = registry$method[match(code, registry$code)],
+    method_code = code,
+    nsnp = native$n,
+    b = native$beta,
+    se = native$se,
+    pval = native$pval,
+    Q = native$Q,
+    Q_df = native$Q_df,
+    Q_pval = native$Q_pval,
+    sigma = native$sigma,
+    intercept = native$intercept,
+    intercept_se = native$intercept_se,
+    intercept_pval = native$intercept_pval,
+    ratio_se_mean = native$ratio_se_mean,
+    bootstrap = native$bootstrap,
+    phi = native$phi,
+    flipped = native$flipped,
+    se_exposure_mean = native$se_exposure_mean,
+    stringsAsFactors = FALSE
+  )
+}

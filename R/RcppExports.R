@@ -16,3 +16,8 @@ fastmr_masked_ivw_native <- function(exposure_beta, outcome_beta, outcome_se, ex
 fastmr_sparse_ivw_native <- function(row_ptr, col_index, exposure_beta, outcome_beta, outcome_se, outcome_present, threads = 1L, pair_snp_keep = NULL) {
     .Call(`_fastMR_fastmr_sparse_ivw_native`, row_ptr, col_index, exposure_beta, outcome_beta, outcome_se, outcome_present, threads, pair_snp_keep)
 }
+
+fastmr_run_groups_native <- function(offsets, exposure_beta, outcome_beta, exposure_se, outcome_se, methods, nboot = 0L, threads = 1L, phi = 1.0, penk = 20.0) {
+    .Call(`_fastMR_fastmr_run_groups_native`, offsets, exposure_beta, outcome_beta, exposure_se, outcome_se, methods, nboot, threads, phi, penk)
+}
+

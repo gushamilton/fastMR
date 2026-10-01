@@ -50,18 +50,44 @@ fast_mr <- function(data,
   id.out <- if ("id.outcome" %in% names(data)) as.character(data$id.outcome) else rep("", n)
   id.exp[is.na(id.exp)] <- ""
   id.out[is.na(id.out)] <- ""
-  groups <- unique(data.frame(id.exposure = id.exp, id.outcome = id.out,
-                              stringsAsFactors = FALSE))
-  rows <- vector("list", nrow(groups))
-  for (i in seq_len(nrow(groups))) {
-    group_index <- which(id.exp == groups$id.exposure[[i]] &
-                         id.out == groups$id.outcome[[i]])
-    index <- group_index[keep[group_index]]
-    # Joins and multi-study exports often repeat the same SNP row. Count each
-    # SNP once per MR pair; retain the first row deterministically. Repeated
-    # p-values are metadata and do not affect this rule.
-    index <- index[!duplicated(snp[index])]
-    representative <- group_index[[1L]]
+  # Group rows once (first-appearance order of each exposure/outcome pair).
+  # Integer codes avoid any separator collision between ids.
+  gid <- fastmr_group_ids(id.exp, id.out)
+  group_count <- attr(gid, "n")
+  if (!group_count) return(fastmr_write_result(fastmr_tidy_native(list(), methods), output))
+  group_rows <- unname(split(seq_len(n), factor(gid, levels = seq_len(group_count))))
+  # Joins and multi-study exports often repeat the same SNP row. Count each
+  # SNP once per MR pair; retain the first kept row deterministically. Repeated
+  # p-values are metadata and do not affect this rule.
+  kept <- which(keep)
+  snp_code <- match(snp[kept], unique(snp[kept]))
+  kept <- kept[!duplicated(gid[kept] + group_count * as.numeric(snp_code))]
+  if (!fastmr_methods_use_rng(methods, controls[["nboot"]])) {
+    kept <- kept[order(gid[kept], method = "radix")]
+    counts <- tabulate(gid[kept], nbins = group_count)
+    native <- fastmr_native_call(
+      fastmr_run_groups_native,
+      list(
+        offsets = c(0L, cumsum(counts)),
+        exposure_beta = prepared[["beta.exposure"]][kept],
+        outcome_beta = prepared[["beta.outcome"]][kept],
+        exposure_se = prepared[["se.exposure"]][kept],
+        outcome_se = prepared[["se.outcome"]][kept],
+        methods = methods, nboot = controls[["nboot"]],
+        threads = controls[["threads"]], phi = phi, penk = penk
+      ),
+      NULL
+    )
+    first <- vapply(group_rows, `[`, integer(1), 1L)
+    return(fastmr_write_result(
+      fastmr_tidy_groups_native(native, length(methods), id.exp[first], id.out[first]),
+      output))
+  }
+  kept_by_group <- split(kept, factor(gid[kept], levels = seq_len(group_count)))
+  rows <- vector("list", group_count)
+  for (i in seq_len(group_count)) {
+    index <- kept_by_group[[i]]
+    representative <- group_rows[[i]][[1L]]
     native <- fastmr_native_call(
       fastmr_run_native,
       list(
@@ -79,7 +105,6 @@ fast_mr <- function(data,
     rows[[i]] <- fastmr_tidy_native(native, methods, id.exp[representative], id.out[representative],
                                      exposure_label = label.exp, outcome_label = label.out)
   }
-  if (!length(rows)) return(fastmr_write_result(fastmr_tidy_native(list(), methods), output))
   fastmr_write_result(do.call(rbind, rows), output)
 }
 
