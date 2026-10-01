@@ -10,9 +10,10 @@ using namespace Rcpp;
 // [[Rcpp::export(name = ".fastmr_vcor_ids")]]
 List fastmr_vcor_ids(CharacterVector lines) {
   R_xlen_t n = lines.size();
-  std::vector<SEXP> a, b;
-  a.reserve(n);
-  b.reserve(n);
+  // CHARSXPs go straight into protected vectors: holding them only in a
+  // std::vector<SEXP> lets the GC free them during later mkChar calls.
+  CharacterVector fa(n), fb(n);
+  R_xlen_t m = 0;
   for (R_xlen_t i = 0; i < n; ++i) {
     if (lines[i] == NA_STRING) continue;
     const char* s = CHAR(STRING_ELT(lines, i));
@@ -34,14 +35,14 @@ List fastmr_vcor_ids(CharacterVector lines) {
     const char* e3 = tab[2];
     // field 3 = (start[2], tab[2]); field 6 = (start[5], tab[5] or end)
     const char* f6e = (found >= 6) ? tab[5] : s + std::strlen(s);
-    a.push_back(Rf_mkCharLenCE(start[2], (int)(e3 - start[2]), CE_UTF8));
-    b.push_back(Rf_mkCharLenCE(start[5], (int)(f6e - start[5]), CE_UTF8));
+    SET_STRING_ELT(fa, m, Rf_mkCharLenCE(start[2], (int)(e3 - start[2]), CE_UTF8));
+    SET_STRING_ELT(fb, m, Rf_mkCharLenCE(start[5], (int)(f6e - start[5]), CE_UTF8));
+    ++m;
   }
-  R_xlen_t m = a.size();
   CharacterVector ra(m), rb(m);
   for (R_xlen_t i = 0; i < m; ++i) {
-    SET_STRING_ELT(ra, i, a[i]);
-    SET_STRING_ELT(rb, i, b[i]);
+    SET_STRING_ELT(ra, i, STRING_ELT(fa, i));
+    SET_STRING_ELT(rb, i, STRING_ELT(fb, i));
   }
   return List::create(_["lead"] = ra, _["target"] = rb);
 }

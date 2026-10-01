@@ -268,3 +268,14 @@ test_that("require_exact uses the CompreSSoR rank domain when available", {
   expect_true("pvalue_rank" %in% names(cand$data))
   expect_false(anyNA(cand$data$pvalue_rank))
 })
+
+test_that(".fastmr_vcor_ids is GC-safe under gctorture", {
+  skip_on_cran()
+  n <- 25
+  lines <- c("#CHROM_A\tPOS_A\tID_A\tCHROM_B\tPOS_B\tID_B\tUNPHASED_R2",
+             sprintf("22\t%d\tidA_%d_x\t22\t%d\tidB_%d_y\t0.5", 1:n, 1:n, 1:n, 1:n))
+  gctorture(TRUE)
+  r <- tryCatch(fastMR:::.fastmr_vcor_ids(lines), finally = gctorture(FALSE))
+  expect_identical(r$lead, sprintf("idA_%d_x", 1:n))
+  expect_identical(r$target, sprintf("idB_%d_y", 1:n))
+})
