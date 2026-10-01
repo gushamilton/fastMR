@@ -1647,14 +1647,17 @@ Rcpp::List compute_masked_ivw_grid(
 // Fused sparse exposure-by-dense outcome IVW.  The exposure instruments are
 // supplied as a CSR matrix: row_ptr has E + 1 entries and col_index contains
 // zero-based SNP column indices.  Outcome matrices are B x U in ordinary R
-// layout (outcome rows, SNP columns).  This avoids materialising the very
-// sparse E x U exposure panel and performs the four IVW accumulations in one
-// pass over the non-zero exposure instruments.
+// layout (outcome rows, SNP columns).  An optional B x N mask addresses the
+// concatenated N CSR entries: outcome o can independently retain entry k,
+// while each exposure reads only its row_ptr-delimited entries.  This avoids
+// materialising the very sparse E x U exposure panel and performs the four
+// IVW accumulations in one pass over the non-zero exposure instruments.
 Rcpp::List compute_sparse_ivw_grid(
     Rcpp::IntegerVector row_ptr, Rcpp::IntegerVector col_index,
     Rcpp::NumericVector exposure_beta, Rcpp::NumericMatrix outcome_beta,
     Rcpp::NumericMatrix outcome_se, Rcpp::LogicalMatrix outcome_present,
-    int threads) {
+    int threads,
+    Rcpp::Nullable<Rcpp::LogicalMatrix> pair_snp_keep = R_NilValue) {
   const int exposure_count = row_ptr.size() - 1;
   const int outcome_count = outcome_beta.nrow();
   const int snp_count = outcome_beta.ncol();
@@ -1668,6 +1671,20 @@ Rcpp::List compute_sparse_ivw_grid(
   if (row_ptr[0] != 0 || row_ptr[exposure_count] != col_index.size() ||
       exposure_beta.size() != col_index.size()) {
     Rcpp::stop("invalid sparse IVW CSR offsets or values");
+  }
+  const bool has_pair_snp_keep = pair_snp_keep.isNotNull();
+  Rcpp::LogicalMatrix pair_snp_keep_matrix(0, 0);
+  if (has_pair_snp_keep) {
+    pair_snp_keep_matrix = Rcpp::as<Rcpp::LogicalMatrix>(pair_snp_keep);
+    if (pair_snp_keep_matrix.nrow() != outcome_count ||
+        pair_snp_keep_matrix.ncol() != col_index.size()) {
+      Rcpp::stop("pair_snp_keep must have one row per outcome and one column per CSR entry");
+    }
+    for (R_xlen_t index = 0; index < pair_snp_keep_matrix.size(); ++index) {
+      if (pair_snp_keep_matrix[index] == NA_LOGICAL) {
+        Rcpp::stop("pair_snp_keep must not contain NA");
+      }
+    }
   }
   for (int exposure = 0; exposure < exposure_count; ++exposure) {
     if (row_ptr[exposure] < 0 || row_ptr[exposure + 1] < row_ptr[exposure]) {
@@ -1722,6 +1739,7 @@ Rcpp::List compute_sparse_ivw_grid(
       double yy = 0.0;
       double count = 0.0;
       for (int index = first; index < last; ++index) {
+        if (has_pair_snp_keep && !pair_snp_keep_matrix(outcome, index)) continue;
         const int snp = col_index[index];
         if (!outcome_present(outcome, snp)) continue;
         const double x = exposure_beta[index];
@@ -2220,9 +2238,10 @@ Rcpp::List fastmr_sparse_ivw_native(
     Rcpp::IntegerVector row_ptr, Rcpp::IntegerVector col_index,
     Rcpp::NumericVector exposure_beta, Rcpp::NumericMatrix outcome_beta,
     Rcpp::NumericMatrix outcome_se, Rcpp::LogicalMatrix outcome_present,
-    int threads = 1) {
+    int threads = 1,
+    Rcpp::Nullable<Rcpp::LogicalMatrix> pair_snp_keep = R_NilValue) {
   validate_controls(0, threads, 1.0);
   return compute_sparse_ivw_grid(row_ptr, col_index, exposure_beta,
                                  outcome_beta, outcome_se, outcome_present,
-                                 threads);
+                                 threads, pair_snp_keep);
 }

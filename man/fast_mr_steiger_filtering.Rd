@@ -11,11 +11,17 @@ fast_mr_steiger_filtering(data)
 }
 \value{
 The input rows with \code{rsq.exposure}, \code{rsq.outcome}, effective sample
-sizes, \code{steiger_dir}, and \code{steiger_pval} added.
+sizes, \code{steiger_dir}, and \code{steiger_pval} added. Per-trait \verb{rsq_valid.*} and
+\verb{rsq_reason.*} columns describe R-squared validity; \code{steiger_pval_valid}
+and \code{steiger_pval_reason} explicitly describe p-value availability.
 }
 \description{
 This is the dependency-light local equivalent of
 \code{\link[TwoSampleMR:steiger_filtering]{TwoSampleMR::steiger_filtering()}}. It supports supplied \verb{rsq.*} columns,
 standard-error/sample-size approximation, SD-scaled quantitative traits,
 and log-odds traits with allele frequencies and case/control counts.
+
+Binary traits require explicit \verb{prevalence.*}, \verb{ncase.*}, and \verb{ncontrol.*}
+columns; prevalence is never assumed. Quantitative beta/SE/sample-size
+inputs do not require p-values.
 }

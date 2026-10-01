@@ -67,8 +67,8 @@ BEGIN_RCPP
 END_RCPP
 }
 // fastmr_sparse_ivw_native
-Rcpp::List fastmr_sparse_ivw_native(Rcpp::IntegerVector row_ptr, Rcpp::IntegerVector col_index, Rcpp::NumericVector exposure_beta, Rcpp::NumericMatrix outcome_beta, Rcpp::NumericMatrix outcome_se, Rcpp::LogicalMatrix outcome_present, int threads);
-RcppExport SEXP _fastMR_fastmr_sparse_ivw_native(SEXP row_ptrSEXP, SEXP col_indexSEXP, SEXP exposure_betaSEXP, SEXP outcome_betaSEXP, SEXP outcome_seSEXP, SEXP outcome_presentSEXP, SEXP threadsSEXP) {
+Rcpp::List fastmr_sparse_ivw_native(Rcpp::IntegerVector row_ptr, Rcpp::IntegerVector col_index, Rcpp::NumericVector exposure_beta, Rcpp::NumericMatrix outcome_beta, Rcpp::NumericMatrix outcome_se, Rcpp::LogicalMatrix outcome_present, int threads, Rcpp::Nullable<Rcpp::LogicalMatrix> pair_snp_keep);
+RcppExport SEXP _fastMR_fastmr_sparse_ivw_native(SEXP row_ptrSEXP, SEXP col_indexSEXP, SEXP exposure_betaSEXP, SEXP outcome_betaSEXP, SEXP outcome_seSEXP, SEXP outcome_presentSEXP, SEXP threadsSEXP, SEXP pair_snp_keepSEXP) {
 BEGIN_RCPP
     Rcpp::RObject rcpp_result_gen;
     Rcpp::RNGScope rcpp_rngScope_gen;
@@ -79,7 +79,8 @@ BEGIN_RCPP
     Rcpp::traits::input_parameter< Rcpp::NumericMatrix >::type outcome_se(outcome_seSEXP);
     Rcpp::traits::input_parameter< Rcpp::LogicalMatrix >::type outcome_present(outcome_presentSEXP);
     Rcpp::traits::input_parameter< int >::type threads(threadsSEXP);
-    rcpp_result_gen = Rcpp::wrap(fastmr_sparse_ivw_native(row_ptr, col_index, exposure_beta, outcome_beta, outcome_se, outcome_present, threads));
+    Rcpp::traits::input_parameter< Rcpp::Nullable<Rcpp::LogicalMatrix> >::type pair_snp_keep(pair_snp_keepSEXP);
+    rcpp_result_gen = Rcpp::wrap(fastmr_sparse_ivw_native(row_ptr, col_index, exposure_beta, outcome_beta, outcome_se, outcome_present, threads, pair_snp_keep));
     return rcpp_result_gen;
 END_RCPP
 }
@@ -88,7 +89,7 @@ static const R_CallMethodDef CallEntries[] = {
     {"_fastMR_fastmr_run_native", (DL_FUNC) &_fastMR_fastmr_run_native, 10},
     {"_fastMR_fastmr_grid_native", (DL_FUNC) &_fastMR_fastmr_grid_native, 10},
     {"_fastMR_fastmr_masked_ivw_native", (DL_FUNC) &_fastMR_fastmr_masked_ivw_native, 6},
-    {"_fastMR_fastmr_sparse_ivw_native", (DL_FUNC) &_fastMR_fastmr_sparse_ivw_native, 7},
+    {"_fastMR_fastmr_sparse_ivw_native", (DL_FUNC) &_fastMR_fastmr_sparse_ivw_native, 8},
     {NULL, NULL, 0}
 };
 

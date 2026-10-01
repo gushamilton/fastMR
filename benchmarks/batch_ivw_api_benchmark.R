@@ -45,5 +45,16 @@ sparse <- timed("sparse", fastMR::fast_mr_sparse_ivw(
   outcome_beta, outcome_se, outcome_present, threads = 2L,
   max_memory_mb = 512
 ))
+pair_snp_keep <- matrix(
+  runif(outcomes * length(col_index)) < 0.90,
+  nrow = outcomes, ncol = length(col_index)
+)
+sparse_pair_masked <- timed("sparse + pair mask", fastMR::fast_mr_sparse_ivw(
+  row_ptr, col_index, stored_beta,
+  outcome_beta, outcome_se, outcome_present, threads = 2L,
+  max_memory_mb = 512, pair_snp_keep = pair_snp_keep
+))
 cat(sprintf("maximum beta difference on comparable results: %.3e\n",
             max(abs(masked$beta - sparse$beta), na.rm = TRUE)))
+cat(sprintf("pair mask retained %.1f%% of usable exposure/outcome entries\n",
+            100 * sum(sparse_pair_masked$nsnp) / sum(sparse$nsnp)))

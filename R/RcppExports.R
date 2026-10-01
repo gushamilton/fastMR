@@ -13,6 +13,6 @@ fastmr_masked_ivw_native <- function(exposure_beta, outcome_beta, outcome_se, ex
     .Call(`_fastMR_fastmr_masked_ivw_native`, exposure_beta, outcome_beta, outcome_se, exposure_present, outcome_present, threads)
 }
 
-fastmr_sparse_ivw_native <- function(row_ptr, col_index, exposure_beta, outcome_beta, outcome_se, outcome_present, threads = 1L) {
-    .Call(`_fastMR_fastmr_sparse_ivw_native`, row_ptr, col_index, exposure_beta, outcome_beta, outcome_se, outcome_present, threads)
+fastmr_sparse_ivw_native <- function(row_ptr, col_index, exposure_beta, outcome_beta, outcome_se, outcome_present, threads = 1L, pair_snp_keep = NULL) {
+    .Call(`_fastMR_fastmr_sparse_ivw_native`, row_ptr, col_index, exposure_beta, outcome_beta, outcome_se, outcome_present, threads, pair_snp_keep)
 }

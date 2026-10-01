@@ -154,6 +154,24 @@ fastmr_validate_csr <- function(row_ptr, col_index, exposure_beta,
        exposure_beta = as.numeric(exposure_beta))
 }
 
+fastmr_validate_pair_snp_keep <- function(pair_snp_keep, outcome_count,
+                                          entry_count) {
+  if (is.null(pair_snp_keep)) return(NULL)
+  pair_snp_keep <- as.matrix(pair_snp_keep)
+  if (!is.logical(pair_snp_keep)) {
+    stop("pair_snp_keep must be a logical matrix", call. = FALSE)
+  }
+  expected_dim <- c(outcome_count, entry_count)
+  if (!identical(dim(pair_snp_keep), expected_dim)) {
+    stop("pair_snp_keep must have one row per outcome and one column per CSR entry",
+         call. = FALSE)
+  }
+  if (anyNA(pair_snp_keep)) {
+    stop("pair_snp_keep must not contain NA", call. = FALSE)
+  }
+  pair_snp_keep
+}
+
 #' Run low-memory IVW over masked exposure and outcome matrices
 #'
 #' @param exposure_beta Numeric `E x S` matrix of exposure SNP effects.
@@ -215,13 +233,19 @@ fast_mr_masked_ivw <- function(exposure_beta, outcome_beta, outcome_se,
 #'   prevents accidentally materialising an unbounded all-by-all result.
 #' @param max_memory_mb Conservative bound for native result workspace,
 #'   excluding input matrices already held by R.
+#' @param pair_snp_keep Optional logical `O x N` matrix, where `N` is
+#'   `length(col_index)`. Row `o` and column `k` determine whether outcome `o`
+#'   keeps the SNP stored at CSR entry `k`. This is indexed by concatenated CSR
+#'   entry, not SNP column, so each exposure row uses only the columns between
+#'   its adjacent `row_ptr` offsets. `NA` is rejected. `NULL` keeps every entry.
 #' @return A `fastmr_sparse_ivw_compact` list containing `nsnp`, `beta`, `se`,
 #'   `Q`, and `sigma`, each an `E x O` matrix.
 #' @export
 fast_mr_sparse_ivw <- function(row_ptr, col_index, exposure_beta,
                                outcome_beta, outcome_se, outcome_present,
                                threads = 1L, max_output_cells = 1e8,
-                               max_memory_mb = 2048) {
+                               max_memory_mb = 2048,
+                               pair_snp_keep = NULL) {
   outcome_beta <- fastmr_matrix_numeric(outcome_beta, "outcome_beta")
   outcome_se <- fastmr_matrix_numeric(outcome_se, "outcome_se")
   outcome_present <- as.matrix(outcome_present)
@@ -250,6 +274,9 @@ fast_mr_sparse_ivw <- function(row_ptr, col_index, exposure_beta,
     row_ptr, col_index, exposure_beta, outcome_beta, outcome_se,
     outcome_present
   )
+  pair_snp_keep <- fastmr_validate_pair_snp_keep(
+    pair_snp_keep, nrow(outcome_beta), length(csr$col_index)
+  )
   controls <- fastmr_validate_controls(0L, NULL, threads)
   fastmr_check_batch_bounds(
     length(csr$row_ptr) - 1L, nrow(outcome_beta), ncol(outcome_beta),
@@ -260,7 +287,7 @@ fast_mr_sparse_ivw <- function(row_ptr, col_index, exposure_beta,
     list(row_ptr = csr$row_ptr, col_index = csr$col_index,
          exposure_beta = csr$exposure_beta, outcome_beta = outcome_beta,
          outcome_se = outcome_se, outcome_present = outcome_present,
-         threads = controls$threads),
+         threads = controls$threads, pair_snp_keep = pair_snp_keep),
     NULL
   )
   exposure_names <- NULL

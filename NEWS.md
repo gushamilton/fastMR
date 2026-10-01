@@ -1,3 +1,19 @@
+# fastMR 0.1.10
+
+- Adds `fast_mr_steiger_r2()` as a composable vectorized primitive for
+  continuous beta/SE/sample-size, standardized beta/EAF, and binary log-odds
+  models. Scalar inputs recycle deterministically, invalid rows carry explicit
+  validity/reason fields, and binary prevalence is never assumed.
+- Updates `fast_mr_steiger_filtering()` to use the explicit R-squared models,
+  compute continuous-trait R-squared without requiring p-values, and report
+  why R-squared estimates or Steiger p-values are unavailable while preserving
+  the established result columns.
+- Adds optional pair-specific SNP filtering to `fast_mr_sparse_ivw()` through
+  an outcome-by-concatenated-CSR-entry `pair_snp_keep` matrix. `NULL` preserves
+  the existing path, `NA` is rejected, and returned `nsnp` is post-filter.
+- Synchronizes package and citation metadata and excludes benchmark-result
+  placeholders from source-package builds.
+
 # fastMR 0.1.9
 
 - Updates the optional compressed-input integration for CompreSSoR 0.5's

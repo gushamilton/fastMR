@@ -11,7 +11,8 @@ fast_mr_sparse_ivw(
   outcome_present,
   threads = 1L,
   max_output_cells = 1e+08,
-  max_memory_mb = 2048
+  max_memory_mb = 2048,
+  pair_snp_keep = NULL
 )
 }
 \arguments{
@@ -29,6 +30,10 @@ be finite with positive standard errors.}
 \item{max_output_cells}{Maximum allowed \code{E * O} result cells.}
 \item{max_memory_mb}{Conservative bound for native result workspace,
 excluding input matrices already held by R.}
+\item{pair_snp_keep}{Optional logical \code{O x N} matrix, where \code{N} is
+\code{length(col_index)}. Row \code{o} and column \code{k} determine whether
+outcome \code{o} keeps the SNP stored at concatenated CSR entry \code{k}.
+\code{NA} is rejected; \code{NULL} keeps every entry.}
 }
 \value{
 A \code{fastmr_sparse_ivw_compact} list containing \code{nsnp}, \code{beta},
@@ -42,5 +47,11 @@ native kernel is called; process outcomes in batches for larger scans.
 \details{
 CSR column indices are zero-based, unlike ordinary R matrix indices. Outcome
 matrices must use the same SNP column order as the CSR columns. Outcome values
-and standard errors at unselected mask entries are ignored.
+and standard errors at unselected mask entries are ignored. The
+\code{pair_snp_keep} columns follow CSR storage order rather than SNP-column
+order. For exposure \code{e}, only columns from \code{row_ptr[e] + 1} through
+\code{row_ptr[e + 1]} (using R's one-based indexing) are consulted. A mask can
+therefore vary by exposure/outcome pair without allocating an
+exposure-by-outcome-by-SNP array. The returned \code{nsnp} is the count after
+both \code{outcome_present} and \code{pair_snp_keep} are applied.
 }

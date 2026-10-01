@@ -459,6 +459,10 @@ with the reproducible script at
   naturally stored as a zero-based CSR panel. Both return compact `E x O`
   matrices and reject oversized output/native workspaces before allocation;
   process outcomes in batches when the limits are exceeded.
+- Sparse scans can pass `pair_snp_keep` as an outcome-by-stored-entry logical
+  matrix. Its columns follow concatenated CSR storage order, so columns between
+  adjacent `row_ptr` offsets apply only to that exposure; `NULL` keeps all
+  stored entries and `NA` mask values are rejected.
 - Pre-harmonise and clump once, then reuse the resulting matrices across scans.
 - Increase `threads` for large grids, but do not expect linear scaling on tiny
   workloads.

@@ -31,6 +31,74 @@ test_that("Steiger reports missing input clearly", {
   expect_error(fast_mr_steiger(0.1, 0.2, 100, 100, r_xxo = 1.1), "r_xxo")
 })
 
+test_that("vectorized Steiger R-squared supports continuous beta, SE, and N", {
+  result <- fast_mr_steiger_r2(
+    beta = c(0.1, 0.2), se = 0.05, n = 1000,
+    model = "continuous_bsen"
+  )
+  f_statistic <- (c(0.1, 0.2) / 0.05)^2
+  expect_equal(result$rsq, f_statistic / (998 + f_statistic),
+               tolerance = 1e-15)
+  expect_equal(result$effective_n, rep(1000, 2))
+  expect_true(all(result$valid))
+  expect_equal(result$reason, rep("ok", 2))
+})
+
+test_that("vectorized Steiger R-squared supports standardized effects", {
+  result <- fast_mr_steiger_r2(
+    beta = c(0.1, -0.2), eaf = 0.25, model = "standardized"
+  )
+  expect_equal(result$rsq,
+               2 * c(0.1, -0.2)^2 * 0.25 * 0.75,
+               tolerance = 1e-15)
+  expect_true(all(result$valid))
+  expect_true(all(is.na(result$effective_n)))
+
+  with_n <- fast_mr_steiger_r2(
+    beta = 0.1, se = 1:3, eaf = c(0.25, 0.4), n = 10000,
+    model = "standardized"
+  )
+  expect_equal(with_n$effective_n, rep(10000, 2))
+})
+
+test_that("vectorized Steiger R-squared requires binary prevalence and counts", {
+  beta <- c(log(1.1), log(0.9))
+  result <- fast_mr_steiger_r2(
+    beta = beta, eaf = 0.3, prevalence = c(0.1, 0.2),
+    ncase = 2000, ncontrol = 8000, model = "binary_lor"
+  )
+  expect_true(all(is.finite(result$rsq)))
+  expect_true(all(result$rsq >= 0 & result$rsq <= 1))
+  expect_equal(result$effective_n, rep(3200, 2))
+  expect_true(all(result$valid))
+
+  missing_prevalence <- fast_mr_steiger_r2(
+    beta = beta, eaf = 0.3, ncase = 2000, ncontrol = 8000,
+    model = "binary_lor"
+  )
+  expect_true(all(is.na(missing_prevalence$rsq)))
+  expect_false(any(missing_prevalence$valid))
+  expect_equal(missing_prevalence$reason,
+               rep("missing_prevalence", length(beta)))
+})
+
+test_that("vectorized Steiger R-squared reports invalid rows deterministically", {
+  result <- fast_mr_steiger_r2(
+    beta = c(0.1, NA, 0.3, 0.4),
+    se = c(0.05, 0.05, 0, 0.05),
+    n = c(1000, 1000, 1000, 2),
+    model = "continuous_bsen"
+  )
+  expect_equal(result$valid, c(TRUE, FALSE, FALSE, FALSE))
+  expect_equal(result$reason,
+               c("ok", "missing_beta", "invalid_se", "invalid_n"))
+  expect_true(all(is.na(result$rsq[-1])))
+  expect_error(
+    fast_mr_steiger_r2(c(0.1, 0.2), se = c(0.01, 0.02, 0.03), n = 1000),
+    "equal lengths or length one"
+  )
+})
+
 test_that("Steiger filtering adds per-SNP quantitative-trait diagnostics", {
   d <- diagnostic_fixture()
   d$units.exposure <- "SD"
@@ -80,4 +148,50 @@ test_that("Steiger filtering supports log-odds metadata and supplied R-squared",
   supplied_result <- fast_mr_steiger_filtering(supplied)
   expect_equal(supplied_result$rsq.exposure, supplied$rsq.exposure)
   expect_true(all(supplied_result$steiger_dir))
+})
+
+test_that("Steiger filtering delegates to the explicit models", {
+  continuous <- diagnostic_fixture()[1:2, , drop = FALSE]
+  continuous$samplesize.exposure <- 10000
+  continuous$samplesize.outcome <- 12000
+  result <- fast_mr_steiger_filtering(continuous)
+  expect_equal(
+    result$rsq.exposure,
+    fast_mr_steiger_r2(
+      continuous$beta.exposure, continuous$se.exposure, 10000,
+      model = "continuous_bsen"
+    )$rsq
+  )
+  expect_true(all(result$rsq_valid.exposure))
+  expect_true(all(result$steiger_pval_valid))
+
+  standardized <- diagnostic_fixture()[1:2, , drop = FALSE]
+  standardized$units.exposure <- "SD"
+  standardized$units.outcome <- "SD"
+  standardized$eaf.exposure <- 0.3
+  standardized$eaf.outcome <- 0.4
+  without_n <- fast_mr_steiger_filtering(standardized)
+  expect_true(all(without_n$rsq_valid.exposure))
+  expect_false(any(without_n$steiger_pval_valid))
+  expect_equal(without_n$steiger_pval_reason,
+               rep("missing_exposure_n", 2))
+})
+
+test_that("Steiger filtering never assumes binary prevalence", {
+  binary <- diagnostic_fixture()[1:2, , drop = FALSE]
+  binary$units.exposure <- "log odds"
+  binary$units.outcome <- "log odds"
+  binary$eaf.exposure <- 0.3
+  binary$eaf.outcome <- 0.4
+  binary$ncase.exposure <- 2000
+  binary$ncontrol.exposure <- 8000
+  binary$ncase.outcome <- 3000
+  binary$ncontrol.outcome <- 9000
+
+  result <- expect_no_warning(fast_mr_steiger_filtering(binary))
+  expect_false("prevalence.exposure" %in% names(result))
+  expect_true(all(is.na(result$rsq.exposure)))
+  expect_equal(result$rsq_reason.exposure,
+               rep("missing_prevalence", 2))
+  expect_false(any(result$steiger_pval_valid))
 })

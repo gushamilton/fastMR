@@ -87,6 +87,173 @@ fastmr_steiger_r2_from_lor <- function(beta, eaf, ncase, ncontrol, prevalence) {
   genetic_variance / (genetic_variance + residual_variance)
 }
 
+fastmr_steiger_recycle <- function(values) {
+  lengths <- vapply(values, length, integer(1))
+  size <- if (length(lengths)) max(lengths) else 0L
+  if (size == 0L) return(lapply(values, function(value) numeric()))
+  invalid <- lengths != 0L & lengths != 1L & lengths != size
+  if (any(invalid)) {
+    stop("Steiger R-squared inputs must have equal lengths or length one",
+         call. = FALSE)
+  }
+  lapply(values, function(value) {
+    if (length(value) == 0L) return(rep(NA_real_, size))
+    if (length(value) == 1L && size > 1L) return(rep(value, size))
+    value
+  })
+}
+
+fastmr_steiger_set_reason <- function(reason, rows, value) {
+  rows <- rows & reason == "ok"
+  if (length(value) == length(reason)) {
+    reason[rows] <- value[rows]
+  } else {
+    reason[rows] <- value
+  }
+  reason
+}
+
+#' Calculate per-variant Steiger R-squared values
+#'
+#' This composable primitive calculates per-variant variance explained using
+#' one explicit trait model. Inputs of length one are recycled to the longest
+#' input; all other non-empty inputs must have that length. Rows with invalid
+#' required inputs return `NA` rather than stopping the whole calculation, with
+#' a stable code in `reason` explaining why. A finite calculated value outside
+#' the R-squared range is retained for diagnosis with `reason = "invalid_rsq"`.
+#'
+#' `continuous_bsen` calculates `F / (n - 2 + F)`, where
+#' `F = (beta / se)^2`. `standardized` calculates
+#' `2 * beta^2 * eaf * (1 - eaf)`. `binary_lor` uses the same log-odds
+#' approximation as [fast_mr_steiger_filtering()] and returns the harmonic
+#' effective sample size `2 / (1 / ncase + 1 / ncontrol)`.
+#'
+#' Missing required values use `missing_<input>` reason codes. Non-finite or
+#' out-of-domain values use `invalid_<input>` codes. Sample size is not needed
+#' for a valid `standardized` R-squared value, so `effective_n` is `NA` when
+#' `n` is omitted while `valid` remains `TRUE`.
+#'
+#' @param beta Variant effect estimates. For `binary_lor`, these must be
+#'   log-odds effects.
+#' @param se Standard errors. Required by `continuous_bsen` and ignored by the
+#'   other models.
+#' @param n Sample sizes. Required by `continuous_bsen`; optional for
+#'   `standardized`, where it is returned as `effective_n` when supplied.
+#' @param eaf Effect-allele frequencies. Required by `standardized` and
+#'   `binary_lor`.
+#' @param model The variance model: `continuous_bsen` uses beta, standard error,
+#'   and sample size; `standardized` uses beta and effect-allele frequency; and
+#'   `binary_lor` uses log-odds beta, effect-allele frequency, prevalence, and
+#'   case/control counts.
+#' @param prevalence Population outcome prevalence. Required by `binary_lor`;
+#'   there is deliberately no default.
+#' @param ncase,ncontrol Case and control counts. Required by `binary_lor`.
+#' @return A data frame with `rsq`, `effective_n`, `valid`, and `reason` for
+#'   each input row. `reason` is `"ok"` for valid R-squared estimates.
+#' @export
+fast_mr_steiger_r2 <- function(beta, se = NULL, n = NULL, eaf = NULL,
+                               model = c("continuous_bsen", "standardized",
+                                         "binary_lor"),
+                               prevalence = NULL, ncase = NULL,
+                               ncontrol = NULL) {
+  model <- match.arg(model)
+  raw_values <- list(
+    beta = beta, se = se, n = n, eaf = eaf, prevalence = prevalence,
+    ncase = ncase, ncontrol = ncontrol)
+  used <- switch(
+    model,
+    continuous_bsen = c("beta", "se", "n"),
+    standardized = c("beta", "n", "eaf"),
+    binary_lor = c("beta", "eaf", "prevalence", "ncase", "ncontrol")
+  )
+  values <- lapply(names(raw_values), function(name) {
+    if (!name %in% used) return(numeric())
+    fastmr_numeric(raw_values[[name]], name)
+  })
+  names(values) <- names(raw_values)
+  values <- fastmr_steiger_recycle(values)
+  size <- length(values$beta)
+  rsq <- rep(NA_real_, size)
+  effective_n <- rep(NA_real_, size)
+  reason <- rep("ok", size)
+
+  reason <- fastmr_steiger_set_reason(
+    reason, is.na(values$beta), "missing_beta")
+  reason <- fastmr_steiger_set_reason(
+    reason, !is.finite(values$beta), "invalid_beta")
+
+  if (model == "continuous_bsen") {
+    reason <- fastmr_steiger_set_reason(
+      reason, is.na(values$se), "missing_se")
+    reason <- fastmr_steiger_set_reason(
+      reason, !is.finite(values$se) | values$se <= 0, "invalid_se")
+    reason <- fastmr_steiger_set_reason(
+      reason, is.na(values$n), "missing_n")
+    reason <- fastmr_steiger_set_reason(
+      reason, !is.finite(values$n) | values$n <= 2, "invalid_n")
+    valid_inputs <- reason == "ok"
+    if (any(valid_inputs)) {
+      rsq[valid_inputs] <- fastmr_steiger_r2_from_bsen(
+        values$beta[valid_inputs], values$se[valid_inputs],
+        values$n[valid_inputs])
+      effective_n[valid_inputs] <- values$n[valid_inputs]
+    }
+  } else if (model == "standardized") {
+    reason <- fastmr_steiger_set_reason(
+      reason, is.na(values$eaf), "missing_eaf")
+    reason <- fastmr_steiger_set_reason(
+      reason, !is.finite(values$eaf) | values$eaf <= 0 | values$eaf >= 1,
+      "invalid_eaf")
+    valid_inputs <- reason == "ok"
+    if (any(valid_inputs)) {
+      rsq[valid_inputs] <- 2 * values$beta[valid_inputs]^2 *
+        values$eaf[valid_inputs] * (1 - values$eaf[valid_inputs])
+    }
+    valid_n <- !is.na(values$n) & is.finite(values$n) & values$n > 0
+    effective_n[valid_n] <- values$n[valid_n]
+  } else {
+    reason <- fastmr_steiger_set_reason(
+      reason, is.na(values$eaf), "missing_eaf")
+    reason <- fastmr_steiger_set_reason(
+      reason, !is.finite(values$eaf) | values$eaf <= 0 | values$eaf >= 1,
+      "invalid_eaf")
+    reason <- fastmr_steiger_set_reason(
+      reason, is.na(values$prevalence), "missing_prevalence")
+    reason <- fastmr_steiger_set_reason(
+      reason, !is.finite(values$prevalence) | values$prevalence <= 0 |
+        values$prevalence >= 1, "invalid_prevalence")
+    reason <- fastmr_steiger_set_reason(
+      reason, is.na(values$ncase), "missing_ncase")
+    reason <- fastmr_steiger_set_reason(
+      reason, !is.finite(values$ncase) | values$ncase <= 0, "invalid_ncase")
+    reason <- fastmr_steiger_set_reason(
+      reason, is.na(values$ncontrol), "missing_ncontrol")
+    reason <- fastmr_steiger_set_reason(
+      reason, !is.finite(values$ncontrol) | values$ncontrol <= 0,
+      "invalid_ncontrol")
+    valid_inputs <- reason == "ok"
+    if (any(valid_inputs)) {
+      rsq[valid_inputs] <- fastmr_steiger_r2_from_lor(
+        values$beta[valid_inputs], values$eaf[valid_inputs],
+        values$ncase[valid_inputs], values$ncontrol[valid_inputs],
+        values$prevalence[valid_inputs])
+      effective_n[valid_inputs] <- fastmr_steiger_effective_n(
+        values$ncase[valid_inputs], values$ncontrol[valid_inputs])
+    }
+  }
+
+  invalid_result <- reason == "ok" &
+    (!is.finite(rsq) | rsq < 0 | rsq > 1)
+  reason[invalid_result] <- "invalid_rsq"
+  data.frame(
+    rsq = rsq,
+    effective_n = effective_n,
+    valid = reason == "ok",
+    reason = reason,
+    stringsAsFactors = FALSE
+  )
+}
+
 fastmr_steiger_unique <- function(x) {
   length(unique(x)) == 1L
 }
@@ -96,21 +263,29 @@ fastmr_steiger_add_rsq_one <- function(data, what) {
   rsq_name <- paste0("rsq.", what)
   effective_n_name <- paste0("effective_n.", what)
   if (!units_name %in% names(data)) data[[units_name]] <- NA_character_
-  if (rsq_name %in% names(data)) return(data)
+  valid_name <- paste0("rsq_valid.", what)
+  reason_name <- paste0("rsq_reason.", what)
+  if (rsq_name %in% names(data)) {
+    rsq <- suppressWarnings(as.numeric(data[[rsq_name]]))
+    valid <- is.finite(rsq) & rsq >= 0 & rsq <= 1
+    reason <- ifelse(is.na(rsq), "missing_rsq",
+                     ifelse(valid, "ok", "invalid_rsq"))
+    data[[rsq_name]] <- rsq
+    data[[valid_name]] <- valid
+    data[[reason_name]] <- reason
+    return(data)
+  }
 
   p_name <- paste0("pval.", what)
   beta_name <- paste0("beta.", what)
   se_name <- paste0("se.", what)
   eaf_name <- paste0("eaf.", what)
   sample_name <- paste0("samplesize.", what)
-  data[[rsq_name]] <- rep(NA_real_, nrow(data))
   if (p_name %in% names(data)) {
     p <- suppressWarnings(as.numeric(data[[p_name]]))
     p[!is.na(p) & p < 9.99999999999999e-301] <-
       9.99999999999999e-301
     data[[p_name]] <- p
-  } else {
-    p <- rep(NA_real_, nrow(data))
   }
   beta <- if (beta_name %in% names(data))
     suppressWarnings(as.numeric(data[[beta_name]])) else rep(NA_real_, nrow(data))
@@ -124,46 +299,41 @@ fastmr_steiger_add_rsq_one <- function(data, what) {
 
   if (length(units) && !is.na(units[[1L]]) && units[[1L]] == "log odds") {
     prevalence_name <- paste0("prevalence.", what)
-    if (!prevalence_name %in% names(data)) {
-      data[[prevalence_name]] <- rep(0.1, nrow(data))
-      warning(paste0("Assuming ", what,
-                     " prevalence of 0.1. Alternatively, add prevalence.", what,
-                     " column and re-run."), call. = FALSE)
-    }
-    prevalence <- suppressWarnings(as.numeric(data[[prevalence_name]]))
+    prevalence <- if (prevalence_name %in% names(data))
+      suppressWarnings(as.numeric(data[[prevalence_name]])) else NULL
     ncase_name <- paste0("ncase.", what)
     ncontrol_name <- paste0("ncontrol.", what)
     ncase <- if (ncase_name %in% names(data))
       suppressWarnings(as.numeric(data[[ncase_name]])) else rep(NA_real_, nrow(data))
     ncontrol <- if (ncontrol_name %in% names(data))
       suppressWarnings(as.numeric(data[[ncontrol_name]])) else rep(NA_real_, nrow(data))
-    valid <- is.finite(beta) & is.finite(eaf) & is.finite(ncase) &
-      is.finite(ncontrol) & is.finite(prevalence)
-    if (any(valid)) {
-      data[[rsq_name]][valid] <- fastmr_steiger_r2_from_lor(
-        beta[valid], eaf[valid], ncase[valid], ncontrol[valid], prevalence[valid])
-      effective_n <- if (effective_n_name %in% names(data))
-        suppressWarnings(as.numeric(data[[effective_n_name]])) else rep(NA_real_, nrow(data))
-      effective_n[valid] <- fastmr_steiger_effective_n(ncase[valid], ncontrol[valid])
-      data[[effective_n_name]] <- effective_n
-    }
+    result <- fast_mr_steiger_r2(
+      beta, eaf = eaf, model = "binary_lor", prevalence = prevalence,
+      ncase = ncase, ncontrol = ncontrol)
+    data[[rsq_name]] <- result$rsq
+    data[[effective_n_name]] <- result$effective_n
+    data[[valid_name]] <- result$valid
+    data[[reason_name]] <- result$reason
     return(data)
   }
 
-  is_sd <- length(units) && all(!is.na(units) & grepl("SD", units)) &&
-    all(!is.na(eaf))
+  is_sd <- length(units) && all(!is.na(units) & grepl("SD", units))
   if (is_sd) {
-    data[[rsq_name]] <- 2 * beta^2 * eaf * (1 - eaf)
-    data[[effective_n_name]] <- samplesize
+    result <- fast_mr_steiger_r2(
+      beta, n = samplesize, eaf = eaf, model = "standardized")
+    data[[rsq_name]] <- result$rsq
+    data[[effective_n_name]] <- result$effective_n
+    data[[valid_name]] <- result$valid
+    data[[reason_name]] <- result$reason
     return(data)
   }
 
-  valid <- !is.na(p) & !is.na(samplesize)
-  if (any(valid)) {
-    data[[rsq_name]][valid] <- fastmr_steiger_r2_from_bsen(
-      beta[valid], se[valid], samplesize[valid])
-    data[[effective_n_name]] <- samplesize
-  }
+  result <- fast_mr_steiger_r2(
+    beta, se = se, n = samplesize, model = "continuous_bsen")
+  data[[rsq_name]] <- result$rsq
+  data[[effective_n_name]] <- result$effective_n
+  data[[valid_name]] <- result$valid
+  data[[reason_name]] <- result$reason
   data
 }
 
@@ -174,9 +344,15 @@ fastmr_steiger_add_rsq_one <- function(data, what) {
 #' standard-error/sample-size approximation, SD-scaled quantitative traits,
 #' and log-odds traits with allele frequencies and case/control counts.
 #'
+#' Binary traits require explicit `prevalence.*`, `ncase.*`, and `ncontrol.*`
+#' columns; prevalence is never assumed. Quantitative beta/SE/sample-size
+#' inputs do not require p-values.
+#'
 #' @param data A TwoSampleMR-style harmonised data frame.
 #' @return The input rows with `rsq.exposure`, `rsq.outcome`, effective sample
-#'   sizes, `steiger_dir`, and `steiger_pval` added.
+#'   sizes, `steiger_dir`, and `steiger_pval` added. Per-trait `rsq_valid.*` and
+#'   `rsq_reason.*` columns describe R-squared validity; `steiger_pval_valid`
+#'   and `steiger_pval_reason` explicitly describe p-value availability.
 #' @export
 fast_mr_steiger_filtering <- function(data) {
   if (!is.data.frame(data)) stop("data must be a data.frame", call. = FALSE)
@@ -203,6 +379,27 @@ fast_mr_steiger_filtering <- function(data) {
     x$steiger_pval <- fastmr_steiger_rtest_p_vector(
       sqrt(x$rsq.exposure), sqrt(x$rsq.outcome),
       x$effective_n.exposure, x$effective_n.outcome)
+    p_reason <- rep("ok", nrow(x))
+    p_reason <- fastmr_steiger_set_reason(
+      p_reason, !x$rsq_valid.exposure,
+      paste0("exposure_", x$rsq_reason.exposure))
+    p_reason <- fastmr_steiger_set_reason(
+      p_reason, !x$rsq_valid.outcome,
+      paste0("outcome_", x$rsq_reason.outcome))
+    p_reason <- fastmr_steiger_set_reason(
+      p_reason, is.na(x$effective_n.exposure), "missing_exposure_n")
+    p_reason <- fastmr_steiger_set_reason(
+      p_reason, !is.finite(x$effective_n.exposure) |
+        x$effective_n.exposure <= 3, "invalid_exposure_n")
+    p_reason <- fastmr_steiger_set_reason(
+      p_reason, is.na(x$effective_n.outcome), "missing_outcome_n")
+    p_reason <- fastmr_steiger_set_reason(
+      p_reason, !is.finite(x$effective_n.outcome) |
+        x$effective_n.outcome <= 3, "invalid_outcome_n")
+    p_reason <- fastmr_steiger_set_reason(
+      p_reason, !is.finite(x$steiger_pval), "invalid_steiger_pval")
+    x$steiger_pval_valid <- p_reason == "ok"
+    x$steiger_pval_reason <- p_reason
     x
   })
   if (!length(rows)) return(data.frame())
