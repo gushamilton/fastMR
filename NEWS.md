@@ -1,3 +1,16 @@
+# fastMR (development version)
+
+- `fast_mr()`, `fast_mr_grid()`, and `fast_mr_compressed()` now warn (class
+  `fastmr_nboot_warning`) when a bootstrap-dependent method
+  (`egger_bootstrap`, `simple_median`, `weighted_median`,
+  `penalised_weighted_median`, `simple_mode`, `weighted_mode`) is requested
+  with `nboot = 0`. Those methods previously returned `NaN` standard errors
+  and p-values silently, which was easy to miss with `fast_mr_compressed()`'s
+  default `nboot = 0` (#18). `fast_mr_compressed()` warns once, before any
+  files are read.
+- `fastmr_method_registry()` gains a logical `bootstrap` column identifying
+  those methods.
+
 # fastMR 0.1.9
 
 - Updates the optional compressed-input integration for CompreSSoR 0.5's

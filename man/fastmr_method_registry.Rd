@@ -8,7 +8,9 @@ fastmr_method_registry()
 }
 \value{
 A data frame mapping short method codes to tidy result names and
-descriptions.
+descriptions. The logical \code{bootstrap} column marks methods whose standard
+error and p-value come from bootstrap draws and are therefore \code{NaN} when
+\code{nboot = 0}.
 }
 \description{
 List the fastMR method registry

@@ -1,7 +1,9 @@
 #' List the fastMR method registry
 #'
 #' @return A data frame mapping short method codes to tidy result names and
-#'   descriptions.
+#'   descriptions. The logical `bootstrap` column marks methods whose standard
+#'   error and p-value come from bootstrap draws and are therefore `NaN` when
+#'   `nboot = 0`.
 #' @export
 fastmr_method_registry <- function() {
   data.frame(
@@ -38,6 +40,9 @@ fastmr_method_registry <- function() {
       "Ratio-SE-weighted kernel mode of Wald ratios",
       "Single-SNP Wald ratio"
     ),
+    bootstrap = c(FALSE, FALSE, FALSE, FALSE, TRUE, FALSE,
+                  FALSE, TRUE, TRUE, TRUE, TRUE,
+                  TRUE, FALSE),
     stringsAsFactors = FALSE
   )
 }
@@ -81,6 +86,37 @@ fastmr_normalize_methods <- function(methods) {
     stop("methods must be unique after alias normalization", call. = FALSE)
   }
   normalized
+}
+
+# Methods whose standard error and p-value come only from bootstrap draws.
+# With nboot = 0 they still return a point estimate, but se and pval are NaN.
+fastmr_bootstrap_methods <- function() {
+  registry <- fastmr_method_registry()
+  registry$code[registry$bootstrap]
+}
+
+# Evaluate expr while muffling fastmr_nboot_warning, for callers that have
+# already issued it once themselves.
+fastmr_muffle_nboot_warning <- function(expr) {
+  withCallingHandlers(expr, fastmr_nboot_warning = function(w) invokeRestart("muffleWarning"))
+}
+
+# Warn (with a classed condition so callers can muffle it deliberately) when a
+# bootstrap-dependent method is requested without any bootstrap draws.
+fastmr_check_bootstrap_nboot <- function(methods, nboot) {
+  affected <- intersect(methods, fastmr_bootstrap_methods())
+  if (nboot < 1L && length(affected)) {
+    warning(warningCondition(
+      paste0(
+        "nboot = 0: bootstrap-based method(s) ",
+        paste(affected, collapse = ", "),
+        " will have no standard error or p-value (returned as NaN/NA). ",
+        "Set nboot >= 1 (e.g. nboot = 1000) for inference."
+      ),
+      class = "fastmr_nboot_warning", call = NULL
+    ))
+  }
+  invisible(affected)
 }
 
 fastmr_validate_controls <- function(nboot, seed, threads) {

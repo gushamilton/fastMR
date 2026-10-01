@@ -186,10 +186,7 @@ fastmr_io_map <- function(paths, keys, columns, io_threads) {
 fastmr_compressed_grid_fast_path <- function(
     exposure_data, outcome_data, instrument_sets, methods, controls,
     minimum_snps, exposure_files, outcome_files, io_threads, dots) {
-  bootstrap_methods <- c(
-    "egger_bootstrap", "simple_median", "weighted_median",
-    "penalised_weighted_median", "simple_mode", "weighted_mode"
-  )
+  bootstrap_methods <- fastmr_bootstrap_methods()
   # fast_mr() advances a supplied seed independently for every pair, whereas
   # fast_mr_grid() deliberately shares bootstrap layouts across its grid.  Use
   # the shortcut only when no requested result depends on bootstrap draws so
@@ -228,7 +225,7 @@ fastmr_compressed_grid_fast_path <- function(
     methods = methods, nboot = controls$nboot, seed = controls$seed,
     threads = controls$threads
   ), dots)
-  result <- do.call(fast_mr_grid, call)
+  result <- fastmr_muffle_nboot_warning(do.call(fast_mr_grid, call))
   result$exposure_index <- NULL
   result$outcome_index <- NULL
   pair <- seq_len(length(exposure_labels) * length(outcome_labels))
@@ -304,7 +301,10 @@ fast_read_compressed <- function(
 #' @param instruments A canonical-key character vector shared by every exposure,
 #'   or a named/positional list with one key vector per exposure.
 #' @param methods FastMR method codes.
-#' @param nboot Number of bootstrap draws.
+#' @param nboot Number of bootstrap draws. The default of `0` suits IVW-type
+#'   methods; bootstrap-dependent methods (medians, modes, `egger_bootstrap`)
+#'   return `NaN` `se` and `pval` when `nboot = 0`, and a warning of class
+#'   `fastmr_nboot_warning` is issued before any files are read.
 #' @param seed Optional FastMR seed.
 #' @param threads Native FastMR worker count.
 #' @param io_threads Number of stores decoded concurrently inside the shared
@@ -344,6 +344,7 @@ fast_mr_compressed <- function(
     stop("strict must be TRUE or FALSE", call. = FALSE)
   }
   methods <- fastmr_normalize_methods(methods)
+  fastmr_check_bootstrap_nboot(methods, controls$nboot)
   dots <- list(...)
   instrument_sets <- fastmr_normalize_instruments(instruments, names(exposure_files))
   union_keys <- unique(unlist(instrument_sets, use.names = FALSE))
@@ -511,10 +512,10 @@ fast_mr_compressed <- function(
       paste(unique(missing_omitted), collapse = "; "), call. = FALSE
     )
   }
-  result <- do.call(fast_mr, c(list(
+  result <- fastmr_muffle_nboot_warning(do.call(fast_mr, c(list(
     data = do.call(rbind, rows), methods = methods, nboot = controls$nboot,
     seed = controls$seed, threads = controls$threads
-  ), dots))
+  ), dots)))
   attr(result, "compressed_input") <- list(
     exposure_files = exposure_files,
     outcome_files = outcome_files,

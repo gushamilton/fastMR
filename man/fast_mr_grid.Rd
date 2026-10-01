@@ -28,14 +28,15 @@ fast_mr_grid(
 
 \item{methods}{Character vector of method codes.}
 
-\item{nboot}{Number of bootstrap draws.}
+\item{nboot}{Number of bootstrap draws. Bootstrap-dependent methods return
+\code{NaN} \code{se} and \code{pval} when \code{nboot = 0}, with a \code{fastmr_nboot_warning}.}
 
 \item{seed}{Optional integer seed.}
 
 \item{threads}{Maximum native worker count.}
 
 \item{output}{Optional path for a Zstandard-compressed Parquet copy of the
-result. The path must not already exist; use \code{\link{fast_write_parquet}} when
+result. The path must not already exist; use \code{\link[=fast_write_parquet]{fast_write_parquet()}} when
 an overwrite or another compression codec is required.}
 
 \item{...}{Optional \code{phi} bandwidth multiplier for mode methods and \code{penk}

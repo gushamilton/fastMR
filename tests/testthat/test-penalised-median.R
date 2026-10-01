@@ -24,10 +24,12 @@ test_that("penalised weighted median grid is deterministic across threads", {
 
 test_that("penalty multiplier changes penalised weighting", {
   d <- il6_fixture()[1:12, ]
-  default <- fast_mr(d, methods = "penalised_weighted_median",
-                     nboot = 0, seed = 20260903)
-  strong <- fast_mr(d, methods = "penalised_weighted_median",
-                    nboot = 0, seed = 20260903, penk = 2)
+  expect_warning(default <- fast_mr(d, methods = "penalised_weighted_median",
+                                    nboot = 0, seed = 20260903),
+                 class = "fastmr_nboot_warning")
+  expect_warning(strong <- fast_mr(d, methods = "penalised_weighted_median",
+                                   nboot = 0, seed = 20260903, penk = 2),
+                 class = "fastmr_nboot_warning")
   expect_true(is.finite(default$b))
   expect_true(is.finite(strong$b))
   expect_false(isTRUE(all.equal(default$b, strong$b)))
