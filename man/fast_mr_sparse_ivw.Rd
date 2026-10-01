@@ -12,7 +12,10 @@ fast_mr_sparse_ivw(
   threads = 1L,
   max_output_cells = 1e+08,
   max_memory_mb = 2048,
-  pair_snp_keep = NULL
+  pair_snp_keep = NULL,
+  steiger_exposure_rsq = NULL,
+  steiger_outcome_rsq = NULL,
+  pair_snp_drop = NULL
 )
 }
 \arguments{
@@ -34,10 +37,24 @@ excluding input matrices already held by R.}
 \code{length(col_index)}. Row \code{o} and column \code{k} determine whether
 outcome \code{o} keeps the SNP stored at concatenated CSR entry \code{k}.
 \code{NA} is rejected; \code{NULL} keeps every entry.}
+\item{steiger_exposure_rsq}{Optional numeric vector of exposure R-squared
+values, one per CSR entry.}
+\item{steiger_outcome_rsq}{Optional numeric \code{O x S} matrix of outcome
+R-squared values, indexed like \code{outcome_beta}. When both Steiger
+arguments are supplied, outcome \code{o} keeps entry \code{k} (SNP \code{s})
+only if \code{steiger_exposure_rsq[k] > steiger_outcome_rsq[o, s]}; \code{NA}
+drops the entry, matching \code{subset(steiger_dir)}. Evaluated natively with
+no \code{O x N} allocation. See \code{\link{fast_mr_steiger_rsq_matrix}}.}
+\item{pair_snp_drop}{Optional memory-light
+\code{list(outcome = <int>, entry = <int>)} of equal-length \strong{1-based}
+integer vectors naming outcome rows and concatenated CSR entries to drop.
+Combined with \code{pair_snp_keep} and the Steiger arguments by AND of keeps.}
 }
 \value{
 A \code{fastmr_sparse_ivw_compact} list containing \code{nsnp}, \code{beta},
-\code{se}, \code{Q}, and \code{sigma}, each an \code{E x O} matrix.
+\code{se}, \code{Q}, and \code{sigma}, each an \code{E x O} matrix. \code{nsnp} is the post-filter count. When
+the Steiger arguments or \code{pair_snp_drop} are used, an extra \code{nsnp_prefilter} matrix gives the present-outcome count before
+those filters; without filters the element set is unchanged.
 }
 \description{
 Computes all exposure-by-outcome IVW estimates from a sparse CSR exposure
