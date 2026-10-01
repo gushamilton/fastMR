@@ -44,7 +44,9 @@ if [[ -n "${EXTRA_R_LIBS:-}" ]]; then export R_LIBS="${EXTRA_R_LIBS}${R_LIBS:+:$
 mkdir -p "${BENCH_ROOT}/builds" "${BENCH_ROOT}/results/${RUN_ID}" logs
 SRC="${BENCH_ROOT}/builds/src-${SHA}"
 LIB="${BENCH_ROOT}/builds/lib-${SHA}"
-# Build each SHA once; concurrent array tasks wait on the lock.
+# Build each SHA once; concurrent array tasks wait on the lock. flock is not
+# reliable across nodes on the shared filesystem, so prefer prebuilding both
+# libs on the login node (R CMD INSTALL --library=$LIB $SRC; touch $LIB/.built).
 (
   flock 9
   if [[ ! -f "${LIB}/.built" ]]; then
