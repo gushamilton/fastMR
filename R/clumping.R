@@ -61,6 +61,119 @@ fastmr_clump_reference_args <- function(bfile = NULL, pfile = NULL) {
   if (!is.null(bfile)) c("--bfile", fastmr_clump_quote(bfile)) else c("--pfile", fastmr_clump_quote(pfile))
 }
 
+# Reference allele-frequency floor ------------------------------------------
+#
+# A candidate that is monomorphic (or absent) in the LD reference has zero
+# genotype variance, so its r with every lead is undefined.  PLINK never
+# reports such a pair above --ld-window-r2/--clump-r2, so a greedy clumper
+# would otherwise keep the variant as an "independent" instrument
+# (gushamilton/fastMR#19, gushamilton/ukb-protein#2).  Undefined LD means
+# "cannot assess", never "independent": these candidates are removed before
+# clumping unless `min_ref_maf = 0` explicitly requests the legacy behaviour.
+
+fastmr_clump_min_ref_maf <- function(x) {
+  if (length(x) != 1L || !is.numeric(x) || is.na(x) || !is.finite(x) || x < 0 || x >= 0.5) {
+    stop("min_ref_maf must be one finite value in [0, 0.5)", call. = FALSE)
+  }
+  as.numeric(x)
+}
+
+fastmr_clump_read_freq <- function(stem) {
+  afreq <- paste0(stem, ".afreq")
+  frq <- paste0(stem, ".frq")
+  if (file.exists(afreq)) {
+    # PLINK2: #CHROM ID REF ALT [PROVISIONAL_REF?] ALT_FREQS OBS_CT.  ALT_FREQS
+    # is comma-separated for multiallelic variants; MAF is 1 - max allele freq.
+    x <- utils::read.delim(afreq, header = TRUE, check.names = FALSE, comment.char = "",
+                           colClasses = "character", stringsAsFactors = FALSE)
+    if (!all(c("ID", "ALT_FREQS") %in% names(x))) stop("PLINK2 .afreq output lacks ID/ALT_FREQS", call. = FALSE)
+    maf <- vapply(strsplit(x$ALT_FREQS, ",", fixed = TRUE), function(f) {
+      f <- suppressWarnings(as.numeric(f))
+      if (!length(f) || anyNA(f)) return(NA_real_)
+      1 - max(c(1 - sum(f), f))
+    }, numeric(1))
+    return(data.frame(ID = x$ID, MAF = maf, stringsAsFactors = FALSE))
+  }
+  if (file.exists(frq)) {
+    # PLINK 1.9: CHR SNP A1 A2 MAF NCHROBS (whitespace padded).
+    x <- utils::read.table(frq, header = TRUE, colClasses = "character",
+                           stringsAsFactors = FALSE, check.names = FALSE)
+    if (!all(c("SNP", "MAF") %in% names(x))) stop("PLINK .frq output lacks SNP/MAF", call. = FALSE)
+    maf <- suppressWarnings(as.numeric(x$MAF))
+    return(data.frame(ID = x$SNP, MAF = pmin(maf, 1 - maf), stringsAsFactors = FALSE))
+  }
+  NULL
+}
+
+# Return reference MAF for `snps`, named by SNP; SNPs absent from the
+# reference are absent from the result, and undefined frequencies are NA.
+fastmr_clump_reference_maf <- function(snps, reference_args, plink_bin, workdir, threads = NULL) {
+  snps <- unique(as.character(snps))
+  if (!length(snps)) return(stats::setNames(numeric(), character()))
+  dir.create(workdir, recursive = TRUE, showWarnings = FALSE)
+  stem <- tempfile("reference_freq_", tmpdir = workdir)
+  extract <- paste0(stem, ".extract.txt")
+  writeLines(snps, extract)
+  on.exit(unlink(c(extract, paste0(stem, c(".afreq", ".frq", ".log", ".nosex")))), add = TRUE)
+  args <- c(reference_args, "--extract", fastmr_clump_quote(extract), "--freq",
+            if (!is.null(threads)) c("--threads", as.integer(threads)),
+            "--out", fastmr_clump_quote(stem))
+  output <- tryCatch(suppressWarnings(system2(plink_bin, args, stdout = TRUE, stderr = TRUE)),
+                     error = function(e) structure(character(), status = 1L, error = conditionMessage(e)))
+  status <- attr(output, "status")
+  if (is.null(status)) status <- 0L
+  freq <- if (status == 0L) fastmr_clump_read_freq(stem) else NULL
+  if (is.null(freq)) {
+    # PLINK 1.9 stops when --extract leaves no variants: all are absent.
+    if (any(grepl("No variants remaining|0 variants remaining|No variants loaded", output, ignore.case = TRUE))) {
+      return(stats::setNames(numeric(), character()))
+    }
+    detail <- attr(output, "error")
+    if (is.null(detail)) detail <- paste(utils::tail(output, 8L), collapse = " | ")
+    stop("PLINK --freq on the LD reference failed (exit status ", status, "): ", detail,
+         call. = FALSE)
+  }
+  freq <- freq[freq$ID %in% snps, , drop = FALSE]
+  # Duplicate reference IDs: keep the largest MAF (the most informative copy).
+  maf <- tapply(freq$MAF, freq$ID, function(x) if (all(is.na(x))) NA_real_ else max(x, na.rm = TRUE))
+  stats::setNames(as.numeric(maf), names(maf))
+}
+
+# Apply the floor to deduplicated exposure/SNP candidate rows.  Returns the
+# rows to keep and a summary recorded as an attribute/diagnostic.
+fastmr_clump_reference_floor <- function(snps, min_ref_maf, reference_maf, basis) {
+  snps <- as.character(snps)
+  maf <- unname(reference_maf[snps])
+  absent <- !snps %in% names(reference_maf)
+  maf[absent] <- NA_real_
+  below <- !absent & (is.na(maf) | maf < min_ref_maf)
+  keep <- if (min_ref_maf > 0) !absent & !below else rep(TRUE, length(snps))
+  if (min_ref_maf == 0) below[] <- FALSE
+  summary <- list(
+    min_ref_maf = min_ref_maf, maf_basis = basis,
+    candidate_rows = length(snps), absent_rows = sum(absent),
+    below_floor_rows = sum(below), kept_rows = sum(keep),
+    candidate_variants = length(unique(snps)),
+    absent_variants = length(unique(snps[absent])),
+    below_floor_variants = length(unique(snps[below])),
+    absent_dropped = min_ref_maf > 0
+  )
+  list(keep = keep, summary = summary)
+}
+
+fastmr_clump_reference_message <- function(summary) {
+  if (summary$min_ref_maf > 0) {
+    message("fastMR clumping reference MAF floor ", format(summary$min_ref_maf), ": kept ",
+            summary$kept_rows, " of ", summary$candidate_rows, " candidate rows (",
+            summary$absent_rows, " absent from reference, ", summary$below_floor_rows,
+            " below floor dropped)")
+  } else {
+    message("fastMR clumping reference MAF floor disabled (min_ref_maf = 0): ",
+            summary$candidate_rows, " candidate rows retained, including ",
+            summary$absent_rows, " absent from reference")
+  }
+}
+
 fastmr_clump_run_frontier <- function(leads, targets, reference_args, plink2_bin,
                                       clump_kb, clump_r2, threads, workdir, round) {
   stem <- file.path(workdir, sprintf("frontier_%06d", round))
@@ -78,6 +191,12 @@ fastmr_clump_run_frontier <- function(leads, targets, reference_args, plink2_bin
   status <- attr(output, "status")
   if (is.null(status)) status <- 0L
   path <- paste0(stem, ".vcor.zst")
+  # When every lead/target of a round is absent from the reference (possible
+  # only with min_ref_maf = 0), PLINK2 stops after --extract.  No pair can be
+  # in LD, so this is an empty LD result rather than a failure.
+  if (status != 0L && any(grepl("No variants remaining after main filters", output, fixed = TRUE))) {
+    return(data.frame(lead = character(), target = character(), stringsAsFactors = FALSE))
+  }
   if (status != 0L || !file.exists(path)) {
     detail <- attr(output, "error")
     if (is.null(detail)) detail <- paste(utils::tail(output, 8L), collapse = " | ")
@@ -110,15 +229,45 @@ fastmr_clump_run_frontier <- function(leads, targets, reference_args, plink2_bin
 #' @param workdir Optional directory for temporary frontier files.
 #' @param reference_manifest Optional reference-panel manifest whose MD5 is
 #'   recorded in diagnostics.
-#' @return A list with `data`, `instruments`, and `diagnostics`.
+#' @param min_ref_maf Minimum minor-allele frequency in the LD reference
+#'   (default `0.01`), computed with PLINK2 `--freq` on the reference founders.
+#'   Candidates absent from the reference, or with reference MAF below this
+#'   floor (including undefined frequencies), are dropped before clumping.  A
+#'   monomorphic or very rare reference variant has undefined LD with every
+#'   lead, so it can never be pruned and would otherwise be retained as a
+#'   spurious "independent" instrument.  `min_ref_maf = 0` reproduces the
+#'   legacy behaviour (nothing dropped) but still reports absent variants.
+#' @return A list with `data`, `instruments`, and `diagnostics`.  The
+#'   reference filter summary (`min_ref_maf`, `candidate_rows`, `absent_rows`,
+#'   `below_floor_rows`, `kept_rows`, and the corresponding variant counts) is
+#'   stored both as `diagnostics$reference_maf` and as the `"reference_maf"`
+#'   attribute of the result, and is also reported with [message()].
 #' @export
 fast_clump_data_batched <- function(
     dat, clump_kb = 10000, clump_r2 = 0.001, clump_p1 = 1,
     bfile = NULL, pfile = NULL, plink2_bin = NULL, threads = 1L,
     max_pair_requests = 2e8, max_target_variants = 2e6, max_rounds = 10000L,
     on_limit = c("error", "fallback"), workdir = NULL,
-    reference_manifest = NULL) {
+    reference_manifest = NULL, min_ref_maf = 0.01) {
+  fastmr_clump_batched_impl(
+    dat, clump_kb = clump_kb, clump_r2 = clump_r2, clump_p1 = clump_p1,
+    bfile = bfile, pfile = pfile, plink2_bin = plink2_bin, threads = threads,
+    max_pair_requests = max_pair_requests, max_target_variants = max_target_variants,
+    max_rounds = max_rounds, on_limit = on_limit, workdir = workdir,
+    reference_manifest = reference_manifest, min_ref_maf = min_ref_maf
+  )
+}
+
+# `reference_summary` is supplied only by callers (the chromosome partition)
+# that have already applied the reference floor to `dat`.
+fastmr_clump_batched_impl <- function(
+    dat, clump_kb = 10000, clump_r2 = 0.001, clump_p1 = 1,
+    bfile = NULL, pfile = NULL, plink2_bin = NULL, threads = 1L,
+    max_pair_requests = 2e8, max_target_variants = 2e6, max_rounds = 10000L,
+    on_limit = c("error", "fallback"), workdir = NULL,
+    reference_manifest = NULL, min_ref_maf = 0.01, reference_summary = NULL) {
   if (!is.data.frame(dat) || !"SNP" %in% names(dat)) stop("dat must contain SNP", call. = FALSE)
+  min_ref_maf <- fastmr_clump_min_ref_maf(min_ref_maf)
   clump_kb <- fastmr_clump_number(clump_kb, "clump_kb", 0)
   clump_r2 <- fastmr_clump_number(clump_r2, "clump_r2", 0, 1)
   clump_p1 <- fastmr_clump_number(clump_p1, "clump_p1", 0, 1)
@@ -148,6 +297,19 @@ fast_clump_data_batched <- function(
   original <- dat
   dedup <- !duplicated(paste(as.character(dat$id.exposure), as.character(dat$SNP), sep = "\r"))
   dat <- dat[dedup, , drop = FALSE]
+  workdir_owned <- is.null(workdir)
+  if (workdir_owned) workdir <- tempfile("fastMR_batched_")
+  dir.create(workdir, recursive = TRUE, showWarnings = FALSE)
+  if (workdir_owned) on.exit(unlink(workdir, recursive = TRUE, force = TRUE), add = TRUE)
+  if (is.null(reference_summary)) {
+    reference_maf <- fastmr_clump_reference_maf(dat$SNP, reference_args, plink2_bin, workdir, threads)
+    floor <- fastmr_clump_reference_floor(dat$SNP, min_ref_maf, reference_maf,
+                                          "PLINK2 --freq on the reference (founders)")
+    reference_summary <- floor$summary
+    fastmr_clump_reference_message(reference_summary)
+    dat <- dat[floor$keep, , drop = FALSE]
+  }
+  kept_key <- paste(as.character(dat$id.exposure), as.character(dat$SNP), sep = "\r")
   p <- suppressWarnings(as.numeric(as.character(dat[[pcol]])))
   position <- fastmr_clump_position(dat)
   exposure_ids <- unique(as.character(dat$id.exposure))
@@ -164,10 +326,6 @@ fast_clump_data_batched <- function(
   n_pairs <- 0
   n_rounds <- 0L
   n_calls <- 0L
-  workdir_owned <- is.null(workdir)
-  if (workdir_owned) workdir <- tempfile("fastMR_batched_")
-  dir.create(workdir, recursive = TRUE, showWarnings = FALSE)
-  cleanup <- if (workdir_owned) on.exit(unlink(workdir, recursive = TRUE, force = TRUE), add = TRUE) else NULL
   current_live <- function(state) {
     if (!length(state$index)) return(NA_integer_)
     hit <- which(!state$dead)
@@ -177,14 +335,21 @@ fast_clump_data_batched <- function(
     if (on_limit == "error") stop(message, call. = FALSE)
     if (is.null(bfile)) stop(message, "; fallback requires bfile", call. = FALSE)
     warning(message, "; falling back to per-exposure PLINK clumping", call. = FALSE)
-    result <- fast_clump_data(original, clump_kb = clump_kb, clump_r2 = clump_r2,
-                              clump_p1 = clump_p1, bfile = bfile)
+    # The reference floor has already been applied; do not re-filter.
+    filtered <- original[paste(as.character(original$id.exposure), as.character(original$SNP),
+                               sep = "\r") %in% kept_key, , drop = FALSE]
+    result <- suppressMessages(fast_clump_data(filtered, clump_kb = clump_kb, clump_r2 = clump_r2,
+                                               clump_p1 = clump_p1, bfile = bfile, min_ref_maf = 0))
+    attr(result, "reference_maf") <- NULL
     instruments <- lapply(split(result$SNP, result$id.exposure, drop = TRUE), as.character)
-    return(list(data = result, instruments = instruments,
+    out <- list(data = result, instruments = instruments,
                 diagnostics = list(exposures = length(exposure_ids), rounds = n_rounds,
                                    plink_calls = n_calls, logical_pairs = n_pairs,
                                    exact = TRUE, fallback = TRUE,
-                                   reference_manifest_md5 = reference_md5)))
+                                   reference_maf = reference_summary,
+                                   reference_manifest_md5 = reference_md5))
+    attr(out, "reference_maf") <- reference_summary
+    out
   }
   repeat {
     leads <- vapply(states, current_live, integer(1))
@@ -251,12 +416,15 @@ fast_clump_data_batched <- function(
   original_key <- paste(as.character(original$id.exposure), as.character(original$SNP), sep = "\r")
   result <- original[original_key %in% retained_key, , drop = FALSE]
   instruments <- lapply(split(result$SNP, result$id.exposure, drop = TRUE), as.character)
-  list(data = result, instruments = instruments,
-       diagnostics = list(exposures = length(exposure_ids), candidate_rows = nrow(dat),
-                          retained = nrow(dat[retained, , drop = FALSE]), rounds = n_rounds,
-                          plink_calls = n_calls, logical_pairs = n_pairs,
-                          positive_pairs = length(ls(pair_positive)), exact = TRUE,
-                          fallback = FALSE, reference_manifest_md5 = reference_md5))
+  out <- list(data = result, instruments = instruments,
+              diagnostics = list(exposures = length(exposure_ids), candidate_rows = nrow(dat),
+                                 retained = nrow(dat[retained, , drop = FALSE]), rounds = n_rounds,
+                                 plink_calls = n_calls, logical_pairs = n_pairs,
+                                 positive_pairs = length(ls(pair_positive)), exact = TRUE,
+                                 fallback = FALSE, reference_maf = reference_summary,
+                                 reference_manifest_md5 = reference_md5))
+  attr(out, "reference_maf") <- reference_summary
+  out
 }
 
 #' Exact lead-row LD clumping with a shared pair cache
@@ -283,15 +451,21 @@ fast_clump_data_batched <- function(
 #' @param workdir Optional directory for query files.
 #' @param reference_manifest Optional reference-panel manifest whose MD5 is
 #'   recorded in diagnostics.
-#' @return A list with `data`, named `instruments`, and `diagnostics`.
+#' @param min_ref_maf Minimum reference minor-allele frequency; candidates
+#'   absent from the reference or below the floor are dropped before
+#'   clumping.  See [fast_clump_data_batched()].
+#' @return A list with `data`, named `instruments`, and `diagnostics`; the
+#'   reference filter summary is in `diagnostics$reference_maf` and the
+#'   `"reference_maf"` attribute.
 #' @export
 fast_clump_data_lead_rows <- function(
     dat, clump_kb = 10000, clump_r2 = 0.001, clump_p1 = 1,
     bfile = NULL, pfile = NULL, plink2_bin = NULL, threads = 1L,
     max_pair_requests = 2e8, max_target_variants = 2e6, max_rounds = 10000L,
     on_limit = c("error", "fallback"), workdir = NULL,
-    reference_manifest = NULL) {
+    reference_manifest = NULL, min_ref_maf = 0.01) {
   if (!is.data.frame(dat) || !"SNP" %in% names(dat)) stop("dat must contain SNP", call. = FALSE)
+  min_ref_maf <- fastmr_clump_min_ref_maf(min_ref_maf)
   clump_kb <- fastmr_clump_number(clump_kb, "clump_kb", 0)
   clump_r2 <- fastmr_clump_number(clump_r2, "clump_r2", 0, 1)
   clump_p1 <- fastmr_clump_number(clump_p1, "clump_p1", 0, 1)
@@ -321,6 +495,17 @@ fast_clump_data_lead_rows <- function(
   original <- dat
   dedup <- !duplicated(paste(as.character(dat$id.exposure), as.character(dat$SNP), sep = "\r"))
   dat <- dat[dedup, , drop = FALSE]
+  workdir_owned <- is.null(workdir)
+  if (workdir_owned) workdir <- tempfile("fastMR_lead_rows_")
+  dir.create(workdir, recursive = TRUE, showWarnings = FALSE)
+  if (workdir_owned) on.exit(unlink(workdir, recursive = TRUE, force = TRUE), add = TRUE)
+  reference_maf <- fastmr_clump_reference_maf(dat$SNP, reference_args, plink2_bin, workdir, threads)
+  floor <- fastmr_clump_reference_floor(dat$SNP, min_ref_maf, reference_maf,
+                                        "PLINK2 --freq on the reference (founders)")
+  reference_summary <- floor$summary
+  fastmr_clump_reference_message(reference_summary)
+  dat <- dat[floor$keep, , drop = FALSE]
+  kept_key <- paste(as.character(dat$id.exposure), as.character(dat$SNP), sep = "\r")
   p <- suppressWarnings(as.numeric(as.character(dat[[pcol]])))
   position <- fastmr_clump_position(dat)
   exposure_ids <- unique(as.character(dat$id.exposure))
@@ -338,10 +523,6 @@ fast_clump_data_lead_rows <- function(
   n_rounds <- 0L
   n_calls <- 0L
   n_unique_leads <- 0L
-  workdir_owned <- is.null(workdir)
-  if (workdir_owned) workdir <- tempfile("fastMR_lead_rows_")
-  dir.create(workdir, recursive = TRUE, showWarnings = FALSE)
-  if (workdir_owned) on.exit(unlink(workdir, recursive = TRUE, force = TRUE), add = TRUE)
   current_live <- function(state) {
     if (!length(state$index)) return(NA_integer_)
     hit <- which(!state$dead)
@@ -351,15 +532,22 @@ fast_clump_data_lead_rows <- function(
     if (on_limit == "error") stop(message, call. = FALSE)
     if (is.null(bfile)) stop(message, "; fallback requires bfile", call. = FALSE)
     warning(message, "; falling back to per-exposure PLINK clumping", call. = FALSE)
-    result <- fast_clump_data(original, clump_kb = clump_kb, clump_r2 = clump_r2,
-                              clump_p1 = clump_p1, bfile = bfile)
+    # The reference floor has already been applied; do not re-filter.
+    filtered <- original[paste(as.character(original$id.exposure), as.character(original$SNP),
+                               sep = "\r") %in% kept_key, , drop = FALSE]
+    result <- suppressMessages(fast_clump_data(filtered, clump_kb = clump_kb, clump_r2 = clump_r2,
+                                               clump_p1 = clump_p1, bfile = bfile, min_ref_maf = 0))
+    attr(result, "reference_maf") <- NULL
     instruments <- lapply(split(result$SNP, result$id.exposure, drop = TRUE), as.character)
-    list(data = result, instruments = instruments,
-         diagnostics = list(exposures = length(exposure_ids), rounds = n_rounds,
-                            plink_calls = n_calls, logical_pairs = n_pairs,
-                            unique_leads = n_unique_leads, exact = TRUE,
-                            fallback = TRUE, strategy = "lead_row",
-                            reference_manifest_md5 = reference_md5))
+    out <- list(data = result, instruments = instruments,
+                diagnostics = list(exposures = length(exposure_ids), rounds = n_rounds,
+                                   plink_calls = n_calls, logical_pairs = n_pairs,
+                                   unique_leads = n_unique_leads, exact = TRUE,
+                                   fallback = TRUE, strategy = "lead_row",
+                                   reference_maf = reference_summary,
+                                   reference_manifest_md5 = reference_md5))
+    attr(out, "reference_maf") <- reference_summary
+    out
   }
   repeat {
     leads <- vapply(states, current_live, integer(1))
@@ -439,13 +627,16 @@ fast_clump_data_lead_rows <- function(
   original_key <- paste(as.character(original$id.exposure), as.character(original$SNP), sep = "\r")
   result <- original[original_key %in% retained_key, , drop = FALSE]
   instruments <- lapply(split(result$SNP, result$id.exposure, drop = TRUE), as.character)
-  list(data = result, instruments = instruments,
-       diagnostics = list(exposures = length(exposure_ids), candidate_rows = nrow(dat),
-                          retained = nrow(dat[retained, , drop = FALSE]), rounds = n_rounds,
-                          plink_calls = n_calls, logical_pairs = n_pairs,
-                          positive_pairs = length(ls(pair_positive)), unique_leads = n_unique_leads,
-                          exact = TRUE, fallback = FALSE, strategy = "lead_row",
-                          reference_manifest_md5 = reference_md5))
+  out <- list(data = result, instruments = instruments,
+              diagnostics = list(exposures = length(exposure_ids), candidate_rows = nrow(dat),
+                                 retained = nrow(dat[retained, , drop = FALSE]), rounds = n_rounds,
+                                 plink_calls = n_calls, logical_pairs = n_pairs,
+                                 positive_pairs = length(ls(pair_positive)), unique_leads = n_unique_leads,
+                                 exact = TRUE, fallback = FALSE, strategy = "lead_row",
+                                 reference_maf = reference_summary,
+                                 reference_manifest_md5 = reference_md5))
+  attr(out, "reference_maf") <- reference_summary
+  out
 }
 
 #' Chromosome-partitioned batched PLINK2 LD clumping
@@ -458,9 +649,13 @@ fast_clump_data_lead_rows <- function(
 #' @param dat Data frame containing `SNP`, `id.exposure`, p-values,
 #'   `chr_name`, and `chrom_start`.
 #' @param ... Arguments forwarded to [fast_clump_data_batched()].
-#' @return A list with `data`, named `instruments`, and aggregated diagnostics.
+#' @param min_ref_maf Minimum reference minor-allele frequency, applied once
+#'   to all candidates before partitioning; see [fast_clump_data_batched()].
+#' @return A list with `data`, named `instruments`, and aggregated
+#'   diagnostics; the reference filter summary is in
+#'   `diagnostics$reference_maf` and the `"reference_maf"` attribute.
 #' @export
-fast_clump_data_batched_chromosomal <- function(dat, ...) {
+fast_clump_data_batched_chromosomal <- function(dat, ..., min_ref_maf = 0.01) {
   if (!is.data.frame(dat) || !all(c("chr_name", "chrom_start") %in% names(dat))) {
     stop("chromosome-partitioned clumping requires chr_name and chrom_start", call. = FALSE)
   }
@@ -469,21 +664,48 @@ fast_clump_data_batched_chromosomal <- function(dat, ...) {
   if (anyNA(chr) || any(!nzchar(trimws(chr))) || any(!is.finite(bp))) {
     stop("chr_name and chrom_start must be complete for chromosome-partitioned clumping", call. = FALSE)
   }
+  min_ref_maf <- fastmr_clump_min_ref_maf(min_ref_maf)
+  if (!"SNP" %in% names(dat) || anyNA(dat$SNP) || any(!nzchar(trimws(as.character(dat$SNP))))) {
+    stop("SNP and id.exposure must be non-missing and non-empty", call. = FALSE)
+  }
   dots <- list(...)
   workdir <- dots$workdir
   workdir_owned <- is.null(workdir)
   if (workdir_owned) workdir <- tempfile("fastMR_chromosomal_")
   dir.create(workdir, recursive = TRUE, showWarnings = FALSE)
   if (workdir_owned) on.exit(unlink(workdir, recursive = TRUE, force = TRUE), add = TRUE)
+  # Apply the reference floor once, on the deduplicated exposure/SNP rows, so
+  # the summary matches fast_clump_data_batched() and PLINK reads the
+  # reference frequencies only once.
+  plink2_bin <- fastmr_clump_default(dots$plink2_bin, Sys.which("plink2"))
+  if (!nzchar(plink2_bin)) stop("PLINK2 executable not found; provide plink2_bin", call. = FALSE)
+  dots$plink2_bin <- plink2_bin
+  reference_args <- fastmr_clump_reference_args(dots$bfile, dots$pfile)
+  ids <- if ("id.exposure" %in% names(dat)) as.character(dat$id.exposure) else rep("exposure", nrow(dat))
+  dedup <- !duplicated(paste(ids, as.character(dat$SNP), sep = "\r"))
+  reference_maf <- fastmr_clump_reference_maf(dat$SNP[dedup], reference_args, plink2_bin, workdir,
+                                              fastmr_clump_default(dots$threads, 1L))
+  floor <- fastmr_clump_reference_floor(dat$SNP[dedup], min_ref_maf, reference_maf,
+                                        "PLINK2 --freq on the reference (founders)")
+  reference_summary <- floor$summary
+  fastmr_clump_reference_message(reference_summary)
+  kept_snps <- unique(as.character(dat$SNP[dedup][floor$keep]))
+  row_keep <- as.character(dat$SNP) %in% kept_snps
+  dat_all <- dat
+  dat <- dat[row_keep, , drop = FALSE]
+  chr <- chr[row_keep]
+  row_ids <- which(row_keep)
   chromosomes <- unique(chr)
   pieces <- lapply(seq_along(chromosomes), function(k) {
     cc <- chromosomes[[k]]
     idx <- which(chr == cc)
     part <- dat[idx, , drop = FALSE]
-    part$.fastmr_row_id <- idx
+    part$.fastmr_row_id <- row_ids[idx]
     part_dots <- dots
     part_dots$workdir <- file.path(workdir, paste0("chr_", gsub("[^A-Za-z0-9_.-]", "_", cc)))
-    ans <- do.call(fast_clump_data_batched, c(list(dat = part), part_dots))
+    part_dots$min_ref_maf <- min_ref_maf
+    part_dots$reference_summary <- reference_summary
+    ans <- do.call(fastmr_clump_batched_impl, c(list(dat = part), part_dots))
     ans$chromosome <- cc
     ans
   })
@@ -496,30 +718,36 @@ fast_clump_data_batched_chromosomal <- function(dat, ...) {
     combined$.fastmr_row_id <- NULL
     rownames(combined) <- NULL
   } else {
-    combined <- dat[FALSE, , drop = FALSE]
+    combined <- dat_all[FALSE, , drop = FALSE]
   }
   instruments <- lapply(split(combined$SNP, combined$id.exposure, drop = TRUE), as.character)
-  diagnostics <- lapply(pieces, `[[`, "diagnostics")
+  diagnostics <- lapply(pieces, function(x) {
+    x$diagnostics$reference_maf <- NULL
+    x$diagnostics
+  })
   sum_diag <- function(name, default = 0) {
     vals <- vapply(diagnostics, function(x) if (is.null(x[[name]])) default else x[[name]], numeric(1))
     sum(vals)
   }
   reference_manifest <- dots$reference_manifest
-  list(
+  out <- list(
     data = combined,
     instruments = instruments,
     diagnostics = list(
-      exposures = length(unique(as.character(if ("id.exposure" %in% names(dat)) dat$id.exposure else "exposure"))),
-      candidate_rows = nrow(dat), retained = nrow(combined),
+      exposures = length(unique(as.character(if ("id.exposure" %in% names(dat_all)) dat_all$id.exposure else "exposure"))),
+      candidate_rows = nrow(dat_all), retained = nrow(combined),
       rounds = sum_diag("rounds"), plink_calls = sum_diag("plink_calls"),
       logical_pairs = sum_diag("logical_pairs"), positive_pairs = sum_diag("positive_pairs"),
       exact = all(vapply(diagnostics, function(x) isTRUE(x$exact), logical(1))),
       fallback = any(vapply(diagnostics, function(x) isTRUE(x$fallback), logical(1))),
       partition = "chromosome", chromosomes = diagnostics,
+      reference_maf = reference_summary,
       reference_manifest_md5 = if (!is.null(reference_manifest) && file.exists(reference_manifest))
         unname(tools::md5sum(reference_manifest)) else NULL
     )
   )
+  attr(out, "reference_maf") <- reference_summary
+  out
 }
 
 fastmr_compressed_candidate_data <- function(paths, labels, pvalue_threshold,
@@ -622,14 +850,20 @@ fastmr_compressed_candidate_data <- function(paths, labels, pvalue_threshold,
 #'   target union; lead-row mode shares only the LD row relevant to each
 #'   current lead and is preferable when exposures overlap substantially.
 #' @param ... Arguments forwarded to the selected batched clumping function.
-#' @return A list with `data`, named `instruments`, and `diagnostics`.
+#' @param min_ref_maf Minimum reference minor-allele frequency (default
+#'   `0.01`).  Candidates absent from the LD reference or below the floor are
+#'   dropped before clumping; see [fast_clump_data_batched()].
+#' @return A list with `data`, named `instruments`, and `diagnostics`; the
+#'   reference filter summary is in `diagnostics$reference_maf` and the
+#'   `"reference_maf"` attribute.
 #' @export
 fast_clump_compressed <- function(
     exposure_files, pvalue_threshold = 5e-8,
     candidate_source = c("pvalue_flag", "full"),
     pvalue_order = c("reconstructed", "require_exact"), output = NULL,
-    partition = c("global", "chromosome", "lead_row"), ...) {
+    partition = c("global", "chromosome", "lead_row"), ..., min_ref_maf = 0.01) {
   fastmr_require_compressor()
+  min_ref_maf <- fastmr_clump_min_ref_maf(min_ref_maf)
   paths <- fastmr_normalize_compressed_files(exposure_files, "exposure_files")
   pvalue_threshold <- fastmr_clump_number(pvalue_threshold, "pvalue_threshold", 0, 1)
   candidate_source <- match.arg(candidate_source)
@@ -651,6 +885,7 @@ fast_clump_compressed <- function(
                       global = fast_clump_data_batched,
                       chromosome = fast_clump_data_batched_chromosomal,
                       lead_row = fast_clump_data_lead_rows)
+  dots$min_ref_maf <- min_ref_maf
   clumped <- do.call(clump_fun, c(list(dat = candidates$data), dots))
   if (!is.null(output)) fast_write_parquet(clumped$data, output)
   clumped$diagnostics$compressed_input <- list(

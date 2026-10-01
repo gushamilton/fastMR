@@ -162,7 +162,7 @@ test_that("PLINK clumping passes an explicit clump field and preserves groups", 
   skip_on_os("windows")
   plink <- tempfile("fastMR_plink_stub_")
   writeLines(c(
-    "#!/bin/sh",
+    "#!/bin/sh", freq_stub_lines(format = "plink1"),
     "input=''",
     "out=''",
     "bfile=''",

@@ -1,3 +1,26 @@
+# fastMR (development version)
+
+- `fast_clump_data()`, `fast_clump_data_batched()`,
+  `fast_clump_data_batched_chromosomal()`, `fast_clump_data_lead_rows()`, and
+  `fast_clump_compressed()` gain `min_ref_maf` (default `0.01`). Candidates
+  absent from the LD reference, or with reference MAF below the floor
+  (computed by PLINK `--freq` on the reference founders), are dropped before
+  clumping. Previously a monomorphic or very rare reference variant had
+  undefined LD with every lead, was never pruned, and was kept as an
+  "independent" instrument; in the UKB-PPP cis set (1000 Genomes EUR,
+  n = 633) this inflated instruments from 5,964 to 18,388 (#19,
+  gushamilton/ukb-protein#3). Dropped counts (absent, below floor, kept) are
+  reported with `message()` and in the `"reference_maf"` result attribute and
+  `diagnostics$reference_maf`. `min_ref_maf = 0` reproduces the old results but
+  still reports absent variants. **This changes default clumping results.**
+- With `ld_matrix`, `fast_clump_data()` now treats a non-finite correlation
+  between an index SNP and an in-window candidate as "cannot assess" and drops
+  the candidate, instead of keeping it as independent (`min_ref_maf = 0`
+  restores the old behaviour).
+- The batched PLINK2 clumpers no longer fail when every lead and target in a
+  frontier round is absent from the reference (possible with
+  `min_ref_maf = 0`); such a round has no LD pairs.
+
 # fastMR 0.1.9
 
 - Updates the optional compressed-input integration for CompreSSoR 0.5's

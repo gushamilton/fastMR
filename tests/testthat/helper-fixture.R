@@ -51,3 +51,25 @@ compressor_canonical_fixture <- function(multiplier = 1) {
     stringsAsFactors = FALSE
   )
 }
+
+# Shell lines for PLINK stubs: answer a `--freq` call with a frequency file
+# listing every --extract ID at `maf`, so stubbed clumping tests pass the
+# reference MAF floor.  `format = "plink2"` writes .afreq; "plink1" writes .frq.
+freq_stub_lines <- function(maf = 0.3, format = c("plink2", "plink1")) {
+  format <- match.arg(format)
+  write <- if (format == "plink2") {
+    c("  printf '#CHROM\\tID\\tREF\\tALT\\tPROVISIONAL_REF?\\tALT_FREQS\\tOBS_CT\\n' > \"${fo}.afreq\"",
+      sprintf("  awk '{ printf \"1\\t%%s\\tA\\tG\\tY\\t%s\\t100\\n\", $1 }' \"$fx\" >> \"${fo}.afreq\"", maf))
+  } else {
+    c("  printf ' CHR SNP A1 A2 MAF NCHROBS\\n' > \"${fo}.frq\"",
+      sprintf("  awk '{ printf \"   1 %%s G A %s 100\\n\", $1 }' \"$fx\" >> \"${fo}.frq\"", maf))
+  }
+  c(
+    "case \" $* \" in *\" --freq \"*)",
+    "  fx=''; fo=''; prev=''",
+    "  for a in \"$@\"; do case \"$prev\" in --extract) fx=\"$a\";; --out) fo=\"$a\";; esac; prev=\"$a\"; done",
+    write,
+    "  exit 0;;",
+    "esac"
+  )
+}

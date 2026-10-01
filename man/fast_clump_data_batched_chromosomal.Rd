@@ -4,12 +4,25 @@
 \alias{fast_clump_data_batched_chromosomal}
 \title{Chromosome-partitioned batched PLINK2 LD clumping}
 \usage{
-fast_clump_data_batched_chromosomal(dat, ...)
+fast_clump_data_batched_chromosomal(dat, ..., min_ref_maf = 0.01)
 }
 \arguments{
 \item{dat}{Data frame containing \code{SNP}, \code{id.exposure}, p-values,
 \code{chr_name}, and \code{chrom_start}.}
-\item{...}{Arguments forwarded to \code{fast_clump_data_batched()}.}
+
+\item{...}{Arguments forwarded to \code{\link[=fast_clump_data_batched]{fast_clump_data_batched()}}.}
+
+\item{min_ref_maf}{Minimum reference minor-allele frequency, applied once
+to all candidates before partitioning; see \code{\link[=fast_clump_data_batched]{fast_clump_data_batched()}}.}
 }
-\value{A list with \code{data}, named \code{instruments}, and aggregated diagnostics.}
-\description{Partitions exact batched clumping by chromosome so unrelated chromosomes do not share a large PLINK target union.}
+\value{
+A list with \code{data}, named \code{instruments}, and aggregated
+diagnostics; the reference filter summary is in
+\code{diagnostics$reference_maf} and the \code{"reference_maf"} attribute.
+}
+\description{
+This is the scalable form of \code{\link[=fast_clump_data_batched]{fast_clump_data_batched()}}.  Variants on
+different chromosomes cannot be in LD, so each chromosome can be clumped
+independently.  The partition keeps the PLINK target union local to one
+chromosome while preserving the exact exposure-specific greedy decisions.
+}
