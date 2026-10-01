@@ -176,3 +176,41 @@ test_that("non-IVW methods and estimator = 'pairwise' keep the pairwise path", {
     "shared_instrument_grid"
   )
 })
+
+test_that("sparse IVW kernel matches fast_mr() on ill-conditioned inputs", {
+  one <- function(x, y, sy) {
+    n <- length(x)
+    pw <- fast_mr(data.frame(SNP = paste0("s", seq_len(n)), beta.exposure = x, beta.outcome = y,
+                             se.exposure = 0.01, se.outcome = sy), methods = "ivw")
+    sp <- fast_mr_sparse_ivw(c(0L, n), seq_len(n) - 1L, x, matrix(y, 1), matrix(sy, 1),
+                             matrix(TRUE, 1, n))
+    rel <- function(a, b) if (is.na(a) || is.na(b)) 0 else abs(a - b) / max(abs(b), .Machine$double.xmin)
+    expect_identical(is.na(sp$beta[1]), is.na(pw$b))
+    expect_identical(is.na(sp$se[1]), is.na(pw$se))
+    expect_identical(is.na(sp$Q[1]), is.na(pw$Q))
+    expect_lte(rel(sp$beta[1], pw$b), 1e-14)
+    expect_lte(rel(sp$se[1], pw$se), 1e-14)
+    expect_lte(rel(sp$Q[1], pw$Q), 1e-14)
+    invisible(list(pw = pw, sp = sp))
+  }
+  set.seed(1)
+  # near-perfect fits (catastrophic cancellation in the normal-equation Q)
+  for (rep in 1:20) {
+    n <- 100; x <- rnorm(n, .1, .03); s <- runif(n, 1e-3, 2e-3)
+    one(x, .3 * x + rnorm(n, 0, 1e-6 * s), s)
+  }
+  x <- rnorm(50, .1, .03)
+  one(x, 0.3 * x, runif(50, .01, .02))
+  # sigma == 0 exactly (dyadic values): se must be 0, as in fast_mr()
+  r <- one(c(.125, .25, .5), c(.0625, .125, .25), c(.5, .5, .5))
+  expect_identical(r$sp$se[1], r$pw$se)
+  # large z-scores with heterogeneity
+  for (rep in 1:20) {
+    n <- 500; x <- rnorm(n, .1, .03); s <- runif(n, 1e-4, 2e-4)
+    one(x, .3 * x + rnorm(n, 0, 2 * s), s)
+  }
+  for (rep in 1:5) {
+    n <- 2000; x <- rnorm(n, .5, .1); s <- runif(n, 1e-6, 2e-6)
+    one(x, .3 * x + rnorm(n, 0, 1.5 * s), s)
+  }
+})

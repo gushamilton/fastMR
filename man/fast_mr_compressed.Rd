@@ -33,7 +33,8 @@ fast_mr_compressed(exposure_files, outcome_files, instruments,
   the sparse CSR kernel \code{\link{fast_mr_sparse_ivw}} instead of an R loop
   calling \code{fast_mr()} per pair. Counts, errors, warnings,
   \code{minimum_snps} handling and row order are identical, but estimates may
-  differ from \code{"pairwise"} at about 1e-16 relative. \code{"pairwise"} and
+  differ from \code{"pairwise"} by rounding (within 1e-14 relative on beta,
+  se and Q; usually bit-identical). \code{"pairwise"} and
   every other method set always use the per-pair path. The path used is
   reported as \code{estimator_path} in the \code{compressed_input} attribute.}
   \item{...}{Additional options passed to \code{fast_mr()}.}
