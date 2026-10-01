@@ -5,20 +5,46 @@
 \title{Generate clumped instruments directly from Pcodec exposure stores}
 \usage{
 fast_clump_compressed(
-  exposure_files, pvalue_threshold = 5e-08,
+  exposure_files,
+  pvalue_threshold = 5e-08,
   candidate_source = c("pvalue_flag", "full"),
-  pvalue_order = c("reconstructed", "require_exact"), output = NULL,
-  partition = c("global", "chromosome", "lead_row"), ...
+  pvalue_order = c("reconstructed", "require_exact"),
+  output = NULL,
+  partition = c("global", "chromosome", "lead_row", "graph"),
+  ...
 )
 }
 \arguments{
 \item{exposure_files}{Named character vector of Pcodec stores.}
+
 \item{pvalue_threshold}{Candidate p-value threshold.}
-\item{candidate_source}{\code{"pvalue_flag"} or \code{"full"}.}
-\item{pvalue_order}{\code{"reconstructed"} or \code{"require_exact"}.}
+
+\item{candidate_source}{\code{"pvalue_flag"} (default) or \code{"full"}.}
+
+\item{pvalue_order}{\code{"reconstructed"} (default) or \code{"require_exact"}.
+The latter uses CompreSSoR's \code{read_pvalue_order()} rank domain when the
+installed CompreSSoR and each store provide it, and errors otherwise.}
+
 \item{output}{Optional Parquet path for the clumped candidate table.}
-\item{partition}{\code{"global"} (default), \code{"chromosome"}, or \code{"lead_row"}.}
-\item{...}{Arguments forwarded to the selected batched clumping function, including the PLINK reference.}
+
+\item{partition}{\code{"global"} (default), \code{"chromosome"}, \code{"lead_row"}, or
+\code{"graph"} (recommended for large exposure sets: one PLINK2 all-pairs LD
+call per chromosome plus a C++ greedy pass; falls back to lead-row mode
+above \code{max_graph_pairs}, see \code{\link[=fast_clump_data_graph]{fast_clump_data_graph()}}; instruments are
+identical to the other partitions).
+Chromosome partitioning avoids an unnecessarily large cross-chromosome
+target union; lead-row mode shares only the LD row relevant to each
+current lead and is preferable when exposures overlap substantially.}
+
+\item{...}{Arguments forwarded to the selected batched clumping function.}
 }
-\value{A list with \code{data}, named \code{instruments}, and \code{diagnostics}.}
-\description{Reads candidate rows from each compressed exposure store and performs one exposure-grouped PLINK2 frontier clumping workflow.}
+\value{
+A list with \code{data}, named \code{instruments}, and \code{diagnostics}.
+}
+\description{
+Candidate variants are extracted from every exposure store, then one
+exposure-grouped PLINK2 frontier is used to clump them.  The default
+p-value flag path reads only the rows marked by CompreSSoR's aligned flag
+domain; p-values are still reconstructed from stored Z values until the
+exact ordering domain in CompreSSoR#45 is available.
+}

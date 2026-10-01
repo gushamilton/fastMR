@@ -10,6 +10,32 @@ Rcpp::Rostream<true>&  Rcpp::Rcout = Rcpp::Rcpp_cout_get();
 Rcpp::Rostream<false>& Rcpp::Rcerr = Rcpp::Rcpp_cerr_get();
 #endif
 
+// fastmr_vcor_ids
+List fastmr_vcor_ids(CharacterVector lines);
+RcppExport SEXP _fastMR_fastmr_vcor_ids(SEXP linesSEXP) {
+BEGIN_RCPP
+    Rcpp::RObject rcpp_result_gen;
+    Rcpp::RNGScope rcpp_rngScope_gen;
+    Rcpp::traits::input_parameter< CharacterVector >::type lines(linesSEXP);
+    rcpp_result_gen = Rcpp::wrap(fastmr_vcor_ids(lines));
+    return rcpp_result_gen;
+END_RCPP
+}
+// fastmr_graph_clump
+LogicalVector fastmr_graph_clump(int n_snp, IntegerVector ea, IntegerVector eb, IntegerVector row_snp, IntegerVector exp_start);
+RcppExport SEXP _fastMR_fastmr_graph_clump(SEXP n_snpSEXP, SEXP eaSEXP, SEXP ebSEXP, SEXP row_snpSEXP, SEXP exp_startSEXP) {
+BEGIN_RCPP
+    Rcpp::RObject rcpp_result_gen;
+    Rcpp::RNGScope rcpp_rngScope_gen;
+    Rcpp::traits::input_parameter< int >::type n_snp(n_snpSEXP);
+    Rcpp::traits::input_parameter< IntegerVector >::type ea(eaSEXP);
+    Rcpp::traits::input_parameter< IntegerVector >::type eb(ebSEXP);
+    Rcpp::traits::input_parameter< IntegerVector >::type row_snp(row_snpSEXP);
+    Rcpp::traits::input_parameter< IntegerVector >::type exp_start(exp_startSEXP);
+    rcpp_result_gen = Rcpp::wrap(fastmr_graph_clump(n_snp, ea, eb, row_snp, exp_start));
+    return rcpp_result_gen;
+END_RCPP
+}
 // fastmr_run_native
 Rcpp::List fastmr_run_native(Rcpp::NumericVector exposure_beta, Rcpp::NumericVector outcome_beta, Rcpp::NumericVector exposure_se, Rcpp::NumericVector outcome_se, Rcpp::CharacterVector methods, int nboot, SEXP seed, int threads, double phi, double penk);
 RcppExport SEXP _fastMR_fastmr_run_native(SEXP exposure_betaSEXP, SEXP outcome_betaSEXP, SEXP exposure_seSEXP, SEXP outcome_seSEXP, SEXP methodsSEXP, SEXP nbootSEXP, SEXP seedSEXP, SEXP threadsSEXP, SEXP phiSEXP, SEXP penkSEXP) {
@@ -110,6 +136,8 @@ END_RCPP
 }
 
 static const R_CallMethodDef CallEntries[] = {
+    {"_fastMR_fastmr_vcor_ids", (DL_FUNC) &_fastMR_fastmr_vcor_ids, 1},
+    {"_fastMR_fastmr_graph_clump", (DL_FUNC) &_fastMR_fastmr_graph_clump, 5},
     {"_fastMR_fastmr_run_native", (DL_FUNC) &_fastMR_fastmr_run_native, 10},
     {"_fastMR_fastmr_grid_native", (DL_FUNC) &_fastMR_fastmr_grid_native, 10},
     {"_fastMR_fastmr_masked_ivw_native", (DL_FUNC) &_fastMR_fastmr_masked_ivw_native, 6},
