@@ -124,13 +124,35 @@ fast_mr <- function(data,
 #' @param output Optional path for a Zstandard-compressed Parquet copy of the
 #'   result. The path must not already exist; use [fast_write_parquet()] when
 #'   an overwrite or another compression codec is required.
+#' @param return What to return. `"tidy"` (default) is the full tidy data frame.
+#'   `"compact"` returns a light `fastmr_compact_grid` object (see
+#'   [fastmr_grid_chunk()]) that converts to the identical tidy data frame via
+#'   `as.data.frame()`. `"none"` requires `output` and returns the path
+#'   invisibly.
+#' @param chunk_pairs Number of grid pairs converted to tidy form per Parquet
+#'   row group when a non-`"tidy"` `return` is combined with `output`
+#'   (default 1e6). Only the tidy conversion is chunked, so results are
+#'   identical for every chunk size. For IVW-only grids the native kernel is
+#'   also run in exposure blocks of about `chunk_pairs` pairs, which is exact
+#'   because IVW is deterministic and pair-independent; other methods
+#'   (including seeded bootstraps) always use one native call.
 #' @param ... Optional `phi` bandwidth multiplier for mode methods and `penk`
 #'   penalty multiplier for penalised weighted median (default 20).
-#' @return A tidy data frame with one row per method and grid pair.
+#' @return With `return = "tidy"`, a tidy data frame with one row per method
+#'   and grid pair; see `return` for the other modes. With `return != "tidy"`
+#'   and `output`, the Parquet file is written in row groups of `chunk_pairs`
+#'   pairs (Zstandard compressed, schema identical to the tidy output).
 #' @export
 fast_mr_grid <- function(exposure_beta, outcome_beta, exposure_se, outcome_se,
                          methods = c("ivw", "egger", "weighted_median", "simple_mode", "weighted_mode"),
-                         nboot = 1000, seed = NULL, threads = 1, output = NULL, ...) {
+                         nboot = 1000, seed = NULL, threads = 1, output = NULL,
+                         return = c("tidy", "compact", "none"), chunk_pairs = 1e6, ...) {
+  return <- match.arg(return)
+  if (!is.numeric(chunk_pairs) || length(chunk_pairs) != 1L || !is.finite(chunk_pairs) || chunk_pairs < 1) {
+    stop("chunk_pairs must be one number >= 1", call. = FALSE)
+  }
+  chunk_pairs <- floor(chunk_pairs)
+  if (return == "none" && is.null(output)) stop("return = \"none\" requires output", call. = FALSE)
   controls <- fastmr_validate_controls(nboot, seed, threads)
   methods <- fastmr_normalize_methods(methods)
   dots <- list(...)
@@ -157,21 +179,39 @@ fast_mr_grid <- function(exposure_beta, outcome_beta, exposure_se, outcome_se,
       (!is.null(exp.snps) && !identical(exp.snps, out.snps))) {
     stop("exposure and outcome matrices must use the same SNP column names and order", call. = FALSE)
   }
-  native <- fastmr_native_call(
-    fastmr_grid_native,
-    list(
-      exposure_beta = arrays[["exposure_beta"]],
-      outcome_beta = arrays[["outcome_beta"]],
-      exposure_se = arrays[["exposure_se"]],
-      outcome_se = arrays[["outcome_se"]],
-      methods = methods, nboot = controls[["nboot"]], seed = NULL,
-      threads = controls[["threads"]], phi = phi, penk = penk
-    ),
-    controls[["seed"]]
-  )
   exp.labels <- rownames(arrays$exposure_beta)
   out.labels <- rownames(arrays$outcome_beta)
   if (is.null(exp.labels)) exp.labels <- as.character(seq_len(nrow(arrays$exposure_beta)))
   if (is.null(out.labels)) out.labels <- as.character(seq_len(nrow(arrays$outcome_beta)))
-  fastmr_write_result(fastmr_tidy_grid_native(native, methods, exp.labels, out.labels), output)
+  run_native <- function(eb, es) {
+    fastmr_native_call(
+      fastmr_grid_native,
+      list(
+        exposure_beta = eb,
+        outcome_beta = arrays[["outcome_beta"]],
+        exposure_se = es,
+        outcome_se = arrays[["outcome_se"]],
+        methods = methods, nboot = controls[["nboot"]], seed = NULL,
+        threads = controls[["threads"]], phi = phi, penk = penk
+      ),
+      controls[["seed"]]
+    )
+  }
+  if (return == "none" && identical(methods, "ivw")) {
+    # RNG-free: run the kernel in exposure blocks and stream each to Parquet.
+    path <- fastmr_stream_parquet(
+      fastmr_ivw_blocks(arrays, run_native, exp.labels, out.labels, methods, chunk_pairs),
+      output)
+    return(invisible(path))
+  }
+  native <- run_native(arrays[["exposure_beta"]], arrays[["exposure_se"]])
+  if (return == "tidy") {
+    return(fastmr_write_result(fastmr_tidy_grid_native(native, methods, exp.labels, out.labels), output))
+  }
+  res <- fastmr_new_compact_grid(native, methods, exp.labels, out.labels)
+  if (!is.null(output)) {
+    path <- fast_write_parquet(res, output, chunk_pairs = chunk_pairs)
+    if (return == "none") return(invisible(path))
+  }
+  res
 }
