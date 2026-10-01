@@ -194,7 +194,7 @@ test_that("graph partition runs through the PLINK2 argument surface", {
   args <- readLines(log)
   expect_length(args, 2L)  # --version + one all-pairs call
   call <- args[grepl("--r2-unphased", args)]
-  expect_match(call, "--r2-unphased zs --ld-window-kb 500 --ld-window 1000000000 --ld-window-r2 0.01", fixed = TRUE)
+  expect_match(call, "--r2-unphased zs cols=id,unphased --ld-window-kb 500 --ld-window 1000000000 --ld-window-r2 0.01", fixed = TRUE)
   expect_match(call, "--extract", fixed = TRUE)
 })
 
@@ -267,4 +267,70 @@ test_that("require_exact uses the CompreSSoR rank domain when available", {
   expect_true(cand$exact)
   expect_true("pvalue_rank" %in% names(cand$data))
   expect_false(anyNA(cand$data$pvalue_rank))
+})
+
+test_that(".fastmr_vcor_ids is GC-safe under gctorture", {
+  skip_on_cran()
+  n <- 25
+  lines <- c("#CHROM_A\tPOS_A\tID_A\tCHROM_B\tPOS_B\tID_B\tUNPHASED_R2",
+             sprintf("22\t%d\tidA_%d_x\t22\t%d\tidB_%d_y\t0.5", 1:n, 1:n, 1:n, 1:n))
+  gctorture(TRUE)
+  r <- tryCatch(fastMR:::.fastmr_vcor_ids(lines), finally = gctorture(FALSE))
+  expect_identical(r$lead, sprintf("idA_%d_x", 1:n))
+  expect_identical(r$target, sprintf("idB_%d_y", 1:n))
+})
+
+test_that("graph run treats 'No variants remaining' as an empty graph", {
+  skip_on_os("windows")
+  plink2 <- tempfile("fastMR_plink2_novar_")
+  writeLines(c("#!/bin/sh",
+               "case \"$*\" in *--version*) echo 'PLINK v2.0.0-stub'; exit 0;; esac",
+               "echo 'Error: No variants remaining after --extract.'", "exit 3"), plink2)
+  Sys.chmod(plink2, "0755")
+  wd <- tempfile("wd"); dir.create(wd)
+  ld <- fastMR:::fastmr_clump_run_graph(c("A", "B"), c("--bfile", "panel"), plink2, 500, 0.01, 1L, wd, "1")
+  expect_identical(nrow(ld), 0L)
+  expect_named(ld, c("lead", "target"))
+  # other failures still abort
+  writeLines(c("#!/bin/sh", "echo 'Error: boom'", "exit 3"), plink2)
+  expect_error(fastMR:::fastmr_clump_run_graph(c("A", "B"), c("--bfile", "panel"), plink2, 500, 0.01, 1L, wd, "1"),
+               "failed")
+})
+
+test_that("graph clumping skips PLINK when no candidate pairs exist", {
+  skip_on_os("windows")
+  plink2 <- tempfile("fastMR_plink2_never_")
+  log <- tempfile("never_args_")
+  writeLines(c("#!/bin/sh", sprintf("echo \"$@\" >> %s", log),
+               "case \"$*\" in *--version*) echo 'PLINK v2.0.0-stub'; exit 0;; esac",
+               "echo 'Error: No variants remaining after --extract.'", "exit 3"), plink2)
+  Sys.chmod(plink2, "0755")
+  dat <- data.frame(SNP = c("A", "B"), id.exposure = "E", pval.exposure = c(1e-8, 1e-7),
+                    chr_name = "1", chrom_start = c(1000, 900000))
+  res <- fast_clump_data_graph(dat, clump_kb = 1, clump_r2 = 0.01, bfile = "panel", plink2_bin = plink2)
+  expect_identical(res$instruments$E, c("A", "B"))
+  expect_false(any(grepl("--r2-unphased", readLines(log))))
+})
+
+test_that(".fastmr_vcor_ids honours header-derived ID columns", {
+  ids <- fastMR:::.fastmr_vcor_ids(c("#ID_A\tID_B\tUNPHASED_R2", "rs1\trs2\t0.9", "rs3\trs4"), 1L, 2L)
+  expect_identical(ids$lead, c("rs1", "rs3"))
+  expect_identical(ids$target, c("rs2", "rs4"))
+})
+
+test_that("graph run parses a multi-block zstd stream identically", {
+  skip_on_os("windows")
+  skip_if(!nzchar(Sys.which("zstd")), "zstd unavailable")
+  n <- 25
+  tab <- c("#ID_A\tID_B\tUNPHASED_R2", sprintf("v%d\tw%d\t0.5", 1:n, 1:n))
+  plink2 <- tempfile("fastMR_plink2_cols_")
+  src <- tempfile(); writeLines(tab, src)
+  writeLines(c("#!/bin/sh", "out=''",
+               "while [ \"$#\" -gt 0 ]; do case \"$1\" in --out) out=\"$2\"; shift 2;; *) shift;; esac; done",
+               sprintf("zstd -q -f %s -o \"${out}.vcor.zst\"", src)), plink2)
+  Sys.chmod(plink2, "0755")
+  wd <- tempfile("wd"); dir.create(wd)
+  ld <- fastMR:::fastmr_clump_run_graph(c("v1", "w1"), c("--bfile", "p"), plink2, 500, 0.01, 1L, wd, "1")
+  expect_identical(ld$lead, sprintf("v%d", 1:n))
+  expect_identical(ld$target, sprintf("w%d", 1:n))
 })

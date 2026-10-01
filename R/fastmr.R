@@ -128,13 +128,17 @@ fast_mr <- function(data,
 #'   `"compact"` returns a light `fastmr_compact_grid` object (see
 #'   [fastmr_grid_chunk()]) that converts to the identical tidy data frame via
 #'   `as.data.frame()`. `"none"` requires `output` and returns the path
-#'   invisibly.
+#'   invisibly. Streamed IVW-only output (`return = "none"`) is computed in
+#'   exposure blocks and equals the tidy result to about 1e-15 relative (a
+#'   blocked BLAS `dgemm`, e.g. OpenBLAS, can differ in the last bits); it is
+#'   identical when the grid is not blocked.
 #' @param chunk_pairs Number of grid pairs converted to tidy form per Parquet
 #'   row group when a non-`"tidy"` `return` is combined with `output`
 #'   (default 1e6). Only the tidy conversion is chunked, so results are
 #'   identical for every chunk size. For IVW-only grids the native kernel is
-#'   also run in exposure blocks of about `chunk_pairs` pairs, which is exact
-#'   because IVW is deterministic and pair-independent; other methods
+#'   also run in exposure blocks of about `chunk_pairs` pairs, which is
+#'   deterministic and pair-independent (blocked results agree with the
+#'   unblocked ones to about 1e-15 relative, see `return`); other methods
 #'   (including seeded bootstraps) always use one native call.
 #' @param ... Optional `phi` bandwidth multiplier for mode methods and `penk`
 #'   penalty multiplier for penalised weighted median (default 20).

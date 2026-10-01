@@ -550,8 +550,10 @@ fast_read_compressed <- function(
 #'   instrument sets are not shared by all exposures use the sparse CSR kernel
 #'   [fast_mr_sparse_ivw()] instead of an R loop calling [fast_mr()] per pair.
 #'   Counts, errors, warnings, `minimum_snps` handling and row order are
-#'   identical, but estimates may differ from `"pairwise"` at about 1e-16
-#'   relative because the kernels sum in different arithmetic. `"pairwise"`
+#'   identical, but estimates may differ from `"pairwise"` by rounding
+#'   (agreement is within 1e-14 relative on beta, se and Q; the two kernels use
+#'   the same two-pass residual formula and summation order, so results are
+#'   usually bit-identical). `"pairwise"`
 #'   (and every other method set) always uses the per-pair path. The path used
 #'   is reported as `estimator_path` in the `compressed_input` attribute
 #'   (`"sparse_ivw"`, `"pairwise"` or `"shared_instrument_grid"`).

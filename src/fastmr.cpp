@@ -1793,7 +1793,6 @@ Rcpp::List compute_sparse_ivw_grid(
     for (int outcome = 0; outcome < outcome_count; ++outcome) {
       double numerator = 0.0;
       double denominator = 0.0;
-      double yy = 0.0;
       double count = 0.0;
       double prefilter = 0.0;
       const int* drop_it = nullptr;
@@ -1804,24 +1803,30 @@ Rcpp::List compute_sparse_ivw_grid(
                                    base + drop_offset[outcome + 1], first);
         drop_end = base + drop_offset[outcome + 1];
       }
+      const int* drop_begin = drop_it;
+      // Same filters for both passes; `cursor` walks the sorted drop list.
+      auto kept = [&](int index, int snp, const int*& cursor) -> bool {
+        if (has_pair_snp_keep && !pair_snp_keep_matrix(outcome, index)) return false;
+        if (has_steiger &&
+            !(steiger_exp[index] > steiger_out(outcome, snp))) return false;
+        if (has_drop) {
+          while (cursor != drop_end && *cursor < index) ++cursor;
+          if (cursor != drop_end && *cursor == index) return false;
+        }
+        return true;
+      };
       for (int index = first; index < last; ++index) {
         const int snp = col_index[index];
         if (!outcome_present(outcome, snp)) continue;
         prefilter += 1.0;
-        if (has_pair_snp_keep && !pair_snp_keep_matrix(outcome, index)) continue;
-        if (has_steiger &&
-            !(steiger_exp[index] > steiger_out(outcome, snp))) continue;
-        if (has_drop) {
-          while (drop_it != drop_end && *drop_it < index) ++drop_it;
-          if (drop_it != drop_end && *drop_it == index) continue;
-        }
+        if (!kept(index, snp, drop_it)) continue;
         const double x = exposure_beta[index];
         const double y = outcome_beta(outcome, snp);
         const double se = outcome_se(outcome, snp);
         const double weight = 1.0 / (se * se);
-        numerator += x * weight * y;
-        denominator += x * x * weight;
-        yy += weight * y * y;
+        // Same association order as compute_ivw() so results are bit-identical.
+        denominator += weight * x * x;
+        numerator += weight * x * y;
         count += 1.0;
       }
       const std::size_t result_index = static_cast<std::size_t>(exposure) +
@@ -1831,15 +1836,27 @@ Rcpp::List compute_sparse_ivw_grid(
       if (count < 2.0 || !std::isfinite(denominator) || denominator <= 0.0) continue;
       const double beta_value = numerator / denominator;
       if (!std::isfinite(beta_value)) continue;
-      double q_value = yy - 2.0 * beta_value * numerator +
-                       beta_value * beta_value * denominator;
-      if (q_value < 0.0) q_value = 0.0;
+      // Two-pass residual sum (as compute_ivw); the normal-equation form
+      // yy - 2*b*num + b^2*den cancels catastrophically for good fits.
+      double q_value = 0.0;
+      const int* cursor = drop_begin;
+      for (int index = first; index < last; ++index) {
+        const int snp = col_index[index];
+        if (!outcome_present(outcome, snp)) continue;
+        if (!kept(index, snp, cursor)) continue;
+        const double se = outcome_se(outcome, snp);
+        const double weight = 1.0 / (se * se);
+        const double residual = outcome_beta(outcome, snp) - beta_value * exposure_beta[index];
+        q_value += weight * residual * residual;
+      }
       const double sigma_value = std::sqrt(q_value / (count - 1.0));
       const double base_se = std::sqrt(1.0 / denominator);
       if (!std::isfinite(sigma_value) || !std::isfinite(base_se)) continue;
+      const double residual_se = base_se * sigma_value;
       result_beta[ result_index ] = beta_value;
       result_sigma[ result_index ] = sigma_value;
-      result_se[ result_index ] = base_se * std::max(1.0, sigma_value);
+      result_se[ result_index ] = sigma_value > 0.0
+        ? residual_se / std::min(1.0, sigma_value) : residual_se;
       result_q[ result_index ] = q_value;
     }
   }

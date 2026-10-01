@@ -11,13 +11,15 @@ Rcpp::Rostream<false>& Rcpp::Rcerr = Rcpp::Rcpp_cerr_get();
 #endif
 
 // fastmr_vcor_ids
-List fastmr_vcor_ids(CharacterVector lines);
-RcppExport SEXP _fastMR_fastmr_vcor_ids(SEXP linesSEXP) {
+List fastmr_vcor_ids(CharacterVector lines, int fa, int fb);
+RcppExport SEXP _fastMR_fastmr_vcor_ids(SEXP linesSEXP, SEXP faSEXP, SEXP fbSEXP) {
 BEGIN_RCPP
     Rcpp::RObject rcpp_result_gen;
     Rcpp::RNGScope rcpp_rngScope_gen;
     Rcpp::traits::input_parameter< CharacterVector >::type lines(linesSEXP);
-    rcpp_result_gen = Rcpp::wrap(fastmr_vcor_ids(lines));
+    Rcpp::traits::input_parameter< int >::type fa(faSEXP);
+    Rcpp::traits::input_parameter< int >::type fb(fbSEXP);
+    rcpp_result_gen = Rcpp::wrap(fastmr_vcor_ids(lines, fa, fb));
     return rcpp_result_gen;
 END_RCPP
 }
@@ -136,7 +138,7 @@ END_RCPP
 }
 
 static const R_CallMethodDef CallEntries[] = {
-    {"_fastMR_fastmr_vcor_ids", (DL_FUNC) &_fastMR_fastmr_vcor_ids, 1},
+    {"_fastMR_fastmr_vcor_ids", (DL_FUNC) &_fastMR_fastmr_vcor_ids, 3},
     {"_fastMR_fastmr_graph_clump", (DL_FUNC) &_fastMR_fastmr_graph_clump, 5},
     {"_fastMR_fastmr_run_native", (DL_FUNC) &_fastMR_fastmr_run_native, 10},
     {"_fastMR_fastmr_grid_native", (DL_FUNC) &_fastMR_fastmr_grid_native, 10},

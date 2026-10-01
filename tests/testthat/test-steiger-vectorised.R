@@ -141,3 +141,15 @@ test_that("diagnostics using groups match old grouping", {
     expect_identical(new, old)
   }
 })
+
+test_that("supplied effective_n/rsq_valid/rsq_reason columns are overwritten like the old code", {
+  d <- data.frame(SNP = paste0("rs", 1:3), beta.exposure = c(.1, .2, .15), se.exposure = .01,
+                  beta.outcome = c(.01, .02, .03), se.outcome = .01,
+                  id.exposure = "E", id.outcome = "O", exposure = "E", outcome = "O",
+                  samplesize.exposure = 5e4, samplesize.outcome = 1e4,
+                  effective_n.outcome = 50, rsq_valid.outcome = FALSE,
+                  rsq_reason.outcome = "stale")
+  expect_same_steiger(d)
+  r <- suppressWarnings(fast_mr_steiger_filtering(d))
+  expect_false(any(r$effective_n.outcome == 50))
+})

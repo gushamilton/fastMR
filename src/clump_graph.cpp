@@ -5,43 +5,44 @@
 
 using namespace Rcpp;
 
-// Split PLINK2 .vcor lines into the ID_A (field 3) and ID_B (field 6) columns
-// without allocating a per-line list.  Header and short lines are skipped.
+// Split PLINK2 .vcor lines into two ID columns (1-based fields `fa` < `fb`;
+// defaults 3 and 6 = ID_A and ID_B of the default column layout) without
+// allocating a per-line list.  Header and short lines are skipped.
 // [[Rcpp::export(name = ".fastmr_vcor_ids")]]
-List fastmr_vcor_ids(CharacterVector lines) {
+List fastmr_vcor_ids(CharacterVector lines, int fa = 3, int fb = 6) {
+  if (fa < 1 || fb <= fa || fb > 64) stop("invalid vcor ID field positions");
   R_xlen_t n = lines.size();
-  std::vector<SEXP> a, b;
-  a.reserve(n);
-  b.reserve(n);
+  // CHARSXPs go straight into protected vectors: holding them only in a
+  // std::vector<SEXP> lets the GC free them during later mkChar calls.
+  CharacterVector va(n), vb(n);
+  R_xlen_t m = 0;
+  std::vector<const char*> start(fb + 1), tab(fb + 1);
   for (R_xlen_t i = 0; i < n; ++i) {
     if (lines[i] == NA_STRING) continue;
     const char* s = CHAR(STRING_ELT(lines, i));
     if (s[0] == '#' || s[0] == '\0') continue;
-    const char* tab[6];
-    int found = 0;
-    const char* p = s;
-    const char* start[7];
+    int found = 0;  // tabs seen so far
     start[0] = s;
-    for (; *p; ++p) {
+    for (const char* p = s; *p; ++p) {
       if (*p == '\t') {
         tab[found] = p;
         ++found;
         start[found] = p + 1;
-        if (found == 6) break;
+        if (found == fb) break;
       }
     }
-    if (found < 5) continue;
-    const char* e3 = tab[2];
-    // field 3 = (start[2], tab[2]); field 6 = (start[5], tab[5] or end)
-    const char* f6e = (found >= 6) ? tab[5] : s + std::strlen(s);
-    a.push_back(Rf_mkCharLenCE(start[2], (int)(e3 - start[2]), CE_UTF8));
-    b.push_back(Rf_mkCharLenCE(start[5], (int)(f6e - start[5]), CE_UTF8));
+    if (found < fb - 1) continue;
+    // field k = (start[k-1], tab[k-1]); the last field may end at the string end
+    const char* ea = tab[fa - 1];
+    const char* eb = (found >= fb) ? tab[fb - 1] : s + std::strlen(s);
+    SET_STRING_ELT(va, m, Rf_mkCharLenCE(start[fa - 1], (int)(ea - start[fa - 1]), CE_UTF8));
+    SET_STRING_ELT(vb, m, Rf_mkCharLenCE(start[fb - 1], (int)(eb - start[fb - 1]), CE_UTF8));
+    ++m;
   }
-  R_xlen_t m = a.size();
   CharacterVector ra(m), rb(m);
   for (R_xlen_t i = 0; i < m; ++i) {
-    SET_STRING_ELT(ra, i, a[i]);
-    SET_STRING_ELT(rb, i, b[i]);
+    SET_STRING_ELT(ra, i, STRING_ELT(va, i));
+    SET_STRING_ELT(rb, i, STRING_ELT(vb, i));
   }
   return List::create(_["lead"] = ra, _["target"] = rb);
 }

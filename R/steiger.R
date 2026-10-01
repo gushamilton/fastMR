@@ -390,7 +390,7 @@ fast_mr_steiger_filtering <- function(data) {
       if (!any(rows)) next
       part <- fastmr_steiger_add_rsq_one(base[rows, , drop = FALSE], what)
       touched <- names(part)[!names(part) %in% original |
-        names(part) %in% paste0(c("rsq.", "pval."), what)]
+        names(part) %in% paste0(c("rsq.", "pval.", "effective_n.", "rsq_valid.", "rsq_reason."), what)]
       for (column in touched) {
         value <- part[[column]]
         if (is.null(x[[column]]) || !identical(typeof(x[[column]]), typeof(value)) ||
