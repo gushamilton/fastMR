@@ -979,7 +979,7 @@ Result compute_wald(const Prepared& p) {
 }
 
 // Standard-normal draw source. The default reads R's RNG (main thread only);
-// PredrawnNormals replays draws made beforehand by R's rnorm() in exactly the
+// PredrawnNormals replays draws made beforehand on the main thread in exactly the
 // order the default would consume them, so worker threads never touch R.
 struct RNormals {
   double operator()() const { return R::rnorm(0.0, 1.0); }
@@ -2565,96 +2565,117 @@ Rcpp::List fastmr_run_groups_native(Rcpp::IntegerVector offsets,
   return group_results_to_flat(all);
 }
 
-// Number of standard-normal draws each group's bootstrap consumes (the same
-// count a per-group fastmr_run_native() call takes from R's RNG), as doubles.
-// [[Rcpp::export]]
-Rcpp::NumericVector fastmr_groups_draw_counts(Rcpp::IntegerVector offsets,
-                                              Rcpp::NumericVector exposure_beta,
-                                              Rcpp::NumericVector outcome_beta,
-                                              Rcpp::NumericVector exposure_se,
-                                              Rcpp::NumericVector outcome_se,
-                                              Rcpp::CharacterVector methods,
-                                              int nboot) {
-  validate_controls(nboot, 1, 1.0);
-  const std::vector<std::string> parsed_methods = parse_methods(methods);
-  const GroupInputs in = check_group_inputs(offsets, exposure_beta, outcome_beta,
-                                            exposure_se, outcome_se);
-  const BootstrapNeeds needs = bootstrap_needs(parsed_methods);
-  Rcpp::NumericVector counts(in.groups);
-  for (R_xlen_t g = 0; g < in.groups; ++g) {
-    const Prepared p = group_prepared(in, g);
-    std::size_t ratios = 0;
-    for (double x : p.x) if (x != 0.0) ++ratios;
-    counts[g] = bootstrap_draw_count(p.x.size(), ratios, nboot, needs.median,
-                                     needs.egger, needs.penalised, needs.mode);
-  }
-  return counts;
-}
-
-// Threaded equivalent of calling fastmr_run_native() once per group with
-// bootstrap methods. `draws` holds every group's standard-normal draws,
-// concatenated in group order (group g uses draw_offsets[g] onwards, exactly
-// fastmr_groups_draw_counts()[g] of them), as R's rnorm() produced them in the
-// order the per-group calls would have consumed R's RNG. Workers rebuild the
-// identical bootstrap layouts from those draws and run the same compute_pair()
-// code with R-backed p-values deferred; p-values are then filled serially on
-// the main thread by the same functions, so output is bit-identical for every
-// thread count.
+// Equivalent of calling fastmr_run_native() once per group with bootstrap
+// methods, threaded across groups with bit-identical results. All of R's RNG
+// is consumed on the main thread in exactly the serial order: one continuous
+// stream from the caller's state, or, when `reseed` is an R function, a fresh
+// stream started by reseed(g) (1-based group number) before each group that
+// draws. Groups are processed in batches of at most `batch_draws` standard
+// normals:
+//  * a batch that would run on one worker (threads = 1, or a single group,
+//    e.g. one group larger than the budget) streams R::rnorm() straight into
+//    the bootstrap layouts with inline p-values, exactly as the per-group
+//    calls did, so it needs no draw buffer at all;
+//  * otherwise the batch's normals are drawn into one reused native buffer,
+//    workers rebuild the identical layouts from it (PredrawnNormals) with
+//    R-backed p-values deferred, and those p-values are filled serially.
+// The buffer therefore never exceeds `batch_draws` doubles. Batching never
+// changes any result. Returns flat group-major, method-minor vectors.
 // [[Rcpp::export]]
 Rcpp::List fastmr_run_groups_boot_native(Rcpp::IntegerVector offsets,
                                          Rcpp::NumericVector exposure_beta,
                                          Rcpp::NumericVector outcome_beta,
                                          Rcpp::NumericVector exposure_se,
                                          Rcpp::NumericVector outcome_se,
-                                         Rcpp::NumericVector draws,
-                                         Rcpp::NumericVector draw_offsets,
                                          Rcpp::CharacterVector methods,
                                          int nboot = 1000,
                                          int threads = 1,
                                          double phi = 1.0,
-                                         double penk = 20.0) {
+                                         double penk = 20.0,
+                                         SEXP reseed = R_NilValue,
+                                         double batch_draws = 8388608.0) {
   validate_controls(nboot, threads, phi);
   if (!std::isfinite(penk) || penk <= 0.0) Rcpp::stop("penk must be positive and finite");
+  if (!Rf_isNull(reseed) && !Rf_isFunction(reseed)) Rcpp::stop("reseed must be NULL or a function");
   const std::vector<std::string> parsed_methods = parse_methods(methods);
   const GroupInputs in = check_group_inputs(offsets, exposure_beta, outcome_beta,
                                             exposure_se, outcome_se);
-  if (draw_offsets.size() != in.groups + 1 || draw_offsets[0] != 0.0 ||
-      draw_offsets[in.groups] != static_cast<double>(draws.size())) {
-    Rcpp::stop("draw_offsets must start at 0 and end at length(draws)");
-  }
-  const BootstrapNeeds needs = bootstrap_needs(parsed_methods);
-  std::vector<std::size_t> draw_start(static_cast<std::size_t>(in.groups));
-  for (R_xlen_t g = 0; g < in.groups; ++g) {
-    const Prepared p = group_prepared(in, g);
-    std::size_t ratios = 0;
-    for (double x : p.x) if (x != 0.0) ++ratios;
-    const double expected = bootstrap_draw_count(p.x.size(), ratios, nboot, needs.median,
-                                                 needs.egger, needs.penalised, needs.mode);
-    if (draw_offsets[g + 1] - draw_offsets[g] != expected) {
-      Rcpp::stop("draw counts do not match the bootstrap layout");
-    }
-    draw_start[static_cast<std::size_t>(g)] = static_cast<std::size_t>(draw_offsets[g]);
-  }
-  const double* draw_data = REAL(draws);
+  const std::size_t groups = static_cast<std::size_t>(in.groups);
   const std::size_t method_count = parsed_methods.size();
-  std::vector<Result> all(static_cast<std::size_t>(in.groups) * method_count);
-  {
-  DeferRMath deferred;
-  run_parallel(static_cast<std::size_t>(in.groups), threads, [&](std::size_t g) {
-    std::vector<Result> results = compute_pair(
-      group_prepared(in, static_cast<R_xlen_t>(g)), parsed_methods, nboot, R_NilValue,
-      true, phi, penk, draw_data + draw_start[g]);
+  const BootstrapNeeds needs = bootstrap_needs(parsed_methods);
+  // Per-group draw counts (the number of normals compute_pair() consumes).
+  std::vector<double> counts(groups);
+  for (std::size_t g = 0; g < groups; ++g) {
+    const R_xlen_t begin = in.offsets[g], end = in.offsets[g + 1];
+    std::size_t snps = 0, ratios = 0;
+    for (R_xlen_t i = begin; i < end; ++i) {
+      const double x = in.x[i], y = in.y[i], sx = in.sx[i], sy = in.sy[i];
+      if (!std::isfinite(x) || !std::isfinite(y) || !std::isfinite(sx) ||
+          !std::isfinite(sy) || sx <= 0.0 || sy <= 0.0) continue;  // group_prepared() filter
+      ++snps;
+      if (x != 0.0) ++ratios;
+    }
+    counts[g] = bootstrap_draw_count(snps, ratios, nboot, needs.median,
+                                     needs.egger, needs.penalised, needs.mode);
+  }
+  auto start_stream = [&](std::size_t g) {
+    if (Rf_isNull(reseed) || counts[g] <= 0.0) return;
+    Rcpp::Function fn(reseed);
+    fn(static_cast<int>(g + 1));
+  };
+  std::vector<Result> all(groups * method_count);
+  auto store = [&](std::size_t g, std::vector<Result>& results) {
     std::move(results.begin(), results.end(),
               all.begin() + static_cast<std::ptrdiff_t>(g * method_count));
-  });
+  };
+  std::vector<double> buffer;
+  std::vector<std::size_t> draw_start;
+  std::size_t first = 0;
+  while (first < groups) {
+    // Greedy batch: at least one group, then add groups while within budget.
+    double batch_total = counts[first];
+    std::size_t last = first + 1;
+    while (last < groups && batch_total + counts[last] <= batch_draws) {
+      batch_total += counts[last];
+      ++last;
+    }
+    const std::size_t batch_groups = last - first;
+    if (bounded_threads(threads, batch_groups) == 1) {
+      for (std::size_t g = first; g < last; ++g) {
+        start_stream(g);
+        std::vector<Result> results = compute_pair(
+          group_prepared(in, static_cast<R_xlen_t>(g)), parsed_methods, nboot,
+          R_NilValue, true, phi, penk);
+        store(g, results);
+      }
+    } else {
+      buffer.resize(static_cast<std::size_t>(batch_total));
+      draw_start.resize(batch_groups);
+      std::size_t pos = 0;
+      for (std::size_t g = first; g < last; ++g) {
+        draw_start[g - first] = pos;
+        start_stream(g);
+        const std::size_t k = static_cast<std::size_t>(counts[g]);
+        double* out = buffer.data() + pos;
+        for (std::size_t j = 0; j < k; ++j) out[j] = R::rnorm(0.0, 1.0);
+        pos += k;
+      }
+      const double* draw_data = buffer.data();
+      {
+        DeferRMath deferred;
+        run_parallel(batch_groups, threads, [&](std::size_t index) {
+          const std::size_t g = first + index;
+          std::vector<Result> results = compute_pair(
+            group_prepared(in, static_cast<R_xlen_t>(g)), parsed_methods, nboot,
+            R_NilValue, true, phi, penk, draw_data + draw_start[index]);
+          store(g, results);
+        });
+      }
+      for (std::size_t k = first * method_count; k < last * method_count; ++k) {
+        populate_result_pvalues(all[k]);
+      }
+    }
+    first = last;
   }
-  for (Result& result : all) populate_result_pvalues(result);
   return group_results_to_flat(all);
-}
-
-// Read and write back R's RNG state without drawing: the side effect of each
-// per-group Rcpp::RNGScope (it creates .Random.seed when absent).
-// [[Rcpp::export]]
-void fastmr_touch_rng() {
-  Rcpp::RNGScope scope;
 }

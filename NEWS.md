@@ -23,11 +23,14 @@
     weighted median, modes, Egger bootstrap) on `k` threads. Standard normals
     are pre-drawn on the main thread in exactly the per-pair order (the
     caller's stream when `seed = NULL`, `set.seed(seed + i - 1)` per pair
-    otherwise), groups are processed in memory-bounded batches
-    (`options(fastMR.bootstrap_batch_draws)`, default 2^23 draws), and
-    p-values are computed serially. Output and the post-call RNG state are
-    byte-identical to the previous serial implementation for every thread
-    count.
+    otherwise) into a reused native buffer of at most
+    `options(fastMR.bootstrap_batch_draws)` draws (default 2^23, 64 MB), and
+    p-values are computed serially. With `threads = 1`, or for a group whose
+    draws alone exceed that budget, draws stream straight into the bootstrap
+    layouts exactly as before, with no buffer (so such large groups run
+    serially; raise the option to parallelise them at the cost of memory).
+    Output and the post-call RNG state are byte-identical to the previous
+    serial implementation for every thread count.
   - `fast_mr()` groups rows once and batches non-RNG methods in a single native
     call; output is byte-identical to the previous implementation (attribute
     order, compact `row.names`).

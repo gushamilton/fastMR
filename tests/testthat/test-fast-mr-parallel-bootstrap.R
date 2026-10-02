@@ -111,3 +111,16 @@ test_that("unseeded runs without .Random.seed create one as before", {
   fast_mr(d, methods = "weighted_median", nboot = 10, seed = 1, threads = 2)
   expect_false(exists(".Random.seed", envir = .GlobalEnv))
 })
+
+test_that("streamed and buffered batches mix without changing results or RNG state", {
+  # Budgets that force every group to stream serially (0), a mix of streamed
+  # single-group batches and buffered multi-group batches (600), and one
+  # buffered batch (Inf), for each thread count, seeded and unseeded.
+  d <- boot_fixture()
+  for (budget in c(0, 600, Inf)) {
+    old <- options(fastMR.bootstrap_batch_draws = budget)
+    expect_boot_identical(d, threads = c(1L, 2L, 5L), methods = boot_method_sets[[1]], nboot = 20)
+    expect_boot_identical(d, threads = c(1L, 3L), methods = boot_method_sets[[7]], nboot = 15)
+    options(old)
+  }
+})

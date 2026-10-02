@@ -88,21 +88,18 @@ fast_mr <- function(data,
 }
 
 # Bootstrap groups, threaded and bit-identical to one fastmr_run_native() call
-# per group. R draws every group's standard normals on the main thread in the
-# order those calls consumed the RNG: one continuous stream from the caller's
-# .Random.seed when `seed` is NULL, otherwise a fresh set.seed(seed + i - 1)
-# stream per group i (the caller's RNG state is then restored). Native workers
-# rebuild the bootstrap layouts from those draws; p-values are computed
-# serially. Groups are processed in batches holding at most about
-# getOption("fastMR.bootstrap_batch_draws") draws (default 2^23, 64 MB) so
-# memory stays bounded; batching does not change any result.
+# per group. All RNG draws happen natively on the main thread in the order those
+# calls consumed the RNG: one continuous stream from the caller's .Random.seed
+# when `seed` is NULL, otherwise a fresh set.seed(seed + i - 1) stream per group
+# i (the caller's RNG state is then restored). With one worker, draws stream
+# straight into each group's bootstrap layout as before; with several, groups
+# run in batches whose normals (at most getOption("fastMR.bootstrap_batch_draws"),
+# default 2^23 = 64 MB, or a single group streamed serially) are drawn into a
+# reused native buffer. Batching does not change any result.
 fastmr_run_bootstrap_groups <- function(args, seed) {
-  budget <- getOption("fastMR.bootstrap_batch_draws", 2^23)
-  state_env <- .GlobalEnv
-  if (is.null(seed)) {
-    # Per-group RNGScope calls create .Random.seed when it is absent.
-    fastmr_touch_rng()
-  } else {
+  args$batch_draws <- as.numeric(getOption("fastMR.bootstrap_batch_draws", 2^23))
+  if (!is.null(seed)) {
+    state_env <- .GlobalEnv
     had_state <- exists(".Random.seed", envir = state_env, inherits = FALSE)
     old_state <- if (had_state) get(".Random.seed", envir = state_env, inherits = FALSE) else NULL
     on.exit({
@@ -112,49 +109,11 @@ fastmr_run_bootstrap_groups <- function(args, seed) {
         rm(".Random.seed", envir = state_env)
       }
     }, add = TRUE)
+    args$reseed <- function(i) set.seed(seed + i - 1L)
   }
-  # (Rcpp wrappers open an RNGScope, so count only after saving the state.)
-  draw_counts <- do.call(fastmr_groups_draw_counts, args[c(
-    "offsets", "exposure_beta", "outcome_beta", "exposure_se", "outcome_se",
-    "methods", "nboot")])
-  group_count <- length(draw_counts)
-  offsets <- args$offsets
-  pieces <- list()
-  start <- 1L
-  while (start <= group_count) {
-    # Greedy batch: at least one group, then add groups while within budget.
-    cum <- cumsum(draw_counts[start:group_count])
-    stop_at <- start - 1L + max(1L, sum(cum <= budget))
-    groups <- start:stop_at
-    batch_counts <- draw_counts[groups]
-    if (is.null(seed)) {
-      draws <- rnorm(sum(batch_counts))
-    } else {
-      draws <- numeric(sum(batch_counts))
-      pos <- 0
-      for (j in seq_along(groups)) {
-        k <- batch_counts[[j]]
-        if (k > 0) {
-          set.seed(seed + groups[[j]] - 1L)
-          draws[pos + seq_len(k)] <- rnorm(k)
-          pos <- pos + k
-        }
-      }
-    }
-    rows <- seq.int(offsets[[start]] + 1L, length.out = offsets[[stop_at + 1L]] - offsets[[start]])
-    batch_args <- args
-    batch_args$offsets <- offsets[start:(stop_at + 1L)] - offsets[[start]]
-    for (name in c("exposure_beta", "outcome_beta", "exposure_se", "outcome_se")) {
-      batch_args[[name]] <- args[[name]][rows]
-    }
-    batch_args$draws <- draws
-    batch_args$draw_offsets <- c(0, cumsum(batch_counts))
-    pieces[[length(pieces) + 1L]] <- do.call(fastmr_run_groups_boot_native, batch_args)
-    rm(draws)
-    start <- stop_at + 1L
-  }
-  if (length(pieces) == 1L) return(pieces[[1L]])
-  do.call(Map, c(list(f = c), pieces))
+  # The native call's RNGScope creates .Random.seed when absent, as each
+  # per-group call did.
+  do.call(fastmr_run_groups_boot_native, args)
 }
 
 #' Run every exposure/outcome pair in a shared exact grid
