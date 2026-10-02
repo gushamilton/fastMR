@@ -43,7 +43,8 @@ with_ld_oracle <- function(ref, code) {
       calls$graph <- calls$graph + 1L
       u <- unique(snps)
       p <- graph_pairs(u, u, ref, clump_kb, clump_r2)
-      p[as.integer(factor(p$lead, u)) < as.integer(factor(p$target, u)), , drop = FALSE]  # once per pair
+      p <- p[as.integer(factor(p$lead, u)) < as.integer(factor(p$target, u)), , drop = FALSE]  # once per pair
+      list(lead = match(p$lead, snps), target = match(p$target, snps))
     },
     fastmr_clump_run_frontier = function(leads, targets, reference_args, plink2_bin,
                                          clump_kb, clump_r2, threads, workdir, round) {
@@ -167,10 +168,6 @@ test_that("C++ graph pass and vcor parser behave", {
   # exposure 1: vertices 0,1,2,3 with edges 0-1, 1-2: keep 0, kill 1, keep 2, keep 3
   # exposure 2: vertices 2,0 (no edge between them)
   expect_identical(keep, c(TRUE, FALSE, TRUE, TRUE, TRUE, TRUE))
-  ids <- fastMR:::.fastmr_vcor_ids(c("#CHROM_A\tPOS_A\tID_A\tCHROM_B\tPOS_B\tID_B\tUNPHASED_R2",
-                                     "1\t100\trs1\t1\t200\trs2\t0.9", "1\t100\trs1\t1\t300\trs3"))
-  expect_identical(ids$lead, c("rs1", "rs1"))
-  expect_identical(ids$target, c("rs2", "rs3"))
 })
 
 test_that("graph partition runs through the PLINK2 argument surface", {
@@ -182,11 +179,9 @@ test_that("graph partition runs through the PLINK2 argument surface", {
     sprintf("echo \"$@\" >> %s", log),
     "while [ \"$#\" -gt 0 ]; do case \"$1\" in --out) out=\"$2\"; shift 2;; *) shift;; esac; done",
     "[ -n \"$out\" ] || exit 0",
-    "printf '#ID_A\\tID_B\\tUNPHASED_R2\\nA\\tB\\t0.9\\n' > \"${out}.vcor\"",
-    "zstd -q -f \"${out}.vcor\" -o \"${out}.vcor.zst\"; rm -f \"${out}.vcor\""
+    "printf '#ID_A\\tID_B\\tUNPHASED_R2\\nA\\tB\\t0.9\\n' > \"${out}.vcor\""
   ), plink2)
   Sys.chmod(plink2, "0755")
-  skip_if(!nzchar(Sys.which("zstd")) && !nzchar(Sys.which("zstdcat")), "zstd unavailable")
   dat <- data.frame(SNP = c("A", "B", "C"), id.exposure = "E", pval.exposure = c(1e-8, 1e-7, 1e-6),
                     chr_name = "1", chrom_start = c(1000, 2000, 90000))
   res <- fast_clump_data_graph(dat, clump_kb = 500, clump_r2 = 0.01, bfile = "panel", plink2_bin = plink2)
@@ -194,7 +189,7 @@ test_that("graph partition runs through the PLINK2 argument surface", {
   args <- readLines(log)
   expect_length(args, 2L)  # --version + one all-pairs call
   call <- args[grepl("--r2-unphased", args)]
-  expect_match(call, "--r2-unphased zs cols=id --ld-window-kb 500 --ld-window 1000000000 --ld-window-r2 0.01", fixed = TRUE)
+  expect_match(call, "--r2-unphased cols=id --ld-window-kb 500 --ld-window 1000000000 --ld-window-r2 0.01", fixed = TRUE)
   expect_match(call, "--extract", fixed = TRUE)
 })
 
@@ -270,17 +265,6 @@ test_that("require_exact uses the CompreSSoR rank domain when available", {
   expect_false(anyNA(cand$data$pvalue_rank))
 })
 
-test_that(".fastmr_vcor_ids is GC-safe under gctorture", {
-  skip_on_cran()
-  n <- 25
-  lines <- c("#CHROM_A\tPOS_A\tID_A\tCHROM_B\tPOS_B\tID_B\tUNPHASED_R2",
-             sprintf("22\t%d\tidA_%d_x\t22\t%d\tidB_%d_y\t0.5", 1:n, 1:n, 1:n, 1:n))
-  gctorture(TRUE)
-  r <- tryCatch(fastMR:::.fastmr_vcor_ids(lines), finally = gctorture(FALSE))
-  expect_identical(r$lead, sprintf("idA_%d_x", 1:n))
-  expect_identical(r$target, sprintf("idB_%d_y", 1:n))
-})
-
 test_that("graph run treats 'No variants remaining' as an empty graph", {
   skip_on_os("windows")
   plink2 <- tempfile("fastMR_plink2_novar_")
@@ -290,8 +274,7 @@ test_that("graph run treats 'No variants remaining' as an empty graph", {
   Sys.chmod(plink2, "0755")
   wd <- tempfile("wd"); dir.create(wd)
   ld <- fastMR:::fastmr_clump_run_graph(c("A", "B"), c("--bfile", "panel"), plink2, 500, 0.01, 1L, wd, "1")
-  expect_identical(nrow(ld), 0L)
-  expect_named(ld, c("lead", "target"))
+  expect_identical(ld, list(lead = integer(), target = integer()))
   # other failures still abort
   writeLines(c("#!/bin/sh", "echo 'Error: boom'", "exit 3"), plink2)
   expect_error(fastMR:::fastmr_clump_run_graph(c("A", "B"), c("--bfile", "panel"), plink2, 500, 0.01, 1L, wd, "1"),
@@ -313,39 +296,96 @@ test_that("graph clumping skips PLINK when no candidate pairs exist", {
   expect_false(any(grepl("--r2-unphased", readLines(log))))
 })
 
-test_that(".fastmr_vcor_ids honours header-derived ID columns", {
-  ids <- fastMR:::.fastmr_vcor_ids(c("#ID_A\tID_B\tUNPHASED_R2", "rs1\trs2\t0.9", "rs3\trs4"), 1L, 2L)
-  expect_identical(ids$lead, c("rs1", "rs3"))
-  expect_identical(ids$target, c("rs2", "rs4"))
+write_vcor <- function(lines, final_newline = TRUE, eol = "\n") {
+  f <- tempfile(fileext = ".vcor")
+  writeBin(charToRaw(paste0(paste(lines, collapse = eol), if (final_newline) eol else "")), f)
+  f
+}
+
+test_that("native vcor reader maps IDs, honours header columns, final line and CRLF", {
+  ids <- c("rs1", "rs2", "rs3", "rs4")
+  f <- write_vcor(c("#CHROM_A\tPOS_A\tID_A\tCHROM_B\tPOS_B\tID_B\tUNPHASED_R2",
+                    "1\t100\trs1\t1\t200\trs2\t0.9", "", "1\t100\trs3\t1\t300\trs4\t0.5"),
+                  final_newline = FALSE)
+  r <- fastMR:::.fastmr_vcor_read(f, ids)
+  expect_identical(r$lead, c(1L, 3L)); expect_identical(r$target, c(2L, 4L))
+  f2 <- write_vcor(c("#ID_A\tID_B\tUNPHASED_R2", "rs1\trs2\t0.9", "rs3\trs4"), eol = "\r\n")
+  r2 <- fastMR:::.fastmr_vcor_read(f2, ids)
+  expect_identical(r2$lead, c(1L, 3L)); expect_identical(r2$target, c(2L, 4L))
+  # ID_B as the last column with CRLF
+  f3 <- write_vcor(c("#ID_A\tID_B", "rs1\trs2"), eol = "\r\n")
+  expect_identical(fastMR:::.fastmr_vcor_read(f3, ids)$target, 2L)
 })
 
-test_that("graph run parses a multi-block zstd stream identically", {
+test_that("native vcor reader errors on unknown IDs, short lines, bad header; empty is empty", {
+  ids <- c("a", "b")
+  expect_error(fastMR:::.fastmr_vcor_read(write_vcor(c("#ID_A\tID_B\tR", "a\tzzz\t1")), ids), "not among")
+  expect_error(fastMR:::.fastmr_vcor_read(write_vcor(c("#ID_A\tID_B\tR", "a\tb\t1", "a")), ids), "malformed")
+  expect_error(fastMR:::.fastmr_vcor_read(write_vcor(c("A\tB\t1", "a\tb\t1")), ids), "unrecognised")
+  expect_error(fastMR:::.fastmr_vcor_read(write_vcor(c("#ID_B\tID_A\tR", "a\tb\t1")), ids), "unrecognised")
+  expect_error(fastMR:::.fastmr_vcor_read(tempfile(), ids), "cannot open")
+  r <- fastMR:::.fastmr_vcor_read(write_vcor("#ID_A\tID_B\tUNPHASED_R2"), ids)
+  expect_identical(r, list(lead = integer(), target = integer()))
+  f0 <- tempfile(); file.create(f0)
+  expect_identical(fastMR:::.fastmr_vcor_read(f0, ids), list(lead = integer(), target = integer()))
+})
+
+test_that("native vcor reader on a >1e6-line file equals a pure-R reference", {
+  skip_on_cran()
+  set.seed(1)
+  nv <- 5000L; n <- 1200003L
+  ids <- sprintf("rs%d", seq_len(nv))
+  a <- sample.int(nv, n, TRUE); b <- sample.int(nv, n, TRUE)
+  f <- write_vcor(c("#CHROM_A\tPOS_A\tID_A\tCHROM_B\tPOS_B\tID_B\tUNPHASED_R2",
+                    sprintf("1\t%d\t%s\t1\t%d\t%s\t0.5", a, ids[a], b, ids[b])))
+  ref <- strsplit(readLines(f)[-1L], "\t", fixed = TRUE)
+  ref_a <- match(vapply(ref[seq_len(1000)], `[`, "", 3L), ids)
+  r <- fastMR:::.fastmr_vcor_read(f, ids)
+  expect_identical(r$lead, a); expect_identical(r$target, b)
+  expect_identical(r$lead[1:1000], ref_a)
+  tab <- utils::read.delim(f, comment.char = "", header = TRUE, colClasses = "character")
+  expect_identical(r$lead, match(tab$ID_A, ids)); expect_identical(r$target, match(tab$ID_B, ids))
+})
+
+test_that("native vcor reader is GC-safe under gctorture", {
+  skip_on_cran()
+  n <- 25
+  ids <- c(sprintf("idA_%d_x", 1:n), sprintf("idB_%d_y", 1:n))
+  f <- write_vcor(c("#CHROM_A\tPOS_A\tID_A\tCHROM_B\tPOS_B\tID_B\tUNPHASED_R2",
+                    sprintf("22\t%d\tidA_%d_x\t22\t%d\tidB_%d_y\t0.5", 1:n, 1:n, 1:n, 1:n)))
+  gctorture(TRUE)
+  r <- tryCatch(fastMR:::.fastmr_vcor_read(f, ids), finally = gctorture(FALSE))
+  expect_identical(r$lead, 1:n); expect_identical(r$target, as.integer(n + 1:n))
+})
+
+test_that("graph run parses plain PLINK output into vertex ids", {
   skip_on_os("windows")
-  skip_if(!nzchar(Sys.which("zstd")), "zstd unavailable")
   n <- 25
   tab <- c("#ID_A\tID_B\tUNPHASED_R2", sprintf("v%d\tw%d\t0.5", 1:n, 1:n))
   plink2 <- tempfile("fastMR_plink2_cols_")
   src <- tempfile(); writeLines(tab, src)
   writeLines(c("#!/bin/sh", "out=''",
                "while [ \"$#\" -gt 0 ]; do case \"$1\" in --out) out=\"$2\"; shift 2;; *) shift;; esac; done",
-               sprintf("zstd -q -f %s -o \"${out}.vcor.zst\"", src)), plink2)
+               sprintf("cp %s \"${out}.vcor\"", src)), plink2)
   Sys.chmod(plink2, "0755")
   wd <- tempfile("wd"); dir.create(wd)
-  ld <- fastMR:::fastmr_clump_run_graph(c("v1", "w1"), c("--bfile", "p"), plink2, 500, 0.01, 1L, wd, "1")
-  expect_identical(ld$lead, sprintf("v%d", 1:n))
-  expect_identical(ld$target, sprintf("w%d", 1:n))
+  snps <- c(sprintf("v%d", 1:n), sprintf("w%d", 1:n))
+  ld <- fastMR:::fastmr_clump_run_graph(snps, c("--bfile", "p"), plink2, 500, 0.01, 1L, wd, "1")
+  expect_identical(ld$lead, 1:n)
+  expect_identical(ld$target, as.integer(n + 1:n))
+  expect_length(list.files(wd, pattern = "vcor"), 0L)  # temp table removed
+  expect_error(fastMR:::fastmr_clump_run_graph(c("v1", "w1"), c("--bfile", "p"), plink2, 500, 0.01, 1L, wd, "1"),
+               "not among")
 })
 
 test_that("graph LD parse refuses an unrecognised .vcor header", {
   skip_on_os("windows")
-  skip_if(!nzchar(Sys.which("zstd")), "zstd unavailable")
   plink2 <- tempfile("fastMR_plink2_badheader_")
   writeLines(c(
     "#!/bin/sh", "out=''",
     "while [ \"$#\" -gt 0 ]; do case \"$1\" in --out) out=\"$2\"; shift 2;; *) shift;; esac; done",
     "[ -n \"$out\" ] || exit 0",
-    "printf 'A\\tB\\t0.9\\n' > \"${out}.vcor\"",
-    "zstd -q -f \"${out}.vcor\" -o \"${out}.vcor.zst\"; rm -f \"${out}.vcor\""
+    "printf 'A\\tB\\t0.9\\n' > \"${out}.vcor\""
   ), plink2)
   Sys.chmod(plink2, "0755")
   dat <- data.frame(SNP = c("A", "B"), id.exposure = "E", pval.exposure = c(1e-8, 1e-7),

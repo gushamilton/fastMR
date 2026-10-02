@@ -2,48 +2,115 @@
 #include <Rcpp.h>
 #include <vector>
 #include <cstring>
+#include <cstdio>
+#include <memory>
+#include <string>
+#include <algorithm>
+#include <unordered_map>
 
 using namespace Rcpp;
 
-// Split PLINK2 .vcor lines into two ID columns (1-based fields `fa` < `fb`;
-// defaults 3 and 6 = ID_A and ID_B of the default column layout) without
-// allocating a per-line list.  Header and short lines are skipped.
-// [[Rcpp::export(name = ".fastmr_vcor_ids")]]
-List fastmr_vcor_ids(CharacterVector lines, int fa = 3, int fb = 6) {
-  if (fa < 1 || fb <= fa || fb > 64) stop("invalid vcor ID field positions");
-  R_xlen_t n = lines.size();
-  // CHARSXPs go straight into protected vectors: holding them only in a
-  // std::vector<SEXP> lets the GC free them during later mkChar calls.
-  CharacterVector va(n), vb(n);
-  R_xlen_t m = 0;
-  std::vector<const char*> start(fb + 1), tab(fb + 1);
-  for (R_xlen_t i = 0; i < n; ++i) {
-    if (lines[i] == NA_STRING) continue;
-    const char* s = CHAR(STRING_ELT(lines, i));
-    if (s[0] == '#' || s[0] == '\0') continue;
-    int found = 0;  // tabs seen so far
-    start[0] = s;
-    for (const char* p = s; *p; ++p) {
-      if (*p == '\t') {
-        tab[found] = p;
-        ++found;
-        start[found] = p + 1;
-        if (found == fb) break;
+// Parse an uncompressed PLINK2 .vcor table straight into 1-based vertex ids.
+// `ids` are the candidate SNP IDs (vertex v = position v in `ids`).  The first
+// non-empty line must be a '#' header naming ID_A before ID_B; any other first
+// line is an error.  Blank lines and later '#' lines are skipped; a final line
+// without a newline is kept; a trailing '\r' is ignored.  A data line with too
+// few fields or an ID outside `ids` is an error.  A zero-byte file is an empty
+// graph.  Only std containers are used until the result vectors are built, so
+// there is nothing for the GC to trip over.
+// [[Rcpp::export(name = ".fastmr_vcor_read")]]
+List fastmr_vcor_read(std::string path, CharacterVector ids) {
+  std::unordered_map<std::string, int> index;
+  index.reserve((size_t)ids.size() * 2 + 16);
+  for (R_xlen_t i = 0; i < ids.size(); ++i) {
+    if (ids[i] == NA_STRING) stop("NA candidate SNP id");
+    index.emplace(std::string(CHAR(STRING_ELT(ids, i))), (int)(i + 1));
+  }
+  std::unique_ptr<FILE, int (*)(FILE*)> fp(std::fopen(path.c_str(), "rb"), &std::fclose);
+  if (!fp) stop("cannot open PLINK2 .vcor file: " + path);
+  std::vector<int> lead, target;
+  const size_t CH = 1u << 22;
+  std::vector<char> buf(CH + 1);
+  size_t have = 0;  // carried bytes of a partial line at buf[0..have)
+  int fa = 0, fb = 0;
+  bool header_done = false;
+  long long short_lines = 0;
+  std::string key;
+  std::string bad;
+  auto handle = [&](const char* s, const char* e) {
+    if (e > s && e[-1] == '\r') --e;
+    if (s == e) return;
+    if (!header_done) {
+      header_done = true;
+      if (*s == '#') {
+        int ia = 0, ib = 0, k = 0;
+        const char* f = s + 1;
+        while (true) {
+          const char* t = f;
+          while (t < e && *t != '\t') ++t;
+          ++k;
+          size_t len = (size_t)(t - f);
+          if (!ia && len == 4 && !std::strncmp(f, "ID_A", 4)) ia = k;
+          if (!ib && len == 4 && !std::strncmp(f, "ID_B", 4)) ib = k;
+          if (t >= e) break;
+          f = t + 1;
+        }
+        if (ia && ib && ia < ib) { fa = ia; fb = ib; }
       }
+      if (!fa) stop("unrecognised PLINK2 .vcor header (need ID_A and ID_B): " +
+                    std::string(s, std::min<size_t>((size_t)(e - s), 200)));
+      return;
     }
-    if (found < fb - 1) continue;
-    // field k = (start[k-1], tab[k-1]); the last field may end at the string end
-    const char* ea = tab[fa - 1];
-    const char* eb = (found >= fb) ? tab[fb - 1] : s + std::strlen(s);
-    SET_STRING_ELT(va, m, Rf_mkCharLenCE(start[fa - 1], (int)(ea - start[fa - 1]), CE_UTF8));
-    SET_STRING_ELT(vb, m, Rf_mkCharLenCE(start[fb - 1], (int)(eb - start[fb - 1]), CE_UTF8));
-    ++m;
+    if (*s == '#') return;
+    const char* sa = nullptr; const char* ea = nullptr;
+    const char* sb = nullptr; const char* eb = nullptr;
+    int k = 1;
+    const char* f = s;
+    while (true) {
+      const char* t = f;
+      while (t < e && *t != '\t') ++t;
+      if (k == fa) { sa = f; ea = t; }
+      if (k == fb) { sb = f; eb = t; break; }
+      if (t >= e) break;
+      f = t + 1;
+      ++k;
+    }
+    if (!sb) { ++short_lines; return; }
+    key.assign(sa, ea);
+    auto ita = index.find(key);
+    if (ita == index.end()) stop("PLINK2 .vcor ID not among the candidate SNPs: " + key);
+    key.assign(sb, eb);
+    auto itb = index.find(key);
+    if (itb == index.end()) stop("PLINK2 .vcor ID not among the candidate SNPs: " + key);
+    lead.push_back(ita->second);
+    target.push_back(itb->second);
+  };
+  while (true) {
+    size_t got = std::fread(buf.data() + have, 1, CH - have, fp.get());
+    if (got == 0) {
+      if (std::ferror(fp.get())) stop("error reading PLINK2 .vcor file");
+      break;
+    }
+    size_t n = have + got;
+    size_t pos = 0;
+    while (true) {
+      const char* nl = (const char*)std::memchr(buf.data() + pos, '\n', n - pos);
+      if (!nl) break;
+      handle(buf.data() + pos, nl);
+      pos = (size_t)(nl - buf.data()) + 1;
+    }
+    have = n - pos;
+    if (have == CH) stop("PLINK2 .vcor line longer than the read buffer");
+    if (have) std::memmove(buf.data(), buf.data() + pos, have);
   }
-  CharacterVector ra(m), rb(m);
-  for (R_xlen_t i = 0; i < m; ++i) {
-    SET_STRING_ELT(ra, i, STRING_ELT(va, i));
-    SET_STRING_ELT(rb, i, STRING_ELT(vb, i));
-  }
+  if (have) handle(buf.data(), buf.data() + have);  // unterminated final line
+  if (short_lines)
+    stop("malformed PLINK2 .vcor line(s): " + std::to_string(short_lines) +
+         " line(s) have fewer than " + std::to_string(fb) + " fields");
+  R_xlen_t m = (R_xlen_t)lead.size();
+  IntegerVector ra(m), rb(m);
+  std::copy(lead.begin(), lead.end(), ra.begin());
+  std::copy(target.begin(), target.end(), rb.begin());
   return List::create(_["lead"] = ra, _["target"] = rb);
 }
 

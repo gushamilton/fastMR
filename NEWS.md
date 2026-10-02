@@ -1,5 +1,9 @@
 # fastMR 0.1.10
 
+- Graph clumping now asks PLINK2 for an uncompressed `.vcor` (about 30 bytes
+  per edge, written to the work directory and deleted after parsing) and
+  parses it in C++ straight into vertex ids; zstd is no longer needed for
+  graph clumping. Unknown IDs, short lines and unrecognised headers error.
 - Adds `fast_mr_steiger_r2()` as a composable vectorized primitive for
   continuous beta/SE/sample-size, standardized beta/EAF, and binary log-odds
   models. Scalar inputs recycle deterministically, invalid rows carry explicit
