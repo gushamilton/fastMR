@@ -351,3 +351,34 @@ test_that("graph LD parse refuses an unrecognised .vcor header", {
                     chr_name = "1", chrom_start = c(1000, 2000))
   expect_error(fast_clump_data_graph(dat, clump_kb = 500, clump_r2 = 0.01, bfile = "panel", plink2_bin = plink2))
 })
+
+test_that("one-pass compressed candidates equal the three-pass fallback (3-exposure batch, exact order)", {
+  skip_if_compressor_unavailable()
+  skip_on_os("windows")
+  skip_if_not(fastMR:::fastmr_have_one_pass_candidates(), "one-pass candidates unavailable")
+  V <- 600L
+  mk <- function(seed) {
+    set.seed(seed)
+    z <- rnorm(V, 0, 1.3); z[sample.int(V, 40L)] <- sample(c(-1, 1), 40L, TRUE) * runif(40L, 3, 12)
+    data.frame(
+      chromosome = rep(c("1", "2"), each = V / 2L),
+      base_pair_location = rep(seq.int(100001L, length.out = V / 2L), 2L),
+      reference_allele = "A", alternate_allele = "C", effect_allele = "C", other_allele = "A",
+      beta = z * 0.05, standard_error = 0.05, effect_allele_frequency = 0.3)
+  }
+  paths <- vapply(1:3, function(i) {
+    p <- tempfile("fm-onepass-")
+    CompreSSoR::compress_sumstats(mk(i), p, overwrite = TRUE, pvalue_order = TRUE,
+                                  pvalue_order_threshold = 0.01)
+    p
+  }, character(1))
+  labels <- c("a", "b", "c")
+  for (po in c("reconstructed", "require_exact")) {
+    new <- fastMR:::fastmr_compressed_candidate_data(paths, labels, 1e-3, "full", po, 1L)
+    testthat::local_mocked_bindings(fastmr_have_one_pass_candidates = function() FALSE,
+                                    .package = "fastMR")
+    old <- fastMR:::fastmr_compressed_candidate_data(paths, labels, 1e-3, "full", po, 1L)
+    expect_gt(nrow(new$data), 0L)
+    expect_identical(new, old)
+  }
+})
