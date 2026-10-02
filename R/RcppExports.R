@@ -29,3 +29,15 @@ fastmr_run_groups_native <- function(offsets, exposure_beta, outcome_beta, expos
     .Call(`_fastMR_fastmr_run_groups_native`, offsets, exposure_beta, outcome_beta, exposure_se, outcome_se, methods, nboot, threads, phi, penk)
 }
 
+fastmr_groups_draw_counts <- function(offsets, exposure_beta, outcome_beta, exposure_se, outcome_se, methods, nboot) {
+    .Call(`_fastMR_fastmr_groups_draw_counts`, offsets, exposure_beta, outcome_beta, exposure_se, outcome_se, methods, nboot)
+}
+
+fastmr_run_groups_boot_native <- function(offsets, exposure_beta, outcome_beta, exposure_se, outcome_se, draws, draw_offsets, methods, nboot = 1000L, threads = 1L, phi = 1.0, penk = 20.0) {
+    .Call(`_fastMR_fastmr_run_groups_boot_native`, offsets, exposure_beta, outcome_beta, exposure_se, outcome_se, draws, draw_offsets, methods, nboot, threads, phi, penk)
+}
+
+fastmr_touch_rng <- function() {
+    invisible(.Call(`_fastMR_fastmr_touch_rng`))
+}
+

@@ -27,8 +27,10 @@ fast_mr(
 \item{seed}{Optional integer seed. Seeded median/mode methods share one
 ratio bootstrap layout per pair.}
 
-\item{threads}{Maximum native worker count. It is most useful for
-\code{\link[=fast_mr_grid]{fast_mr_grid()}}; single-pair calls remain bounded and deterministic.}
+\item{threads}{Maximum native worker count. Exposure/outcome pairs run in
+parallel, including bootstrap methods: their normal draws are made on the
+main thread in the serial order, so results (seeded or unseeded) and the
+RNG state afterwards are identical for every thread count.}
 
 \item{output}{Optional path for a Zstandard-compressed Parquet copy of the
 result. The path must not already exist; use \code{\link{fast_write_parquet}} when

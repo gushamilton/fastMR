@@ -8,8 +8,10 @@
 #' @param nboot Number of normal bootstrap draws for median and mode methods.
 #' @param seed Optional integer seed. Seeded median/mode methods share one
 #'   ratio bootstrap layout per pair.
-#' @param threads Maximum native worker count. It is most useful for
-#'   [fast_mr_grid()]; single-pair calls remain bounded and deterministic.
+#' @param threads Maximum native worker count. Exposure/outcome pairs run in
+#'   parallel, including bootstrap methods: their normal draws are made on the
+#'   main thread in the serial order, so results (seeded or unseeded) and the
+#'   RNG state afterwards are identical for every thread count.
 #' @param output Optional path for a Zstandard-compressed Parquet copy of the
 #'   result. The path must not already exist; use [fast_write_parquet()] when
 #'   an overwrite or another compression codec is required.
@@ -62,50 +64,97 @@ fast_mr <- function(data,
   kept <- which(keep)
   snp_code <- match(snp[kept], unique(snp[kept]))
   kept <- kept[!duplicated(gid[kept] + group_count * as.numeric(snp_code))]
-  if (!fastmr_methods_use_rng(methods, controls[["nboot"]])) {
-    kept <- kept[order(gid[kept], method = "radix")]
-    counts <- tabulate(gid[kept], nbins = group_count)
-    native <- fastmr_native_call(
-      fastmr_run_groups_native,
-      list(
-        offsets = c(0L, cumsum(counts)),
-        exposure_beta = prepared[["beta.exposure"]][kept],
-        outcome_beta = prepared[["beta.outcome"]][kept],
-        exposure_se = prepared[["se.exposure"]][kept],
-        outcome_se = prepared[["se.outcome"]][kept],
-        methods = methods, nboot = controls[["nboot"]],
-        threads = controls[["threads"]], phi = phi, penk = penk
-      ),
-      NULL
-    )
-    first <- vapply(group_rows, `[`, integer(1), 1L)
-    return(fastmr_write_result(
-      fastmr_tidy_groups_native(native, length(methods), id.exp[first], id.out[first]),
-      output))
+  kept <- kept[order(gid[kept], method = "radix")]
+  counts <- tabulate(gid[kept], nbins = group_count)
+  offsets <- c(0L, cumsum(counts))
+  first <- vapply(group_rows, `[`, integer(1), 1L)
+  args <- list(
+    offsets = offsets,
+    exposure_beta = prepared[["beta.exposure"]][kept],
+    outcome_beta = prepared[["beta.outcome"]][kept],
+    exposure_se = prepared[["se.exposure"]][kept],
+    outcome_se = prepared[["se.outcome"]][kept],
+    methods = methods, nboot = controls[["nboot"]],
+    threads = controls[["threads"]], phi = phi, penk = penk
+  )
+  native <- if (fastmr_methods_use_rng(methods, controls[["nboot"]])) {
+    fastmr_run_bootstrap_groups(args, controls[["seed"]])
+  } else {
+    fastmr_native_call(fastmr_run_groups_native, args, NULL)
   }
-  kept_by_group <- split(kept, factor(gid[kept], levels = seq_len(group_count)))
-  rows <- vector("list", group_count)
-  for (i in seq_len(group_count)) {
-    index <- kept_by_group[[i]]
-    representative <- group_rows[[i]][[1L]]
-    native <- fastmr_native_call(
-      fastmr_run_native,
-      list(
-        exposure_beta = prepared[["beta.exposure"]][index],
-        outcome_beta = prepared[["beta.outcome"]][index],
-        exposure_se = prepared[["se.exposure"]][index],
-        outcome_se = prepared[["se.outcome"]][index],
-        methods = methods, nboot = controls[["nboot"]], seed = NULL,
-        threads = controls[["threads"]], phi = phi, penk = penk
-      ),
-      if (is.null(controls[["seed"]])) NULL else controls[["seed"]] + i - 1L
-    )
-    label.exp <- if ("exposure" %in% names(data)) as.character(data$exposure[representative]) else id.exp[representative]
-    label.out <- if ("outcome" %in% names(data)) as.character(data$outcome[representative]) else id.out[representative]
-    rows[[i]] <- fastmr_tidy_native(native, methods, id.exp[representative], id.out[representative],
-                                     exposure_label = label.exp, outcome_label = label.out)
+  fastmr_write_result(
+    fastmr_tidy_groups_native(native, length(methods), id.exp[first], id.out[first]),
+    output)
+}
+
+# Bootstrap groups, threaded and bit-identical to one fastmr_run_native() call
+# per group. R draws every group's standard normals on the main thread in the
+# order those calls consumed the RNG: one continuous stream from the caller's
+# .Random.seed when `seed` is NULL, otherwise a fresh set.seed(seed + i - 1)
+# stream per group i (the caller's RNG state is then restored). Native workers
+# rebuild the bootstrap layouts from those draws; p-values are computed
+# serially. Groups are processed in batches holding at most about
+# getOption("fastMR.bootstrap_batch_draws") draws (default 2^23, 64 MB) so
+# memory stays bounded; batching does not change any result.
+fastmr_run_bootstrap_groups <- function(args, seed) {
+  budget <- getOption("fastMR.bootstrap_batch_draws", 2^23)
+  state_env <- .GlobalEnv
+  if (is.null(seed)) {
+    # Per-group RNGScope calls create .Random.seed when it is absent.
+    fastmr_touch_rng()
+  } else {
+    had_state <- exists(".Random.seed", envir = state_env, inherits = FALSE)
+    old_state <- if (had_state) get(".Random.seed", envir = state_env, inherits = FALSE) else NULL
+    on.exit({
+      if (had_state) {
+        assign(".Random.seed", old_state, envir = state_env)
+      } else if (exists(".Random.seed", envir = state_env, inherits = FALSE)) {
+        rm(".Random.seed", envir = state_env)
+      }
+    }, add = TRUE)
   }
-  fastmr_write_result(do.call(rbind, rows), output)
+  # (Rcpp wrappers open an RNGScope, so count only after saving the state.)
+  draw_counts <- do.call(fastmr_groups_draw_counts, args[c(
+    "offsets", "exposure_beta", "outcome_beta", "exposure_se", "outcome_se",
+    "methods", "nboot")])
+  group_count <- length(draw_counts)
+  offsets <- args$offsets
+  pieces <- list()
+  start <- 1L
+  while (start <= group_count) {
+    # Greedy batch: at least one group, then add groups while within budget.
+    cum <- cumsum(draw_counts[start:group_count])
+    stop_at <- start - 1L + max(1L, sum(cum <= budget))
+    groups <- start:stop_at
+    batch_counts <- draw_counts[groups]
+    if (is.null(seed)) {
+      draws <- rnorm(sum(batch_counts))
+    } else {
+      draws <- numeric(sum(batch_counts))
+      pos <- 0
+      for (j in seq_along(groups)) {
+        k <- batch_counts[[j]]
+        if (k > 0) {
+          set.seed(seed + groups[[j]] - 1L)
+          draws[pos + seq_len(k)] <- rnorm(k)
+          pos <- pos + k
+        }
+      }
+    }
+    rows <- seq.int(offsets[[start]] + 1L, length.out = offsets[[stop_at + 1L]] - offsets[[start]])
+    batch_args <- args
+    batch_args$offsets <- offsets[start:(stop_at + 1L)] - offsets[[start]]
+    for (name in c("exposure_beta", "outcome_beta", "exposure_se", "outcome_se")) {
+      batch_args[[name]] <- args[[name]][rows]
+    }
+    batch_args$draws <- draws
+    batch_args$draw_offsets <- c(0, cumsum(batch_counts))
+    pieces[[length(pieces) + 1L]] <- do.call(fastmr_run_groups_boot_native, batch_args)
+    rm(draws)
+    start <- stop_at + 1L
+  }
+  if (length(pieces) == 1L) return(pieces[[1L]])
+  do.call(Map, c(list(f = c), pieces))
 }
 
 #' Run every exposure/outcome pair in a shared exact grid

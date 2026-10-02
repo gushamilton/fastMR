@@ -15,6 +15,15 @@
   placeholders from source-package builds.
 
 - Performance batch (streaming pipeline):
+  - `fast_mr(threads = k)` now runs bootstrap methods (medians, penalised
+    weighted median, modes, Egger bootstrap) on `k` threads. Standard normals
+    are pre-drawn on the main thread in exactly the per-pair order (the
+    caller's stream when `seed = NULL`, `set.seed(seed + i - 1)` per pair
+    otherwise), groups are processed in memory-bounded batches
+    (`options(fastMR.bootstrap_batch_draws)`, default 2^23 draws), and
+    p-values are computed serially. Output and the post-call RNG state are
+    byte-identical to the previous serial implementation for every thread
+    count.
   - `fast_mr()` groups rows once and batches non-RNG methods in a single native
     call; output is byte-identical to the previous implementation (attribute
     order, compact `row.names`).
