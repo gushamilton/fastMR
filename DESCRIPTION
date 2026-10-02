@@ -28,7 +28,8 @@ LinkingTo:
 Suggests:
     arrow,
     CompreSSoR (>= 0.6.0),
-    testthat (>= 3.0.0)
+    testthat (>= 3.0.0),
+    withr
 Config/testthat/edition: 3
 SystemRequirements: C++17; Rust/Cargo to install optional native CompreSSoR
     Pcodec compressed-GWAS input
