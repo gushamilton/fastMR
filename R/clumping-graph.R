@@ -48,7 +48,23 @@ fastmr_clump_run_graph <- function(snps, reference_args, plink2_bin, clump_kb,
   on.exit(unlink(c(path, extract_file)), add = TRUE)
   # Parsed natively (buffered fread, hash map ID -> vertex): an ID outside
   # `snps` is an error.  Returns 1-based integer vertex ids.
-  .fastmr_vcor_read(path, as.character(snps))
+  ld <- .fastmr_vcor_read(path, as.character(snps))
+  fastmr_clump_warn_invalid_r2(ld$invalid_r2, ld$invalid_example)
+  ld
+}
+
+# PLINK2 2.00a6.8 (Jan 2025) --r2-phased (and its --clump) reports impossible
+# values (r2 ~ 96, D' ~ -220) for some pairs whose true |D'| is 1; 2.00a6
+# (Oct 2024) and PLINK 1.9 give the correct small r2.  Such a pair passes any
+# --ld-window-r2 filter, so the lower-ranked SNP is clumped away exactly as
+# PLINK2's own --clump does, but not as PLINK 1.9 does.
+fastmr_clump_warn_invalid_r2 <- function(n, example) {
+  if (!length(n) || !isTRUE(n > 0)) return(invisible(FALSE))
+  warning(sprintf(paste0("PLINK2 reported %.0f LD pair(s) with r2 > 1 (e.g. %s); this is a PLINK2 ",
+                         "--r2-phased bug (seen in 2.00a6.8). Those pairs were treated as in LD, as ",
+                         "PLINK2 --clump would; use a PLINK2 build without the bug to match PLINK 1.9."),
+                  n, example), call. = FALSE)
+  invisible(TRUE)
 }
 
 fastmr_clump_plink_version <- function(plink2_bin) {

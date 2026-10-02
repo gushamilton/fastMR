@@ -53,6 +53,11 @@ fastmr_clump_read_vcor <- function(path, zstdcat = NULL) {
   fields <- strsplit(lines, "\t", fixed = TRUE)
   fields <- fields[vapply(fields, length, integer(1)) >= 6L]
   if (!length(fields)) return(data.frame(lead = character(), target = character(), stringsAsFactors = FALSE))
+  r2 <- suppressWarnings(as.numeric(vapply(fields, function(f) if (length(f) >= 7L) f[[7L]] else NA_character_, character(1))))
+  bad <- which(r2 > 1 + 1e-6)
+  if (length(bad)) {
+    fastmr_clump_warn_invalid_r2(length(bad), paste(fields[[bad[1L]]][c(3L, 6L, 7L)], collapse = " "))
+  }
   data.frame(lead = vapply(fields, `[[`, character(1), 3L),
              target = vapply(fields, `[[`, character(1), 6L),
              stringsAsFactors = FALSE)

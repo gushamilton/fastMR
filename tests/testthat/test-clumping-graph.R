@@ -324,10 +324,11 @@ test_that("native vcor reader errors on unknown IDs, short lines, bad header; em
   expect_error(fastMR:::.fastmr_vcor_read(write_vcor(c("A\tB\t1", "a\tb\t1")), ids), "unrecognised")
   expect_error(fastMR:::.fastmr_vcor_read(write_vcor(c("#ID_B\tID_A\tR", "a\tb\t1")), ids), "unrecognised")
   expect_error(fastMR:::.fastmr_vcor_read(tempfile(), ids), "cannot open")
+  empty <- list(lead = integer(), target = integer(), invalid_r2 = 0, invalid_example = "")
   r <- fastMR:::.fastmr_vcor_read(write_vcor("#ID_A\tID_B\tUNPHASED_R2"), ids)
-  expect_identical(r, list(lead = integer(), target = integer()))
+  expect_identical(r, empty)
   f0 <- tempfile(); file.create(f0)
-  expect_identical(fastMR:::.fastmr_vcor_read(f0, ids), list(lead = integer(), target = integer()))
+  expect_identical(fastMR:::.fastmr_vcor_read(f0, ids), empty)
 })
 
 test_that("native vcor reader on a >1e6-line file equals a pure-R reference", {
@@ -469,4 +470,18 @@ test_that("graph and lead-row clumping use the same r2 as PLINK --clump", {
   skip_if(!nzchar(Sys.which("zstdcat")) && !nzchar(Sys.which("zstd")), "zstd not available")
   lr <- fast_clump_data_lead_rows(dat, clump_kb = 250, clump_r2 = 0.2, pfile = pref, plink2_bin = plink2)
   expect_setequal(lr$instruments$E, c("A", "B", "C"))
+})
+
+test_that("impossible r2 > 1 from PLINK2 (2.00a6.8 --r2-phased bug) is detected and warned", {
+  ids <- c("rs74865827", "rs139603618", "rs3")
+  f <- write_vcor(c("#ID_A\tID_B\tPHASED_R2", "rs74865827\trs139603618\t96.1295", "rs74865827\trs3\t0.5",
+                    "rs139603618\trs3\t1"))
+  r <- fastMR:::.fastmr_vcor_read(f, ids)
+  expect_identical(r$lead, c(1L, 1L, 2L))
+  expect_identical(r$invalid_r2, 1)
+  expect_identical(r$invalid_example, "rs74865827 rs139603618 r2=96.1295")
+  expect_warning(fastMR:::fastmr_clump_warn_invalid_r2(r$invalid_r2, r$invalid_example), "r2 > 1")
+  expect_silent(fastMR:::fastmr_clump_warn_invalid_r2(0, ""))
+  ok <- fastMR:::.fastmr_vcor_read(write_vcor(c("#ID_A\tID_B\tUNPHASED_R2", "rs74865827\trs3\t1.0000001")), ids)
+  expect_identical(ok$invalid_r2, 0)
 })

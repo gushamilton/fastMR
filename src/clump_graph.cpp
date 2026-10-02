@@ -3,6 +3,7 @@
 #include <vector>
 #include <cstring>
 #include <cstdio>
+#include <cstdlib>
 #include <memory>
 #include <string>
 #include <algorithm>
@@ -16,8 +17,12 @@ using namespace Rcpp;
 // line is an error.  Blank lines and later '#' lines are skipped; a final line
 // without a newline is kept; a trailing '\r' is ignored.  A data line with too
 // few fields or an ID outside `ids` is an error.  A zero-byte file is an empty
-// graph.  Only std containers are used until the result vectors are built, so
-// there is nothing for the GC to trip over.
+// graph.  When the header has a PHASED_R2 / UNPHASED_R2 column after ID_B, an
+// r2 above 1 (impossible; PLINK2 2.00a6.8 --r2-phased emits such values for
+// some D' = +/-1 pairs) is counted in `invalid_r2`, with the first offending
+// pair in `invalid_example` (a line without the r2 field is not checked).
+// Only std containers are used until the result vectors are built, so there
+// is nothing for the GC to trip over.
 // [[Rcpp::export(name = ".fastmr_vcor_read")]]
 List fastmr_vcor_read(std::string path, CharacterVector ids) {
   std::unordered_map<std::string, int> index;
@@ -32,7 +37,9 @@ List fastmr_vcor_read(std::string path, CharacterVector ids) {
   const size_t CH = 1u << 22;
   std::vector<char> buf(CH + 1);
   size_t have = 0;  // carried bytes of a partial line at buf[0..have)
-  int fa = 0, fb = 0;
+  int fa = 0, fb = 0, fr = 0;
+  long long invalid_r2 = 0;
+  std::string invalid_example;
   bool header_done = false;
   long long short_lines = 0;
   std::string key;
@@ -43,7 +50,7 @@ List fastmr_vcor_read(std::string path, CharacterVector ids) {
     if (!header_done) {
       header_done = true;
       if (*s == '#') {
-        int ia = 0, ib = 0, k = 0;
+        int ia = 0, ib = 0, ir = 0, k = 0;
         const char* f = s + 1;
         while (true) {
           const char* t = f;
@@ -52,10 +59,12 @@ List fastmr_vcor_read(std::string path, CharacterVector ids) {
           size_t len = (size_t)(t - f);
           if (!ia && len == 4 && !std::strncmp(f, "ID_A", 4)) ia = k;
           if (!ib && len == 4 && !std::strncmp(f, "ID_B", 4)) ib = k;
+          if (!ir && ((len == 9 && !std::strncmp(f, "PHASED_R2", 9)) ||
+                      (len == 11 && !std::strncmp(f, "UNPHASED_R2", 11)))) ir = k;
           if (t >= e) break;
           f = t + 1;
         }
-        if (ia && ib && ia < ib) { fa = ia; fb = ib; }
+        if (ia && ib && ia < ib) { fa = ia; fb = ib; if (ir > ib) fr = ir; }
       }
       if (!fa) stop("unrecognised PLINK2 .vcor header (need ID_A and ID_B): " +
                     std::string(s, std::min<size_t>((size_t)(e - s), 200)));
@@ -64,13 +73,17 @@ List fastmr_vcor_read(std::string path, CharacterVector ids) {
     if (*s == '#') return;
     const char* sa = nullptr; const char* ea = nullptr;
     const char* sb = nullptr; const char* eb = nullptr;
+    const char* sr = nullptr; const char* er = nullptr;
+    const int last = fr ? fr : fb;
     int k = 1;
     const char* f = s;
     while (true) {
       const char* t = f;
       while (t < e && *t != '\t') ++t;
       if (k == fa) { sa = f; ea = t; }
-      if (k == fb) { sb = f; eb = t; break; }
+      if (k == fb) { sb = f; eb = t; }
+      if (k == fr) { sr = f; er = t; }
+      if (k == last) break;
       if (t >= e) break;
       f = t + 1;
       ++k;
@@ -82,6 +95,14 @@ List fastmr_vcor_read(std::string path, CharacterVector ids) {
     key.assign(sb, eb);
     auto itb = index.find(key);
     if (itb == index.end()) stop("PLINK2 .vcor ID not among the candidate SNPs: " + key);
+    if (sr) {
+      std::string rv(sr, er);
+      char* endp = nullptr;
+      double r2 = std::strtod(rv.c_str(), &endp);
+      if (endp != rv.c_str() && r2 > 1.0 + 1e-6) {
+        if (!invalid_r2++) invalid_example = std::string(sa, ea) + " " + std::string(sb, eb) + " r2=" + rv;
+      }
+    }
     lead.push_back(ita->second);
     target.push_back(itb->second);
   };
@@ -111,7 +132,9 @@ List fastmr_vcor_read(std::string path, CharacterVector ids) {
   IntegerVector ra(m), rb(m);
   std::copy(lead.begin(), lead.end(), ra.begin());
   std::copy(target.begin(), target.end(), rb.begin());
-  return List::create(_["lead"] = ra, _["target"] = rb);
+  return List::create(_["lead"] = ra, _["target"] = rb,
+                      _["invalid_r2"] = (double)invalid_r2,
+                      _["invalid_example"] = invalid_example);
 }
 
 // Greedy clump of every exposure on one symmetric LD graph.
