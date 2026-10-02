@@ -38,8 +38,9 @@ fast_clump_data_graph(
 
 \item{threads}{Threads passed to each PLINK query.}
 
-\item{max_graph_pairs}{Per-chromosome cap on the estimated number of
-candidate pairs within the window before falling back to lead-row mode.}
+\item{max_graph_pairs}{Cap on the estimated number of candidate pairs
+within the window per PLINK2 call; a chromosome above it falls back to
+lead-row mode.}
 
 \item{max_pair_requests}{Safety limit on logical LD pairs.}
 
@@ -57,17 +58,18 @@ A list with \code{data}, named \code{instruments}, and \code{diagnostics}
 (including \code{ld_provenance}).
 }
 \description{
-Clump every exposure with a single PLINK2 all-pairs LD call per chromosome
-over the union of candidate SNPs (\code{--r2-phased} with \code{--ld-window-kb}
-equal to \code{clump_kb}, \code{--ld-window-r2} equal to \code{clump_r2} and a very large
-\code{--ld-window} variant count), then run each exposure's greedy clump in C++
-against the symmetrised graph.  Retained instruments are identical to
+Clump every exposure with a single PLINK2 all-pairs LD call over the union
+of candidate SNPs (\code{--r2-phased} with \code{--ld-window-kb} equal to \code{clump_kb},
+\code{--ld-window-r2} equal to \code{clump_r2} and a very large \code{--ld-window} variant
+count), then run each exposure's greedy clump in C++ against the
+symmetrised graph.  Retained instruments are identical to
 \code{\link[=fast_clump_data_lead_rows]{fast_clump_data_lead_rows()}} and \code{\link[=fast_clump_data_batched]{fast_clump_data_batched()}}.
 }
 \details{
 The expected number of pairs is estimated from sorted positions before any
-PLINK call.  A chromosome whose estimate exceeds \code{max_graph_pairs} (or any
-data set lacking complete positions) is clumped with
+PLINK call.  Chromosomes share a call while their summed estimate stays
+within \code{max_graph_pairs}.  A chromosome whose own estimate exceeds it (or
+any data set lacking complete positions) is clumped with
 \code{\link[=fast_clump_data_lead_rows]{fast_clump_data_lead_rows()}} instead, and the reason is recorded in
 \code{diagnostics$fallbacks}.
 }

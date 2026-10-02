@@ -87,20 +87,41 @@ test_that("graph clumping is identical to global and lead_row for E = 1, 10, 100
   }
 })
 
-test_that("graph clumping makes one LD call per chromosome", {
+test_that("graph clumping makes one LD call for all chromosomes", {
   skip_on_os("windows")
   ref <- graph_ld_reference()
   dat <- graph_make_dat(50L, 3L, ref)
   calls <- with_ld_oracle(ref)
   res <- fast_clump_data_graph(dat, clump_kb = 5, clump_r2 = 0.5, bfile = "mock",
                                plink2_bin = "/bin/true")
-  expect_identical(calls$graph, length(unique(dat$chr_name)))
+  expect_gt(length(unique(dat$chr_name)), 1L)
+  expect_identical(calls$graph, 1L)
   expect_identical(calls$frontier, 0L)
   expect_identical(res$diagnostics$plink_calls, calls$graph)
   expect_identical(res$diagnostics$partition, "graph")
   expect_identical(res$diagnostics$ld_provenance$plink2_version, "PLINK v2.0.0-mock")
   expect_true(any(grepl("--ld-window-r2 0.5", res$diagnostics$ld_provenance$flags, fixed = TRUE)))
   expect_true(any(grepl("--ld-window ", res$diagnostics$ld_provenance$flags, fixed = TRUE)))
+})
+
+test_that("max_graph_pairs splits chromosomes into several LD calls with identical results", {
+  skip_on_os("windows")
+  ref <- graph_ld_reference()
+  dat <- graph_make_dat(30L, 5L, ref)
+  est <- vapply(split(dat$chrom_start, dat$chr_name), function(bp)
+    fastMR:::fastmr_graph_pair_estimate(unique(bp), 5000), numeric(1))
+  calls <- with_ld_oracle(ref)
+  one <- fast_clump_data_graph(dat, clump_kb = 5, clump_r2 = 0.5, bfile = "mock", plink2_bin = "/bin/true")
+  calls$graph <- 0L
+  split_res <- fast_clump_data_graph(dat, clump_kb = 5, clump_r2 = 0.5, bfile = "mock",
+                                     plink2_bin = "/bin/true", max_graph_pairs = max(est))
+  lead <- fast_clump_data_lead_rows(dat, clump_kb = 5, clump_r2 = 0.5, bfile = "mock", plink2_bin = "/bin/true")
+  expect_gt(calls$graph, 1L)
+  expect_lte(calls$graph, length(est))
+  expect_false(split_res$diagnostics$fallback)
+  expect_identical(split_res$instruments, one$instruments)
+  expect_identical(split_res$data, lead$data)
+  expect_identical(split_res$diagnostics$graph_edges, one$diagnostics$graph_edges)
 })
 
 test_that("p ties, window edges and r2 exactly at threshold match PLINK semantics", {
