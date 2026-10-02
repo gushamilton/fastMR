@@ -1,5 +1,5 @@
 # Threaded bootstrap groups (fastmr_run_bootstrap_groups) must be identical()
-# and serialize()-identical to the per-group reference for every thread count,
+# and representation-identical to the per-group reference for every thread count,
 # seeded and unseeded, and must leave R's RNG in exactly the same state.
 
 boot_fixture <- function(seed = 21L) {
@@ -48,7 +48,7 @@ expect_boot_identical <- function(d, threads = c(1L, 2L, 4L), ...) {
     for (k in threads) {
       new <- with_rng(function() fast_mr(d, seed = seed, threads = k, ...))
       expect_identical(new$value, ref$value)
-      expect_identical(serialize(new$value, NULL), serialize(ref$value, NULL))
+      expect_same_representation(new$value, ref$value)
       expect_identical(new$state, ref$state)
     }
   }

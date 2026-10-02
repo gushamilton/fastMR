@@ -115,6 +115,6 @@ test_that("grouped fast_mr serializes byte-identically to the reference", {
   for (m in method_sets) {
     new <- fast_mr(d, methods = m, nboot = 0)
     old <- fast_mr_reference(d, methods = m, nboot = 0)
-    expect_identical(serialize(new, NULL), serialize(old, NULL))
+    expect_same_representation(new, old)
   }
 })

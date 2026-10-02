@@ -94,7 +94,6 @@ test_that("compact grid converts to a byte-identical tidy data frame", {
   for (m in list("ivw", c("ivw", "egger", "weighted_median"))) {
     run <- function(...) fast_mr_grid(g$exposure_beta, g$outcome_beta, g$exposure_se,
                                       g$outcome_se, methods = m, nboot = 20, seed = 11, ...)
-    expect_identical(serialize(as.data.frame(run(return = "compact")), NULL),
-                     serialize(run(return = "tidy"), NULL))
+    expect_same_representation(as.data.frame(run(return = "compact")), run(return = "tidy"))
   }
 })
