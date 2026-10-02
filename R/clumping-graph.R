@@ -1,7 +1,8 @@
 # Exact LD-graph multi-exposure clumping.
 #
-# One PLINK2 all-pairs call per chromosome over the union of candidate SNPs
-# replaces the per-lead (or per-frontier-round) process launches.  The pair set
+# One PLINK2 all-pairs call over the union of candidate SNPs (split into a few
+# calls only when the estimated pair count exceeds max_graph_pairs) replaces
+# the per-lead (or per-frontier-round) process launches.  The pair set
 # is the symmetric closure of the pairs PLINK2 reports at r2 >= clump_r2 within
 # clump_kb, which is exactly the set of pairs the lead-row and frontier
 # strategies query; each exposure is then clumped greedily, in the same
@@ -83,22 +84,24 @@ fastmr_graph_pair_estimate <- function(bp, window) {
 
 #' Exact LD-graph multi-exposure clumping
 #'
-#' Clump every exposure with a single PLINK2 all-pairs LD call per chromosome
-#' over the union of candidate SNPs (`--r2-phased` with `--ld-window-kb`
-#' equal to `clump_kb`, `--ld-window-r2` equal to `clump_r2` and a very large
-#' `--ld-window` variant count), then run each exposure's greedy clump in C++
-#' against the symmetrised graph.  Retained instruments are identical to
+#' Clump every exposure with a single PLINK2 all-pairs LD call over the union
+#' of candidate SNPs (`--r2-phased` with `--ld-window-kb` equal to `clump_kb`,
+#' `--ld-window-r2` equal to `clump_r2` and a very large `--ld-window` variant
+#' count), then run each exposure's greedy clump in C++ against the
+#' symmetrised graph.  Retained instruments are identical to
 #' [fast_clump_data_lead_rows()] and [fast_clump_data_batched()].
 #'
 #' The expected number of pairs is estimated from sorted positions before any
-#' PLINK call.  A chromosome whose estimate exceeds `max_graph_pairs` (or any
-#' data set lacking complete positions) is clumped with
+#' PLINK call.  Chromosomes share a call while their summed estimate stays
+#' within `max_graph_pairs`.  A chromosome whose own estimate exceeds it (or
+#' any data set lacking complete positions) is clumped with
 #' [fast_clump_data_lead_rows()] instead, and the reason is recorded in
 #' `diagnostics$fallbacks`.
 #'
 #' @inheritParams fast_clump_data_lead_rows
-#' @param max_graph_pairs Per-chromosome cap on the estimated number of
-#'   candidate pairs within the window before falling back to lead-row mode.
+#' @param max_graph_pairs Cap on the estimated number of candidate pairs
+#'   within the window per PLINK2 call; a chromosome above it falls back to
+#'   lead-row mode.
 #' @return A list with `data`, named `instruments`, and `diagnostics`
 #'   (including `ld_provenance`).
 #' @export
@@ -175,6 +178,13 @@ fast_clump_data_graph <- function(
   if (length(elig_rows) && !positions_ok) {
     retained_key <- lead_row_fallback(elig_rows, "missing_positions", "all")
   } else if (length(elig_rows)) {
+    # Plan every chromosome first, then query LD for as many chromosomes per
+    # PLINK2 call as fit under max_graph_pairs: each call re-parses the whole
+    # reference .pvar (~1 s for 9M variants), which dominated one-call-per-
+    # chromosome runs.  PLINK2 --r2 only pairs variants on the same
+    # chromosome, so the union query returns exactly the per-chromosome edges,
+    # and the per-call cap keeps the parsed edge count bounded as before.
+    plan <- list()
     for (cc in unique(position$chr[elig_rows])) {
       rows <- elig_rows[position$chr[elig_rows] == cc]
       usnp <- unique(snp[rows])
@@ -188,17 +198,41 @@ fast_clump_data_graph <- function(
         chromosomes[[cc]] <- info
         next
       }
-      tag <- gsub("[^A-Za-z0-9_.-]", "_", cc)
-      ld <- if (est > 0) {
-        graph_calls <- graph_calls + 1L
-        fastmr_clump_run_graph(usnp, reference_args, plink2_bin, clump_kb, clump_r2,
-                               threads, workdir, tag)
-      } else {
-        # No candidate pair within the window: the graph is empty.
-        list(lead = integer(), target = integer())
+      plan[[length(plan) + 1L]] <- list(cc = cc, rows = rows, usnp = usnp, ubp = ubp, est = est,
+                                         info = info, a = integer(), b = integer())
+    }
+    # Greedy batches in chromosome order; a batch never repeats a SNP ID, so
+    # every reported ID maps to exactly one chromosome.
+    batch <- integer(length(plan)); nb <- 0L; load <- Inf; seen <- character()
+    for (i in seq_along(plan)) {
+      if (plan[[i]]$est <= 0) next
+      if (load + plan[[i]]$est > max_graph_pairs || any(plan[[i]]$usnp %in% seen)) {
+        nb <- nb + 1L; load <- 0; seen <- character()
       }
-      a <- ld$lead
-      b <- ld$target
+      batch[i] <- nb; load <- load + plan[[i]]$est; seen <- c(seen, plan[[i]]$usnp)
+    }
+    for (k in seq_len(nb)) {
+      members <- which(batch == k)
+      sizes <- vapply(plan[members], function(x) length(x$usnp), integer(1))
+      offsets <- c(0L, cumsum(sizes))
+      tag <- if (length(members) == 1L) gsub("[^A-Za-z0-9_.-]", "_", plan[[members]]$cc) else paste0("batch", k)
+      graph_calls <- graph_calls + 1L
+      ld <- fastmr_clump_run_graph(unlist(lapply(plan[members], `[[`, "usnp"), use.names = FALSE),
+                                   reference_args, plink2_bin, clump_kb, clump_r2, threads, workdir, tag)
+      ca <- findInterval(ld$lead - 1L, offsets, rightmost.closed = FALSE)
+      cb <- findInterval(ld$target - 1L, offsets, rightmost.closed = FALSE)
+      same <- ca == cb
+      for (j in seq_along(members)) {
+        sel <- same & ca == j
+        plan[[members[j]]]$a <- ld$lead[sel] - offsets[j]
+        plan[[members[j]]]$b <- ld$target[sel] - offsets[j]
+      }
+    }
+    for (x in plan) {
+      # est == 0: no candidate pair within the window, so the graph is empty.
+      rows <- x$rows; usnp <- x$usnp; ubp <- x$ubp; info <- x$info
+      a <- x$a
+      b <- x$b
       ok <- a != b
       a <- a[ok]; b <- b[ok]
       near <- abs(ubp[a] - ubp[b]) <= window
@@ -213,7 +247,7 @@ fast_clump_data_graph <- function(
       starts <- c(0L, cumsum(tabulate(e_id)))
       keep <- .fastmr_graph_clump(length(usnp), a - 1L, b - 1L, vtx - 1L, as.integer(starts))
       retained_key <- c(retained_key, paste(expo[rows[keep]], snp[rows[keep]], sep = "\r"))
-      chromosomes[[cc]] <- info
+      chromosomes[[x$cc]] <- info
     }
   }
   original_key <- paste(as.character(original$id.exposure), as.character(original$SNP), sep = "\r")
