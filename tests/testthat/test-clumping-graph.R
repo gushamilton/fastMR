@@ -252,7 +252,8 @@ test_that("require_exact uses the CompreSSoR rank domain when available", {
     effect_allele_frequency = 0.3
   )
   plain <- tempfile("fm-plain-"); exact <- tempfile("fm-exact-")
-  CompreSSoR::compress_sumstats(input, plain, overwrite = TRUE)
+  # CompreSSoR >= the exact-cis-order change writes the domain by default; opt out here.
+  CompreSSoR::compress_sumstats(input, plain, overwrite = TRUE, pvalue_order = FALSE)
   expect_error(
     fast_clump_compressed(c(x = plain), pvalue_order = "require_exact", pvalue_threshold = 1e-3,
                           bfile = "panel", plink2_bin = "/bin/true", candidate_source = "full"),
