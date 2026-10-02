@@ -1,4 +1,4 @@
-# fastMR 0.1.10
+# fastMR 0.2.0
 
 - Graph clumping now asks PLINK2 for an uncompressed `.vcor` (about 30 bytes
   per edge, written to the work directory and deleted after parsing) and
