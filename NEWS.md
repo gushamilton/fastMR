@@ -14,6 +14,29 @@
 - Synchronizes package and citation metadata and excludes benchmark-result
   placeholders from source-package builds.
 
+- Performance batch (streaming pipeline):
+  - `fast_mr()` groups rows once and batches non-RNG methods in a single native
+    call; output is byte-identical to the previous implementation (attribute
+    order, compact `row.names`).
+  - `fast_mr_steiger_filtering()` and diagnostic grouping are vectorised;
+    supplied `effective_n`/`rsq_valid`/`rsq_reason` columns are still
+    overwritten as before.
+  - `fast_mr_sparse_ivw()` gains `steiger_exposure_rsq`, `steiger_outcome_rsq`
+    and `pair_snp_drop` so Steiger and drop masks are applied inside the
+    kernel; Q uses a stable two-pass computation and `se` matches `fast_mr()`.
+  - IVW-only `fast_mr_compressed()` dispatches to the sparse CSR kernel.
+  - `fast_mr_grid()` gains `return = c("tidy", "compact", "none")` and
+    `chunk_pairs` for compact and streamed Parquet output
+    (`fastmr_grid_chunk()` accessor); `fast_write_parquet()` gains
+    `chunk_pairs`. Streamed IVW-only grids are computed in exposure blocks and
+    agree with the tidy result to about 1e-15 relative.
+  - New `partition = "graph"` clumping (`fast_clump_data_graph()`,
+    `max_graph_pairs`): one exact PLINK2 all-pairs call per chromosome, with ID-only
+    LD columns, streamed block parsing of the LD table, and empty-graph handling
+    when no candidates are in the reference. Also adds
+    `fast_clump_data_lead_rows()` and `fast_clump_data_batched_chromosomal()`.
+  - Source builds now exclude `slurm/`.
+
 # fastMR 0.1.9
 
 - Updates the optional compressed-input integration for CompreSSoR 0.5's

@@ -8,3 +8,4 @@
 ^results$
 ^HANDOFF\.md$
 ^.*\.tar\.gz$
+^slurm$
