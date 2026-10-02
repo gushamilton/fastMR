@@ -2207,7 +2207,50 @@ int bounded_threads(int requested, std::size_t jobs) {
   return bounded;
 }
 
+// Minimum work per worker before an extra thread pays for its spawn/join cost.
+// Work is counted in SNP rows (RNG-free group fits, grid pairs x SNPs) or
+// bootstrap draws (bootstrap batches). Medians, modes and bootstrap methods
+// cost ~1 us per row, so a few hundred rows per worker pay for a thread; the
+// closed-form methods (ivw, egger, ...) cost ~10-100 ns per row and are
+// dominated by serial p-value work, so they need ~100k rows per worker.
+// Calibrated on a Mac mini (std::thread fallback, no OpenMP) as the smallest
+// work at which 2/4/8 threads stopped being slower than 1; the fallback spawns
+// threads on every call, so these are conservative for OpenMP builds, whose
+// team is reused.
+constexpr double kMinRowsPerWorkerHeavy = 100.0;
+constexpr double kMinRowsPerWorkerCheap = 100000.0;
+constexpr double kMinDrawsPerWorker = 1000.0;
+
+// Test hook: scales the minimum work per worker (0 forces the parallel paths
+// on tiny inputs so the thread-equivalence tests still exercise them).
+std::atomic<double> min_work_scale(1.0);
+
+// Only use extra threads when each would get at least `min_work_per_worker`
+// units of work. Never changes results: they are identical for any count.
+int worthwhile_threads(int requested, std::size_t jobs, double work,
+                       double min_work_per_worker) {
+  const int bounded = bounded_threads(requested, jobs);
+  const double min_work = min_work_per_worker * min_work_scale.load(std::memory_order_relaxed);
+  if (!(min_work > 0.0)) return bounded;
+  const double by_work = std::floor(work / min_work);
+  if (!(by_work >= 1.0)) return 1;
+  return std::min(bounded, static_cast<int>(std::min(by_work, 1.0e6)));
+}
+
+double min_rows_per_worker(const BootstrapNeeds& needs) {
+  return needs.median || needs.mode || needs.penalised || needs.egger
+    ? kMinRowsPerWorkerHeavy : kMinRowsPerWorkerCheap;
+}
+
 } // namespace
+
+// Internal test hook: set the multiplier on the minimum work per worker and
+// return the previous value (1 by default; 0 uses all requested threads).
+// [[Rcpp::export]]
+double fastmr_set_work_scale_native(double scale) {
+  if (!std::isfinite(scale) || scale < 0.0) Rcpp::stop("scale must be non-negative and finite");
+  return min_work_scale.exchange(scale);
+}
 
 // [[Rcpp::export]]
 Rcpp::List fastmr_run_native(Rcpp::NumericVector exposure_beta,
@@ -2279,7 +2322,15 @@ Rcpp::List fastmr_grid_native(Rcpp::NumericMatrix exposure_beta,
   }
   fill_grid_bootstrap_layout(grid, nboot, seed, needs_median, needs_mode, needs_egger, needs_penalised);
   std::vector<Result> results(pair_count * parsed_methods.size());
-  const int thread_count = bounded_threads(threads, pair_count);
+  // Resampling methods cost ~nboot times a plain fit per pair.
+  const double grid_boot_factor =
+    (needs_median || needs_penalised || needs_mode || needs_egger) && nboot > 0
+      ? static_cast<double>(nboot) : 1.0;
+  const int thread_count = worthwhile_threads(
+    threads, pair_count,
+    static_cast<double>(pair_count) * static_cast<double>(grid.snp_count) *
+      grid_boot_factor,
+    min_rows_per_worker(BootstrapNeeds{needs_median, needs_penalised, needs_mode, needs_egger}));
   defer_r_math.store(true, std::memory_order_relaxed);
 
 #ifdef _OPENMP
@@ -2543,6 +2594,7 @@ namespace {
 // one worker so R's RNG is only touched from the main thread.
 template <typename MakePrepared>
 std::vector<Result> run_rng_free_jobs(std::size_t jobs, int threads,
+                                      double work_rows,
                                       const std::vector<std::string>& methods,
                                       int nboot, double phi, double penk,
                                       MakePrepared prepared) {
@@ -2557,13 +2609,15 @@ std::vector<Result> run_rng_free_jobs(std::size_t jobs, int threads,
   const BootstrapNeeds needs = bootstrap_needs(methods);
   const bool draws = nboot > 0 &&
     (needs.median || needs.egger || needs.penalised || needs.mode);
-  if (draws || bounded_threads(threads, jobs) == 1) {
+  const int workers = worthwhile_threads(threads, jobs, work_rows,
+                                         min_rows_per_worker(needs));
+  if (draws || workers == 1) {
     for (std::size_t job = 0; job < jobs; ++job) run(job);
     return all;
   }
   {
     DeferRMath deferred;
-    run_parallel(jobs, threads, run);
+    run_parallel(jobs, workers, run);
   }
   for (Result& result : all) populate_result_pvalues(result);
   return all;
@@ -2596,7 +2650,9 @@ Rcpp::List fastmr_run_groups_native(Rcpp::IntegerVector offsets,
   const GroupInputs in = check_group_inputs(offsets, exposure_beta, outcome_beta,
                                             exposure_se, outcome_se);
   const std::vector<Result> all = run_rng_free_jobs(
-    static_cast<std::size_t>(in.groups), threads, parsed_methods, nboot, phi, penk,
+    static_cast<std::size_t>(in.groups), threads,
+    static_cast<double>(in.offsets[in.groups] - in.offsets[0]),
+    parsed_methods, nboot, phi, penk,
     [&](std::size_t g) { return group_prepared(in, static_cast<R_xlen_t>(g)); });
   return group_results_to_flat(all);
 }
@@ -2635,10 +2691,16 @@ Rcpp::List fastmr_run_groups_drop_native(Rcpp::IntegerVector offsets,
       Rcpp::stop("job_drop out of range");
     }
   }
+  double drop_rows = 0.0;  // rows fitted across all jobs (work estimate)
+  for (R_xlen_t j = 0; j < jobs; ++j) {
+    const int g = job_group[j];
+    if (g != NA_INTEGER) drop_rows += static_cast<double>(in.offsets[g] - in.offsets[g - 1]);
+  }
   const std::vector<int> groups(job_group.begin(), job_group.end());
   const std::vector<int> drops(job_drop.begin(), job_drop.end());
   const std::vector<Result> all = run_rng_free_jobs(
-    static_cast<std::size_t>(jobs), threads, parsed_methods, 0, phi, penk,
+    static_cast<std::size_t>(jobs), threads,
+    drop_rows, parsed_methods, 0, phi, penk,
     [&](std::size_t j) {
       Prepared p;
       if (groups[j] == NA_INTEGER) return p;
@@ -2795,7 +2857,11 @@ Rcpp::List fastmr_run_groups_boot_native(Rcpp::IntegerVector offsets,
       ++last;
     }
     const std::size_t batch_groups = last - first;
-    if (bounded_threads(threads, batch_groups) == 1) {
+    const double batch_rows = static_cast<double>(in.offsets[last] - in.offsets[first]);
+    const int workers = batch_total > 0.0
+      ? worthwhile_threads(threads, batch_groups, batch_total + batch_rows, kMinDrawsPerWorker)
+      : worthwhile_threads(threads, batch_groups, batch_rows, min_rows_per_worker(needs));
+    if (workers == 1) {
       for (std::size_t g = first; g < last; ++g) {
         start_stream(g);
         std::vector<Result> results = compute_pair(
@@ -2818,7 +2884,7 @@ Rcpp::List fastmr_run_groups_boot_native(Rcpp::IntegerVector offsets,
       const double* draw_data = buffer.data();
       {
         DeferRMath deferred;
-        run_parallel(batch_groups, threads, [&](std::size_t index) {
+        run_parallel(batch_groups, workers, [&](std::size_t index) {
           const std::size_t g = first + index;
           std::vector<Result> results = compute_pair(
             group_prepared(in, static_cast<R_xlen_t>(g)), parsed_methods, nboot,

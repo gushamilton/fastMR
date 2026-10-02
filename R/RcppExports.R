@@ -9,6 +9,10 @@
     .Call(`_fastMR_fastmr_graph_clump`, n_snp, ea, eb, row_snp, exp_start)
 }
 
+fastmr_set_work_scale_native <- function(scale) {
+    .Call(`_fastMR_fastmr_set_work_scale_native`, scale)
+}
+
 fastmr_run_native <- function(exposure_beta, outcome_beta, exposure_se, outcome_se, methods, nboot = 1000L, seed = NULL, threads = 1L, phi = 1.0, penk = 20.0) {
     .Call(`_fastMR_fastmr_run_native`, exposure_beta, outcome_beta, exposure_se, outcome_se, methods, nboot, seed, threads, phi, penk)
 }
