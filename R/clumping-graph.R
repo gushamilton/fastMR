@@ -47,10 +47,11 @@ fastmr_clump_run_graph <- function(snps, reference_args, plink2_bin, clump_kb,
   # Stream the decompressed table in blocks so that only a block of lines (not
   # the whole ~200 B/edge line vector) is ever resident; each block is reduced
   # to its two ID columns, which share interned CHARSXPs.
-  con <- pipe(paste(shQuote(zstdcat), paste(cmd_args, collapse = " ")), "r")
+  # "rb": a text-mode pipe silently drops an unterminated final line.
+  con <- pipe(paste(shQuote(zstdcat), paste(cmd_args, collapse = " ")), "rb")
   closed <- FALSE
   on.exit(if (!closed) try(close(con), silent = TRUE), add = TRUE)
-  fa <- 3L; fb <- 6L  # default layout when the header is unrecognised
+  fa <- NA_integer_; fb <- NA_integer_  # set from the header
   first <- TRUE
   leads <- list(); targets <- list()
   repeat {
@@ -63,8 +64,17 @@ fastmr_clump_run_graph <- function(snps, reference_args, plink2_bin, clump_kb,
         ia <- match("ID_A", header); ib <- match("ID_B", header)
         if (!is.na(ia) && !is.na(ib) && ia < ib) { fa <- ia; fb <- ib }
       }
+      if (is.na(fa)) {
+        stop("unrecognised PLINK2 .vcor header (need ID_A and ID_B): ",
+             substr(block[[1L]], 1L, 200L), call. = FALSE)
+      }
     }
     ids <- .fastmr_vcor_ids(block, fa, fb)
+    data_lines <- sum(nzchar(block) & !startsWith(block, "#"))
+    if (length(ids$lead) != data_lines) {
+      stop("malformed PLINK2 .vcor line(s): ", data_lines - length(ids$lead),
+           " line(s) have fewer than ", fb, " fields", call. = FALSE)
+    }
     leads[[length(leads) + 1L]] <- ids$lead
     targets[[length(targets) + 1L]] <- ids$target
   }

@@ -182,7 +182,7 @@ test_that("graph partition runs through the PLINK2 argument surface", {
     sprintf("echo \"$@\" >> %s", log),
     "while [ \"$#\" -gt 0 ]; do case \"$1\" in --out) out=\"$2\"; shift 2;; *) shift;; esac; done",
     "[ -n \"$out\" ] || exit 0",
-    "printf '1\\t1000\\tA\\t1\\t2000\\tB\\t0.9\\n' > \"${out}.vcor\"",
+    "printf '#ID_A\\tID_B\\tUNPHASED_R2\\nA\\tB\\t0.9\\n' > \"${out}.vcor\"",
     "zstd -q -f \"${out}.vcor\" -o \"${out}.vcor.zst\"; rm -f \"${out}.vcor\""
   ), plink2)
   Sys.chmod(plink2, "0755")
@@ -333,4 +333,21 @@ test_that("graph run parses a multi-block zstd stream identically", {
   ld <- fastMR:::fastmr_clump_run_graph(c("v1", "w1"), c("--bfile", "p"), plink2, 500, 0.01, 1L, wd, "1")
   expect_identical(ld$lead, sprintf("v%d", 1:n))
   expect_identical(ld$target, sprintf("w%d", 1:n))
+})
+
+test_that("graph LD parse refuses an unrecognised .vcor header", {
+  skip_on_os("windows")
+  skip_if(!nzchar(Sys.which("zstd")), "zstd unavailable")
+  plink2 <- tempfile("fastMR_plink2_badheader_")
+  writeLines(c(
+    "#!/bin/sh", "out=''",
+    "while [ \"$#\" -gt 0 ]; do case \"$1\" in --out) out=\"$2\"; shift 2;; *) shift;; esac; done",
+    "[ -n \"$out\" ] || exit 0",
+    "printf 'A\\tB\\t0.9\\n' > \"${out}.vcor\"",
+    "zstd -q -f \"${out}.vcor\" -o \"${out}.vcor.zst\"; rm -f \"${out}.vcor\""
+  ), plink2)
+  Sys.chmod(plink2, "0755")
+  dat <- data.frame(SNP = c("A", "B"), id.exposure = "E", pval.exposure = c(1e-8, 1e-7),
+                    chr_name = "1", chrom_start = c(1000, 2000))
+  expect_error(fast_clump_data_graph(dat, clump_kb = 500, clump_r2 = 0.01, bfile = "panel", plink2_bin = plink2))
 })
