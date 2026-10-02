@@ -3,6 +3,7 @@
 
 #include <algorithm>
 #include <atomic>
+#include <cfloat>
 #include <cmath>
 #include <complex>
 #include <limits>
@@ -2530,13 +2531,53 @@ void run_parallel(std::size_t jobs, int threads, Job job) {
 
 } // namespace
 
+namespace {
+
+// Run compute_pair() on `jobs` RNG-free inputs, job-major / method-minor.
+// prepared(job) must build the job's Prepared without touching R. With one
+// worker every p-value is computed inline, exactly as one fastmr_run_native()
+// call per job; with several, R-backed p-values are deferred during the
+// parallel section and filled serially afterwards (as in
+// fastmr_run_groups_boot_native()), which gives bit-identical results for
+// every thread count. Requests that would draw random numbers always run on
+// one worker so R's RNG is only touched from the main thread.
+template <typename MakePrepared>
+std::vector<Result> run_rng_free_jobs(std::size_t jobs, int threads,
+                                      const std::vector<std::string>& methods,
+                                      int nboot, double phi, double penk,
+                                      MakePrepared prepared) {
+  const std::size_t method_count = methods.size();
+  std::vector<Result> all(jobs * method_count);
+  auto run = [&](std::size_t job) {
+    std::vector<Result> results =
+      compute_pair(prepared(job), methods, nboot, R_NilValue, true, phi, penk);
+    std::move(results.begin(), results.end(),
+              all.begin() + static_cast<std::ptrdiff_t>(job * method_count));
+  };
+  const BootstrapNeeds needs = bootstrap_needs(methods);
+  const bool draws = nboot > 0 &&
+    (needs.median || needs.egger || needs.penalised || needs.mode);
+  if (draws || bounded_threads(threads, jobs) == 1) {
+    for (std::size_t job = 0; job < jobs; ++job) run(job);
+    return all;
+  }
+  {
+    DeferRMath deferred;
+    run_parallel(jobs, threads, run);
+  }
+  for (Result& result : all) populate_result_pvalues(result);
+  return all;
+}
+
+} // namespace
+
 // Batched equivalent of calling fastmr_run_native() once per group. Groups are
 // CSR-style slices [offsets[g], offsets[g+1]) of the concatenated vectors. Each
 // group goes through exactly the same one_pair_from_vectors() filtering and
-// compute_pair() code path (including inline p-values), so results are
-// bit-identical to the per-group calls. Only valid when no requested method
-// draws random numbers (bootstrap methods use fastmr_run_groups_boot_native());
-// the calls are therefore serial and `threads` is accepted for API symmetry.
+// compute_pair() code path, so results are bit-identical to the per-group
+// calls. Only used when no requested method draws random numbers (bootstrap
+// methods use fastmr_run_groups_boot_native()); groups run on up to `threads`
+// workers with identical results for every thread count.
 // Returns flat vectors in group-major, method-minor order.
 // [[Rcpp::export]]
 Rcpp::List fastmr_run_groups_native(Rcpp::IntegerVector offsets,
@@ -2554,15 +2595,129 @@ Rcpp::List fastmr_run_groups_native(Rcpp::IntegerVector offsets,
   const std::vector<std::string> parsed_methods = parse_methods(methods);
   const GroupInputs in = check_group_inputs(offsets, exposure_beta, outcome_beta,
                                             exposure_se, outcome_se);
-  const std::size_t method_count = parsed_methods.size();
-  std::vector<Result> all;
-  all.reserve(static_cast<std::size_t>(in.groups) * method_count);
-  for (R_xlen_t g = 0; g < in.groups; ++g) {
-    std::vector<Result> results =
-      compute_pair(group_prepared(in, g), parsed_methods, nboot, R_NilValue, true, phi, penk);
-    for (Result& r : results) all.push_back(std::move(r));
-  }
+  const std::vector<Result> all = run_rng_free_jobs(
+    static_cast<std::size_t>(in.groups), threads, parsed_methods, nboot, phi, penk,
+    [&](std::size_t g) { return group_prepared(in, static_cast<R_xlen_t>(g)); });
   return group_results_to_flat(all);
+}
+
+// Leave-one-out fits without materialising the drop-one layouts. Job j fits
+// group job_group[j] (1-based) with its job_drop[j]-th row (0-based, -1 for
+// none) omitted; an NA group is an empty fit. Each job is bit-identical to
+// fastmr_run_groups_native() on the group with that row removed. Only
+// RNG-free requests are valid (nboot is 0). Returns flat vectors in
+// job-major, method-minor order.
+// [[Rcpp::export]]
+Rcpp::List fastmr_run_groups_drop_native(Rcpp::IntegerVector offsets,
+                                         Rcpp::NumericVector exposure_beta,
+                                         Rcpp::NumericVector outcome_beta,
+                                         Rcpp::NumericVector exposure_se,
+                                         Rcpp::NumericVector outcome_se,
+                                         Rcpp::IntegerVector job_group,
+                                         Rcpp::IntegerVector job_drop,
+                                         Rcpp::CharacterVector methods,
+                                         int threads = 1,
+                                         double phi = 1.0,
+                                         double penk = 20.0) {
+  validate_controls(0, threads, phi);
+  if (!std::isfinite(penk) || penk <= 0.0) Rcpp::stop("penk must be positive and finite");
+  const std::vector<std::string> parsed_methods = parse_methods(methods);
+  const GroupInputs in = check_group_inputs(offsets, exposure_beta, outcome_beta,
+                                            exposure_se, outcome_se);
+  const R_xlen_t jobs = job_group.size();
+  if (job_drop.size() != jobs) Rcpp::stop("job_group and job_drop must have equal lengths");
+  for (R_xlen_t j = 0; j < jobs; ++j) {
+    const int g = job_group[j];
+    if (g == NA_INTEGER) continue;
+    if (g < 1 || g > in.groups) Rcpp::stop("job_group out of range");
+    const R_xlen_t size = in.offsets[g] - in.offsets[g - 1];
+    if (job_drop[j] == NA_INTEGER || job_drop[j] < -1 || job_drop[j] >= size) {
+      Rcpp::stop("job_drop out of range");
+    }
+  }
+  const std::vector<int> groups(job_group.begin(), job_group.end());
+  const std::vector<int> drops(job_drop.begin(), job_drop.end());
+  const std::vector<Result> all = run_rng_free_jobs(
+    static_cast<std::size_t>(jobs), threads, parsed_methods, 0, phi, penk,
+    [&](std::size_t j) {
+      Prepared p;
+      if (groups[j] == NA_INTEGER) return p;
+      const std::size_t g = static_cast<std::size_t>(groups[j] - 1);
+      const R_xlen_t begin = in.offsets[g], end = in.offsets[g + 1];
+      const R_xlen_t skip = begin + drops[j];
+      p.x.reserve(end - begin); p.y.reserve(end - begin);
+      p.sx.reserve(end - begin); p.sy.reserve(end - begin);
+      for (R_xlen_t i = begin; i < end; ++i) {
+        if (drops[j] >= 0 && i == skip) continue;
+        const double x = in.x[i], y = in.y[i], sx = in.sx[i], sy = in.sy[i];
+        if (!std::isfinite(x) || !std::isfinite(y) || !std::isfinite(sx) ||
+            !std::isfinite(sy) || sx <= 0.0 || sy <= 0.0) continue;  // group_prepared() filter
+        p.x.push_back(x); p.y.push_back(y); p.sx.push_back(sx); p.sy.push_back(sy);
+      }
+      return p;
+    });
+  return group_results_to_flat(all);
+}
+
+// sum(x[[g]], na.rm = narm) for each CSR group, with R's own accumulation
+// (long double, in order, clamped to +-Inf), so values are identical to the
+// per-group sum() calls.
+// [[Rcpp::export]]
+Rcpp::NumericVector fastmr_group_sum_native(Rcpp::IntegerVector offsets,
+                                            Rcpp::NumericVector x, bool narm) {
+  const R_xlen_t groups = offsets.size() - 1;
+  if (groups < 0 || offsets[0] != 0 || offsets[groups] != x.size()) {
+    Rcpp::stop("offsets must start at 0 and end at length(x)");
+  }
+  Rcpp::NumericVector out(groups);
+  for (R_xlen_t g = 0; g < groups; ++g) {
+    if (offsets[g + 1] < offsets[g]) Rcpp::stop("offsets must be non-decreasing");
+    long double s = 0.0;
+    for (R_xlen_t i = offsets[g]; i < offsets[g + 1]; ++i) {
+      if (!narm || !ISNAN(x[i])) s += x[i];
+    }
+    if (s > DBL_MAX) out[g] = R_PosInf;
+    else if (s < -DBL_MAX) out[g] = R_NegInf;
+    else out[g] = static_cast<double>(s);
+  }
+  return out;
+}
+
+// mean(x[[g]], na.rm = TRUE) for each CSR group, replicating R's real_mean()
+// (long double sum, overflow-safe fallback, one refinement pass).
+// [[Rcpp::export]]
+Rcpp::NumericVector fastmr_group_mean_native(Rcpp::IntegerVector offsets,
+                                             Rcpp::NumericVector x) {
+  const R_xlen_t groups = offsets.size() - 1;
+  if (groups < 0 || offsets[0] != 0 || offsets[groups] != x.size()) {
+    Rcpp::stop("offsets must start at 0 and end at length(x)");
+  }
+  Rcpp::NumericVector out(groups);
+  std::vector<double> values;
+  for (R_xlen_t g = 0; g < groups; ++g) {
+    if (offsets[g + 1] < offsets[g]) Rcpp::stop("offsets must be non-decreasing");
+    values.clear();
+    for (R_xlen_t i = offsets[g]; i < offsets[g + 1]; ++i) {
+      if (!ISNAN(x[i])) values.push_back(x[i]);
+    }
+    const R_xlen_t n = static_cast<R_xlen_t>(values.size());
+    long double s = 0.0;
+    for (double v : values) s += v;
+    if (R_FINITE(static_cast<double>(s))) {
+      s /= n;
+    } else {
+      long double t = 0.0;
+      for (double v : values) t += v / n;
+      s = t;
+    }
+    if (R_FINITE(static_cast<double>(s))) {
+      long double t = 0.0;
+      for (double v : values) t += (v - s);
+      s += t / n;
+    }
+    out[g] = static_cast<double>(s);
+  }
+  return out;
 }
 
 // Equivalent of calling fastmr_run_native() once per group with bootstrap

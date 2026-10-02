@@ -136,13 +136,10 @@ fastmr_validate_csr <- function(row_ptr, col_index, exposure_beta,
     stop("col_index must contain zero-based SNP indices in the outcome range",
          call. = FALSE)
   }
-  for (i in seq_len(length(row_ptr) - 1L)) {
-    first <- row_ptr[[i]] + 1L
-    last <- row_ptr[[i + 1L]]
-    indices <- if (first <= last) col_index[seq.int(first, last)] else integer()
-    if (anyDuplicated(indices)) {
-      stop("CSR rows must not contain duplicate SNP indices", call. = FALSE)
-    }
+  # One duplicate scan over (row, SNP) keys instead of one per CSR row.
+  csr_row <- rep.int(seq_len(length(row_ptr) - 1L), diff(row_ptr))
+  if (anyDuplicated(csr_row * as.numeric(snp_count) + col_index)) {
+    stop("CSR rows must not contain duplicate SNP indices", call. = FALSE)
   }
   valid_outcome <- outcome_present &
     (!is.finite(outcome_beta) | !is.finite(outcome_se) | outcome_se <= 0)

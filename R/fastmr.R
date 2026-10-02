@@ -57,7 +57,6 @@ fast_mr <- function(data,
   gid <- fastmr_group_ids(id.exp, id.out)
   group_count <- attr(gid, "n")
   if (!group_count) return(fastmr_write_result(fastmr_tidy_native(list(), methods), output))
-  group_rows <- unname(split(seq_len(n), factor(gid, levels = seq_len(group_count))))
   # Joins and multi-study exports often repeat the same SNP row. Count each
   # SNP once per MR pair; retain the first kept row deterministically. Repeated
   # p-values are metadata and do not affect this rule.
@@ -67,7 +66,8 @@ fast_mr <- function(data,
   kept <- kept[order(gid[kept], method = "radix")]
   counts <- tabulate(gid[kept], nbins = group_count)
   offsets <- c(0L, cumsum(counts))
-  first <- vapply(group_rows, `[`, integer(1), 1L)
+  # Groups are numbered by first appearance, so first rows are in group order.
+  first <- which(!duplicated(gid))
   args <- list(
     offsets = offsets,
     exposure_beta = prepared[["beta.exposure"]][kept],

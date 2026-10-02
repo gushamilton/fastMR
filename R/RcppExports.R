@@ -29,6 +29,18 @@ fastmr_run_groups_native <- function(offsets, exposure_beta, outcome_beta, expos
     .Call(`_fastMR_fastmr_run_groups_native`, offsets, exposure_beta, outcome_beta, exposure_se, outcome_se, methods, nboot, threads, phi, penk)
 }
 
+fastmr_run_groups_drop_native <- function(offsets, exposure_beta, outcome_beta, exposure_se, outcome_se, job_group, job_drop, methods, threads = 1L, phi = 1.0, penk = 20.0) {
+    .Call(`_fastMR_fastmr_run_groups_drop_native`, offsets, exposure_beta, outcome_beta, exposure_se, outcome_se, job_group, job_drop, methods, threads, phi, penk)
+}
+
+fastmr_group_sum_native <- function(offsets, x, narm) {
+    .Call(`_fastMR_fastmr_group_sum_native`, offsets, x, narm)
+}
+
+fastmr_group_mean_native <- function(offsets, x) {
+    .Call(`_fastMR_fastmr_group_mean_native`, offsets, x)
+}
+
 fastmr_run_groups_boot_native <- function(offsets, exposure_beta, outcome_beta, exposure_se, outcome_se, methods, nboot = 1000L, threads = 1L, phi = 1.0, penk = 20.0, reseed = NULL, batch_draws = 8388608.0) {
     .Call(`_fastMR_fastmr_run_groups_boot_native`, offsets, exposure_beta, outcome_beta, exposure_se, outcome_se, methods, nboot, threads, phi, penk, reseed, batch_draws)
 }

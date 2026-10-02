@@ -532,28 +532,53 @@ fast_mr_directionality_test <- function(data) {
     message("Cannot calculate approximate SNP correlations without p-values and sample sizes.")
     return(NULL)
   }
-  groups <- fastmr_diagnostic_groups(data)
-  rows <- lapply(groups, function(group) {
-    x <- group$data
-    p_exp <- if ("pval.exposure" %in% names(x)) x$pval.exposure else rep(NA_real_, nrow(x))
-    p_out <- if ("pval.outcome" %in% names(x)) x$pval.outcome else rep(NA_real_, nrow(x))
-    n_exp <- if ("samplesize.exposure" %in% names(x)) x$samplesize.exposure else rep(NA_real_, nrow(x))
-    n_out <- if ("samplesize.outcome" %in% names(x)) x$samplesize.outcome else rep(NA_real_, nrow(x))
-    r_exp <- if ("r.exposure" %in% names(x)) x$r.exposure else rep(NA_real_, nrow(x))
-    r_out <- if ("r.outcome" %in% names(x)) x$r.outcome else rep(NA_real_, nrow(x))
-    result <- fast_mr_steiger(p_exp, p_out, n_exp, n_out, r_exp, r_out)
-    data.frame(
-      id.exposure = group$id.exposure,
-      id.outcome = group$id.outcome,
-      exposure = group$exposure,
-      outcome = group$outcome,
-      snp_r2.exposure = result$r2_exp,
-      snp_r2.outcome = result$r2_out,
-      correct_causal_direction = result$correct_causal_direction,
-      steiger_pval = result$steiger_test,
-      stringsAsFactors = FALSE
-    )
-  })
-  if (!length(rows)) return(data.frame())
-  do.call(rbind, rows)
+  # Validate the same required columns and numeric conversions as fast_mr.
+  fastmr_prepare_vectors(data)
+  g <- fastmr_diagnostic_index(data)
+  if (!g$count) return(data.frame())
+  # fast_mr_steiger() per pair, vectorised: the per-SNP correlations are
+  # element-wise, and the per-pair totals and mean sample sizes use R's own
+  # sum()/mean() accumulation over each pair's rows in row order.
+  n <- nrow(data)
+  column <- function(name, label) {
+    value <- if (name %in% names(data)) data[[name]] else rep(NA_real_, n)
+    fastmr_numeric(value, label)
+  }
+  p_exp <- column("pval.exposure", "p_exp")
+  p_out <- column("pval.outcome", "p_out")
+  n_exp <- column("samplesize.exposure", "n_exp")
+  n_out <- column("samplesize.outcome", "n_out")
+  r_exp <- abs(column("r.exposure", "r_exp"))
+  r_out <- abs(column("r.outcome", "r_out"))
+  missing_exp <- is.na(r_exp) & !is.na(p_exp) & !is.na(n_exp)
+  missing_out <- is.na(r_out) & !is.na(p_out) & !is.na(n_out)
+  if (any(missing_exp)) r_exp[missing_exp] <- fastmr_r_from_pn(p_exp[missing_exp], n_exp[missing_exp])
+  if (any(missing_out)) r_out[missing_out] <- fastmr_r_from_pn(p_out[missing_out], n_out[missing_out])
+  o <- order(g$group, method = "radix")
+  offsets <- c(0L, cumsum(tabulate(g$group, nbins = g$count)))
+  # Rows with both correlations missing contribute NA squares, which
+  # na.rm drops just as the former `keep` subset did.
+  total_exp <- sqrt(fastmr_group_sum_native(offsets, r_exp[o]^2, TRUE))
+  total_out <- sqrt(fastmr_group_sum_native(offsets, r_out[o]^2, TRUE))
+  n_exp_mean <- fastmr_group_mean_native(offsets, n_exp[o])
+  n_out_mean <- fastmr_group_mean_native(offsets, n_out[o])
+  steiger_pval <- rep(NA_real_, g$count)
+  valid <- is.finite(total_exp) & is.finite(total_out) &
+    is.finite(n_exp_mean) & is.finite(n_out_mean) & n_exp_mean > 3 & n_out_mean > 3
+  if (any(valid)) {
+    z <- (0.5 * log((1 + total_exp[valid]) / (1 - total_exp[valid])) -
+            0.5 * log((1 + total_out[valid]) / (1 - total_out[valid]))) /
+      sqrt(1 / (n_exp_mean[valid] - 3) + 1 / (n_out_mean[valid] - 3))
+    steiger_pval[valid] <- 2 * stats::pnorm(abs(z), lower.tail = FALSE)
+  }
+  fastmr_rbind_layout(list(
+    id.exposure = g$id.exposure,
+    id.outcome = g$id.outcome,
+    exposure = g$exposure,
+    outcome = g$outcome,
+    snp_r2.exposure = total_exp^2,
+    snp_r2.outcome = total_out^2,
+    correct_causal_direction = total_exp > total_out,
+    steiger_pval = steiger_pval
+  ))
 }

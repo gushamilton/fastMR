@@ -135,6 +135,52 @@ BEGIN_RCPP
     return rcpp_result_gen;
 END_RCPP
 }
+// fastmr_run_groups_drop_native
+Rcpp::List fastmr_run_groups_drop_native(Rcpp::IntegerVector offsets, Rcpp::NumericVector exposure_beta, Rcpp::NumericVector outcome_beta, Rcpp::NumericVector exposure_se, Rcpp::NumericVector outcome_se, Rcpp::IntegerVector job_group, Rcpp::IntegerVector job_drop, Rcpp::CharacterVector methods, int threads, double phi, double penk);
+RcppExport SEXP _fastMR_fastmr_run_groups_drop_native(SEXP offsetsSEXP, SEXP exposure_betaSEXP, SEXP outcome_betaSEXP, SEXP exposure_seSEXP, SEXP outcome_seSEXP, SEXP job_groupSEXP, SEXP job_dropSEXP, SEXP methodsSEXP, SEXP threadsSEXP, SEXP phiSEXP, SEXP penkSEXP) {
+BEGIN_RCPP
+    Rcpp::RObject rcpp_result_gen;
+    Rcpp::RNGScope rcpp_rngScope_gen;
+    Rcpp::traits::input_parameter< Rcpp::IntegerVector >::type offsets(offsetsSEXP);
+    Rcpp::traits::input_parameter< Rcpp::NumericVector >::type exposure_beta(exposure_betaSEXP);
+    Rcpp::traits::input_parameter< Rcpp::NumericVector >::type outcome_beta(outcome_betaSEXP);
+    Rcpp::traits::input_parameter< Rcpp::NumericVector >::type exposure_se(exposure_seSEXP);
+    Rcpp::traits::input_parameter< Rcpp::NumericVector >::type outcome_se(outcome_seSEXP);
+    Rcpp::traits::input_parameter< Rcpp::IntegerVector >::type job_group(job_groupSEXP);
+    Rcpp::traits::input_parameter< Rcpp::IntegerVector >::type job_drop(job_dropSEXP);
+    Rcpp::traits::input_parameter< Rcpp::CharacterVector >::type methods(methodsSEXP);
+    Rcpp::traits::input_parameter< int >::type threads(threadsSEXP);
+    Rcpp::traits::input_parameter< double >::type phi(phiSEXP);
+    Rcpp::traits::input_parameter< double >::type penk(penkSEXP);
+    rcpp_result_gen = Rcpp::wrap(fastmr_run_groups_drop_native(offsets, exposure_beta, outcome_beta, exposure_se, outcome_se, job_group, job_drop, methods, threads, phi, penk));
+    return rcpp_result_gen;
+END_RCPP
+}
+// fastmr_group_sum_native
+Rcpp::NumericVector fastmr_group_sum_native(Rcpp::IntegerVector offsets, Rcpp::NumericVector x, bool narm);
+RcppExport SEXP _fastMR_fastmr_group_sum_native(SEXP offsetsSEXP, SEXP xSEXP, SEXP narmSEXP) {
+BEGIN_RCPP
+    Rcpp::RObject rcpp_result_gen;
+    Rcpp::RNGScope rcpp_rngScope_gen;
+    Rcpp::traits::input_parameter< Rcpp::IntegerVector >::type offsets(offsetsSEXP);
+    Rcpp::traits::input_parameter< Rcpp::NumericVector >::type x(xSEXP);
+    Rcpp::traits::input_parameter< bool >::type narm(narmSEXP);
+    rcpp_result_gen = Rcpp::wrap(fastmr_group_sum_native(offsets, x, narm));
+    return rcpp_result_gen;
+END_RCPP
+}
+// fastmr_group_mean_native
+Rcpp::NumericVector fastmr_group_mean_native(Rcpp::IntegerVector offsets, Rcpp::NumericVector x);
+RcppExport SEXP _fastMR_fastmr_group_mean_native(SEXP offsetsSEXP, SEXP xSEXP) {
+BEGIN_RCPP
+    Rcpp::RObject rcpp_result_gen;
+    Rcpp::RNGScope rcpp_rngScope_gen;
+    Rcpp::traits::input_parameter< Rcpp::IntegerVector >::type offsets(offsetsSEXP);
+    Rcpp::traits::input_parameter< Rcpp::NumericVector >::type x(xSEXP);
+    rcpp_result_gen = Rcpp::wrap(fastmr_group_mean_native(offsets, x));
+    return rcpp_result_gen;
+END_RCPP
+}
 // fastmr_run_groups_boot_native
 Rcpp::List fastmr_run_groups_boot_native(Rcpp::IntegerVector offsets, Rcpp::NumericVector exposure_beta, Rcpp::NumericVector outcome_beta, Rcpp::NumericVector exposure_se, Rcpp::NumericVector outcome_se, Rcpp::CharacterVector methods, int nboot, int threads, double phi, double penk, SEXP reseed, double batch_draws);
 RcppExport SEXP _fastMR_fastmr_run_groups_boot_native(SEXP offsetsSEXP, SEXP exposure_betaSEXP, SEXP outcome_betaSEXP, SEXP exposure_seSEXP, SEXP outcome_seSEXP, SEXP methodsSEXP, SEXP nbootSEXP, SEXP threadsSEXP, SEXP phiSEXP, SEXP penkSEXP, SEXP reseedSEXP, SEXP batch_drawsSEXP) {
@@ -166,6 +212,9 @@ static const R_CallMethodDef CallEntries[] = {
     {"_fastMR_fastmr_masked_ivw_native", (DL_FUNC) &_fastMR_fastmr_masked_ivw_native, 6},
     {"_fastMR_fastmr_sparse_ivw_native", (DL_FUNC) &_fastMR_fastmr_sparse_ivw_native, 12},
     {"_fastMR_fastmr_run_groups_native", (DL_FUNC) &_fastMR_fastmr_run_groups_native, 10},
+    {"_fastMR_fastmr_run_groups_drop_native", (DL_FUNC) &_fastMR_fastmr_run_groups_drop_native, 11},
+    {"_fastMR_fastmr_group_sum_native", (DL_FUNC) &_fastMR_fastmr_group_sum_native, 3},
+    {"_fastMR_fastmr_group_mean_native", (DL_FUNC) &_fastMR_fastmr_group_mean_native, 2},
     {"_fastMR_fastmr_run_groups_boot_native", (DL_FUNC) &_fastMR_fastmr_run_groups_boot_native, 12},
     {NULL, NULL, 0}
 };

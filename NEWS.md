@@ -37,6 +37,19 @@
   - `fast_mr_steiger_filtering()` and diagnostic grouping are vectorised;
     supplied `effective_n`/`rsq_valid`/`rsq_reason` columns are still
     overwritten as before.
+  - `fast_mr_heterogeneity()`, `fast_mr_pleiotropy_test()`,
+    `fast_mr_singlesnp()`, `fast_mr_leaveoneout()` and
+    `fast_mr_directionality_test()` no longer loop over pairs in R: each makes
+    one batched `fast_mr()` call (Egger leave-one-out adds one native call
+    over drop-one fits, with no expanded copy of the data) and builds its
+    output column-wise. Output is identical to the per-pair code, including
+    row order, `row.names` and attribute order. `threads` now takes effect:
+    RNG-free `fast_mr()` groups run on `threads` workers, with identical
+    results for every thread count. Egger leave-one-out of a pair with a
+    single SNP used to error when a sample-size column was present; it now
+    reports `NA` for that row's `samplesize`.
+  - `fast_mr_sparse_ivw()` checks CSR rows for duplicate SNP indices in one
+    vectorised pass.
   - `fast_mr_sparse_ivw()` gains `steiger_exposure_rsq`, `steiger_outcome_rsq`
     and `pair_snp_drop` so Steiger and drop masks are applied inside the
     kernel; Q uses a stable two-pass computation and `se` matches `fast_mr()`.
