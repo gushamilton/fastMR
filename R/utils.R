@@ -315,7 +315,7 @@ fastmr_methods_use_rng <- function(methods, nboot) {
 fastmr_tidy_groups_native <- function(native, method_count, id.exposure, id.outcome) {
   registry <- fastmr_method_registry()
   code <- native$method
-  data.frame(
+  out <- data.frame(
     id.exposure = rep(id.exposure, each = method_count),
     id.outcome = rep(id.outcome, each = method_count),
     method = registry$method[match(code, registry$code)],
@@ -338,6 +338,14 @@ fastmr_tidy_groups_native <- function(native, method_count, id.exposure, id.outc
     se_exposure_mean = native$se_exposure_mean,
     stringsAsFactors = FALSE
   )
+  # rbind() of per-group frames yields attributes in the order names,
+  # row.names, class; reproduce it so serialize() output is byte-identical.
+  attrs <- attributes(out)
+  attributes(out) <- NULL
+  names(out) <- attrs$names
+  attr(out, "row.names") <- .set_row_names(length(attrs$row.names))  # compact c(NA, -n), as rbind
+  class(out) <- attrs$class
+  out
 }
 
 # ---- compact (lightweight) grid results and chunked tidy conversion --------

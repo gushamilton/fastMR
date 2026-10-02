@@ -88,3 +88,13 @@ test_that("streamed output requires arrow", {
   expect_error(run_grid(g, methods = "ivw", nboot = 0, return = "none",
                         output = tempfile(fileext = ".parquet")), "optional 'arrow'")
 })
+
+test_that("compact grid converts to a byte-identical tidy data frame", {
+  g <- grid_fixture(3L, 4L)
+  for (m in list("ivw", c("ivw", "egger", "weighted_median"))) {
+    run <- function(...) fast_mr_grid(g$exposure_beta, g$outcome_beta, g$exposure_se,
+                                      g$outcome_se, methods = m, nboot = 20, seed = 11, ...)
+    expect_identical(serialize(as.data.frame(run(return = "compact")), NULL),
+                     serialize(run(return = "tidy"), NULL))
+  }
+})

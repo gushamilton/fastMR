@@ -5,6 +5,7 @@
 #   Rscript fastmr_perf_bench.R --scenario=<name> [--scale=small|full]
 #     [--label=baseline] [--sha=<git sha>] [--repo=<path to fastMR checkout>]
 #     [--lib=<R library containing the fastMR build to test>]
+#     [--extra-lib=<colon-separated extra libs, e.g. CompreSSoR>] (also EXTRA_R_LIBS/R_LIBS)
 #     [--output=<csv path, appended>] [--replicate=1] [--threads=1]
 #     [--profile=<Rprof output path>] [--clump_exposures=N]
 #   (clump_mock runs the 'global' frontier only for N <= 100: at N = 300 it
@@ -22,13 +23,20 @@
 
 args <- commandArgs(trailingOnly = TRUE)
 opt <- list(scenario = "all", scale = "small", label = "unlabelled", sha = NA_character_,
-            repo = NA_character_, lib = NA_character_, output = NA_character_,
+            repo = NA_character_, lib = NA_character_, extra_lib = NA_character_, output = NA_character_,
             replicate = "1", threads = "1", profile = NA_character_)
 for (a in args) {
   kv <- regmatches(a, regexec("^--([^=]+)=(.*)$", a))[[1L]]
   if (length(kv) == 3L) opt[[kv[2L]]] <- kv[3L]
 }
-if (!is.na(opt$lib)) .libPaths(c(normalizePath(opt$lib), .libPaths()))
+# Library order: --lib (build under test) first, then --extra-lib and the
+# EXTRA_R_LIBS / R_LIBS environment (e.g. a CompreSSoR build), then defaults.
+extra <- c(if (!is.na(opt$extra_lib)) strsplit(opt$extra_lib, ":", fixed = TRUE)[[1L]],
+           strsplit(Sys.getenv("EXTRA_R_LIBS"), ":", fixed = TRUE)[[1L]],
+           strsplit(Sys.getenv("R_LIBS"), ":", fixed = TRUE)[[1L]])
+extra <- extra[nzchar(extra) & dir.exists(extra)]
+.libPaths(unique(c(if (!is.na(opt$lib)) normalizePath(opt$lib), normalizePath(extra), .libPaths())))
+cat("libPaths:", paste(.libPaths(), collapse = " : "), "\n")
 suppressPackageStartupMessages(library(fastMR))
 threads <- as.integer(opt$threads)
 full <- identical(opt$scale, "full")
@@ -323,7 +331,10 @@ sc$clump_mock <- function() {
        g$seconds, g$peak_mb, lapply(g$value, sort))
 }
 sc$compressed_pairwise <- function() {
-  if (!requireNamespace("CompreSSoR", quietly = TRUE)) return(invisible())
+  if (!requireNamespace("CompreSSoR", quietly = TRUE)) {
+    stop("compressed_pairwise: CompreSSoR not found on .libPaths(): ",
+         paste(.libPaths(), collapse = " : "), " (use --extra-lib= or EXTRA_R_LIBS)", call. = FALSE)
+  }
   E <- if (full) 100L else 30L; O <- if (full) 100L else 30L; V <- 4000L
   dir <- tempfile("cmp_"); dir.create(dir)
   set.seed(7)
@@ -353,6 +364,10 @@ if (!is.na(opt$profile)) Rprof(opt$profile, interval = 0.005, memory.profiling =
 for (s in todo) sc[[s]]()
 if (!is.na(opt$profile)) Rprof(NULL)
 out <- do.call(rbind, rows)
+if (is.null(out)) {
+  message("no benchmark rows produced for scenario(s): ", paste(todo, collapse = ","))
+  quit(status = 2L)
+}
 if (!is.na(opt$output)) {
   dir.create(dirname(opt$output), recursive = TRUE, showWarnings = FALSE)
   utils::write.table(out, opt$output, sep = ",", row.names = FALSE, qmethod = "double",

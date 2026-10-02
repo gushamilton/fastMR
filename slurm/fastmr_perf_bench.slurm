@@ -73,9 +73,11 @@ for s in "${SCN[@]}"; do
   # One process per scenario so /usr/bin/time -v peak RSS is per scenario.
   /usr/bin/time -v -o "${TV}" Rscript "${BENCH_SCRIPT}" --scenario="${s}" --scale="${SCALE}" \
     --label="${LABEL}" --sha="${SHA}" --lib="${LIB}" --replicate="${REP}" \
-    --threads="${THREADS}" --output="${TMP}" || echo "scenario ${s} failed" >&2
+    --threads="${THREADS}" --extra-lib="${EXTRA_R_LIBS:-}" --output="${TMP}" || echo "SCENARIO ${s} FAILED (see stderr above)" >&2
   RSS_KB="$(awk -F: '/Maximum resident set size/ {gsub(/ /,"",$2); print $2}' "${TV}")"
-  if [[ -s "${TMP}" ]]; then
+  if [[ ! -s "${TMP}" ]]; then echo "SCENARIO ${s}: no rows produced" >&2
+  elif [[ "$(wc -l < "${TMP}")" -lt 2 ]]; then echo "SCENARIO ${s}: output has no data rows" >&2
+  else
     Rscript -e 'a <- commandArgs(TRUE); x <- read.csv(a[1], stringsAsFactors = FALSE)
       x$process_peak_rss_mb <- as.numeric(a[2]) / 1024; x$slurm_job <- a[4]
       write.table(x, a[3], sep = ",", row.names = FALSE, append = file.exists(a[3]),

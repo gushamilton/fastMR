@@ -153,3 +153,16 @@ test_that("supplied effective_n/rsq_valid/rsq_reason columns are overwritten lik
   r <- suppressWarnings(fast_mr_steiger_filtering(d))
   expect_false(any(r$effective_n.outcome == 50))
 })
+
+test_that("vectorised outputs serialize byte-identically to the old code", {
+  d <- make_steiger_data(G = 8L, per = 6L)
+  suppressWarnings(expect_identical(serialize(fast_mr_steiger_filtering(d), NULL),
+                                    serialize(old_steiger_filtering(d), NULL)))
+  d$r.exposure <- runif(nrow(d), 0.01, 0.1)
+  d$r.outcome <- runif(nrow(d), 0.01, 0.1)
+  for (f in list(fast_mr_heterogeneity, fast_mr_pleiotropy_test, fast_mr_singlesnp,
+                 fast_mr_leaveoneout, fast_mr_directionality_test)) {
+    expect_identical(serialize(f(d), NULL),
+                     serialize(with_old_groups(f(d)), NULL))
+  }
+})
