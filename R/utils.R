@@ -175,19 +175,30 @@ fastmr_tidy_native <- function(native_results, methods, id.exposure = "", id.out
   out
 }
 
-fastmr_tidy_compact <- function(native_results, methods, exposure_labels, outcome_labels) {
+# Tidy rows for pairs `first:last` (global, exposure-major pair numbers) of a
+# compact native result whose first column is global pair `pair_offset + 1`.
+# With the defaults this converts the whole result.
+fastmr_tidy_compact <- function(native_results, methods, exposure_labels, outcome_labels,
+                                first = 1L, last = NULL, pair_offset = 0) {
   method_codes <- as.character(native_results$methods)
   method_count <- length(method_codes)
-  pair_count <- length(exposure_labels) * length(outcome_labels)
-  total <- method_count * pair_count
-  pair_index <- rep(seq_len(pair_count), each = method_count)
-  exposure_index <- ((pair_index - 1L) %/% length(outcome_labels)) + 1L
-  outcome_index <- ((pair_index - 1L) %% length(outcome_labels)) + 1L
+  outcome_count <- length(outcome_labels)
+  pair_count <- length(exposure_labels) * outcome_count
+  if (is.null(last)) last <- pair_count
+  whole <- identical(first, 1L) && last == pair_count && pair_offset == 0
+  npairs <- last - first + 1
+  total <- method_count * npairs
+  pairs <- seq.int(as.integer(first), as.integer(last))
+  pair_index <- rep(pairs, each = method_count)
+  exposure_index <- ((pair_index - 1L) %/% outcome_count) + 1L
+  outcome_index <- ((pair_index - 1L) %% outcome_count) + 1L
   registry <- fastmr_method_registry()
-  code <- rep(method_codes, times = pair_count)
+  code <- rep(method_codes, times = npairs)
+  cols <- pairs - as.integer(pair_offset)
   values <- function(name, default = NA_real_) {
     if (is.null(native_results[[name]])) return(rep(default, total))
-    as.vector(native_results[[name]])
+    m <- native_results[[name]]
+    if (whole) as.vector(m) else as.vector(m[, cols, drop = FALSE])
   }
   nsnp <- if (!is.null(native_results$nsnp)) values("nsnp") else
     rep(as.numeric(native_results$n)[1L], total)
@@ -279,4 +290,148 @@ fastmr_native_call <- function(native, args, seed) {
   set.seed(seed)
   args[["seed"]] <- NULL
   do.call(native, args)
+}
+
+# Integer group codes for (id.exp, id.out) pairs, numbered by first appearance;
+# attr "n" holds the number of groups.
+fastmr_group_ids <- function(id.exp, id.out) {
+  a <- match(id.exp, unique(id.exp))
+  b <- match(id.out, unique(id.out))
+  key <- a + as.numeric(max(a, 0L)) * (b - 1)
+  gid <- match(key, unique(key))
+  attr(gid, "n") <- length(unique(key))
+  gid
+}
+
+# Methods whose native code draws random numbers when nboot > 0.
+fastmr_methods_use_rng <- function(methods, nboot) {
+  nboot > 0 && any(methods %in% c("simple_median", "weighted_median",
+                                  "penalised_weighted_median", "egger_bootstrap",
+                                  "simple_mode", "weighted_mode"))
+}
+
+# Vectorised equivalent of rbind-ing fastmr_tidy_native() per group, from the
+# flat group-major / method-minor output of fastmr_run_groups_native().
+fastmr_tidy_groups_native <- function(native, method_count, id.exposure, id.outcome) {
+  registry <- fastmr_method_registry()
+  code <- native$method
+  out <- data.frame(
+    id.exposure = rep(id.exposure, each = method_count),
+    id.outcome = rep(id.outcome, each = method_count),
+    method = registry$method[match(code, registry$code)],
+    method_code = code,
+    nsnp = native$n,
+    b = native$beta,
+    se = native$se,
+    pval = native$pval,
+    Q = native$Q,
+    Q_df = native$Q_df,
+    Q_pval = native$Q_pval,
+    sigma = native$sigma,
+    intercept = native$intercept,
+    intercept_se = native$intercept_se,
+    intercept_pval = native$intercept_pval,
+    ratio_se_mean = native$ratio_se_mean,
+    bootstrap = native$bootstrap,
+    phi = native$phi,
+    flipped = native$flipped,
+    se_exposure_mean = native$se_exposure_mean,
+    stringsAsFactors = FALSE
+  )
+  # rbind() of per-group frames yields attributes in the order names,
+  # row.names, class; reproduce it so serialize() output is byte-identical.
+  attrs <- attributes(out)
+  attributes(out) <- NULL
+  names(out) <- attrs$names
+  attr(out, "row.names") <- .set_row_names(length(attrs$row.names))  # compact c(NA, -n), as rbind
+  class(out) <- attrs$class
+  out
+}
+
+# ---- compact (lightweight) grid results and chunked tidy conversion --------
+
+fastmr_new_compact_grid <- function(native, methods, exposure_labels, outcome_labels) {
+  structure(
+    list(native = native, methods = methods,
+         exposure_labels = exposure_labels, outcome_labels = outcome_labels),
+    class = "fastmr_compact_grid"
+  )
+}
+
+fastmr_compact_pairs <- function(x) length(x$exposure_labels) * length(x$outcome_labels)
+
+# Iterator over tidy chunks of `chunk_pairs` pairs of a compact grid.
+fastmr_compact_chunks <- function(x, chunk_pairs) {
+  total <- fastmr_compact_pairs(x)
+  start <- 1
+  function() {
+    if (start > total) return(NULL)
+    end <- min(total, start + chunk_pairs - 1)
+    out <- fastmr_grid_chunk(x, start, end)
+    start <<- end + 1
+    out
+  }
+}
+
+# Iterator for IVW-only grids: native kernel per block of whole exposures
+# (about `chunk_pairs` pairs), tidied in sub-chunks of `chunk_pairs`.
+fastmr_ivw_blocks <- function(arrays, run_native, exposure_labels, outcome_labels,
+                              methods, chunk_pairs) {
+  O <- length(outcome_labels)
+  E <- length(exposure_labels)
+  block <- max(1, ceiling(chunk_pairs / O))
+  next_exp <- 1
+  cur <- NULL; cur_offset <- 0; cur_next <- 1; cur_last <- 0
+  function() {
+    if (is.null(cur) || cur_next > cur_last) {
+      if (next_exp > E) return(NULL)
+      e1 <- min(E, next_exp + block - 1)
+      idx <- next_exp:e1
+      cur <<- run_native(arrays$exposure_beta[idx, , drop = FALSE],
+                         arrays$exposure_se[idx, , drop = FALSE])
+      cur_offset <<- (next_exp - 1) * O
+      cur_next <<- cur_offset + 1
+      cur_last <<- e1 * O
+      next_exp <<- e1 + 1
+    }
+    end <- min(cur_last, cur_next + chunk_pairs - 1)
+    out <- fastmr_tidy_compact(cur, methods, exposure_labels, outcome_labels,
+                               first = cur_next, last = end, pair_offset = cur_offset)
+    cur_next <<- end + 1
+    out
+  }
+}
+
+#' Tidy rows for a range of pairs of a compact grid result
+#'
+#' Accessor for [fast_mr_grid()] results created with `return = "compact"`.
+#' Converts only pairs `first:last` (exposure-major pair numbers) to the tidy
+#' layout, identical to the corresponding rows of `as.data.frame(x)`.
+#' @param x A `fastmr_compact_grid` object.
+#' @param first,last First and last pair number (1-based, inclusive).
+#' @return A tidy data frame with `length(methods) * (last - first + 1)` rows.
+#' @export
+fastmr_grid_chunk <- function(x, first = 1, last = fastmr_compact_pairs(x)) {
+  if (!inherits(x, "fastmr_compact_grid")) stop("x must be a fastmr_compact_grid", call. = FALSE)
+  total <- fastmr_compact_pairs(x)
+  if (!is.numeric(first) || !is.numeric(last) || length(first) != 1L || length(last) != 1L ||
+      is.na(first) || is.na(last) || first < 1 || last > total || first > last) {
+    stop("first and last must satisfy 1 <= first <= last <= number of pairs", call. = FALSE)
+  }
+  fastmr_tidy_compact(x$native, x$methods, x$exposure_labels, x$outcome_labels,
+                      first = if (first == 1) 1L else first, last = last)
+}
+
+#' @export
+as.data.frame.fastmr_compact_grid <- function(x, ...) {
+  fastmr_tidy_grid_native(x$native, x$methods, x$exposure_labels, x$outcome_labels)
+}
+
+#' @export
+print.fastmr_compact_grid <- function(x, ...) {
+  cat(sprintf("<fastmr_compact_grid> %d exposures x %d outcomes = %.0f pairs, methods: %s\n",
+              length(x$exposure_labels), length(x$outcome_labels), fastmr_compact_pairs(x),
+              paste(as.character(x$native$methods), collapse = ", ")))
+  cat("Use as.data.frame() for the tidy table or fastmr_grid_chunk() for a pair range.\n")
+  invisible(x)
 }

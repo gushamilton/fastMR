@@ -23,6 +23,13 @@ fastmr_clump_position <- function(dat) {
   list(chr = chr, bp = bp)
 }
 
+# Greedy order within one exposure: exact CompreSSoR rank when the optional
+# `pvalue_rank` column is present, otherwise (p, SNP) with C-locale ties.
+fastmr_clump_order <- function(p, snp, rank = NULL) {
+  if (!is.null(rank)) return(order(rank, p, snp, method = "radix"))
+  order(p, snp, method = "radix")
+}
+
 fastmr_clump_pair_key <- function(a, b) {
   ifelse(a < b, paste0(a, "\r", b), paste0(b, "\r", a))
 }
@@ -46,6 +53,11 @@ fastmr_clump_read_vcor <- function(path, zstdcat = NULL) {
   fields <- strsplit(lines, "\t", fixed = TRUE)
   fields <- fields[vapply(fields, length, integer(1)) >= 6L]
   if (!length(fields)) return(data.frame(lead = character(), target = character(), stringsAsFactors = FALSE))
+  r2 <- suppressWarnings(as.numeric(vapply(fields, function(f) if (length(f) >= 7L) f[[7L]] else NA_character_, character(1))))
+  bad <- which(r2 > 1 + 1e-6)
+  if (length(bad)) {
+    fastmr_clump_warn_invalid_r2(length(bad), paste(fields[[bad[1L]]][c(3L, 6L, 7L)], collapse = " "))
+  }
   data.frame(lead = vapply(fields, `[[`, character(1), 3L),
              target = vapply(fields, `[[`, character(1), 6L),
              stringsAsFactors = FALSE)
@@ -70,7 +82,7 @@ fastmr_clump_run_frontier <- function(leads, targets, reference_args, plink2_bin
   writeLines(unique(as.character(targets)), target_file)
   args <- c(reference_args, "--extract", fastmr_clump_quote(target_file),
             "--ld-snp-list", fastmr_clump_quote(lead_file),
-            "--r2-unphased", "zs", "--ld-window-kb", format(clump_kb, trim = TRUE),
+            "--r2-phased", "zs", "--ld-window-kb", format(clump_kb, trim = TRUE),
             "--ld-window-r2", format(clump_r2, trim = TRUE), "--threads", as.integer(threads),
             "--out", fastmr_clump_quote(stem))
   output <- tryCatch(suppressWarnings(system2(plink2_bin, args, stdout = TRUE, stderr = TRUE)),
@@ -154,7 +166,7 @@ fast_clump_data_batched <- function(
   states <- lapply(exposure_ids, function(id) {
     ii <- which(as.character(dat$id.exposure) == id)
     ii <- ii[is.finite(p[ii]) & p[ii] <= clump_p1]
-    ii <- ii[order(p[ii], as.character(dat$SNP[ii]), method = "radix")]
+    ii <- ii[fastmr_clump_order(p[ii], as.character(dat$SNP[ii]), dat[["pvalue_rank"]][ii])]
     list(index = ii, dead = rep(FALSE, length(ii)))
   })
   names(states) <- exposure_ids
@@ -327,7 +339,7 @@ fast_clump_data_lead_rows <- function(
   states <- lapply(exposure_ids, function(id) {
     ii <- which(as.character(dat$id.exposure) == id)
     ii <- ii[is.finite(p[ii]) & p[ii] <= clump_p1]
-    ii <- ii[order(p[ii], as.character(dat$SNP[ii]), method = "radix")]
+    ii <- ii[fastmr_clump_order(p[ii], as.character(dat$SNP[ii]), dat[["pvalue_rank"]][ii])]
     list(index = ii, dead = rep(FALSE, length(ii)))
   })
   names(states) <- exposure_ids
@@ -522,6 +534,18 @@ fast_clump_data_batched_chromosomal <- function(dat, ...) {
   )
 }
 
+fastmr_have_compressor_fn <- function(name) {
+  exists(name, envir = asNamespace("CompreSSoR"), inherits = FALSE)
+}
+
+# CompreSSoR with one-pass candidate extraction (values, key, p and exact rank
+# for only the candidate rows; p bit-identical to read_sumstats()).
+fastmr_have_one_pass_candidates <- function() {
+  fastmr_have_compressor_fn("compressor_capabilities") &&
+    fastmr_have_compressor_fn("read_candidates_batch") &&
+    "candidates_one_pass" %in% CompreSSoR::compressor_capabilities()
+}
+
 fastmr_compressed_candidate_data <- function(paths, labels, pvalue_threshold,
                                               candidate_source, pvalue_order,
                                               io_threads) {
@@ -550,14 +574,24 @@ fastmr_compressed_candidate_data <- function(paths, labels, pvalue_threshold,
       flag_reader(store, threads = io_threads)
     })
   } else {
-    nrows <- vapply(stores, function(store) as.integer(fastmr_clump_default(store$manifest$n_rows, store$manifest$rows)), integer(1))
-    rows <- lapply(nrows, function(n) seq.int(0L, n - 1L))
+    rows <- NULL
   }
-  if (identical(pvalue_order, "require_exact")) {
-    # Pcodec 0.5 reconstructs p-values from the stored Z stream.  The exact
-    # order-preserving domain is tracked in CompreSSoR#45; do not claim exact
-    # clumping order until that API has both manifest metadata and a reader.
-    stop("exact p-value ordering is not available in the current CompreSSoR reader; resolve CompreSSoR#45 or use pvalue_order='reconstructed'", call. = FALSE)
+  exact_order <- identical(pvalue_order, "require_exact")
+  if (exact_order) {
+    # Exact ordering needs CompreSSoR's stored rank domain (CompreSSoR#45).
+    if (!fastmr_have_compressor_fn("read_pvalue_order")) {
+      stop("exact p-value ordering is not available in the installed CompreSSoR (no read_pvalue_order()); resolve CompreSSoR#45 or use pvalue_order='reconstructed'", call. = FALSE)
+    }
+    for (i in seq_along(stores)) {
+      domain <- fastmr_clump_default(stores[[i]]$manifest$domains, list())$pvalue_order
+      if (!is.list(domain) || is.null(domain$threshold)) {
+        stop("store '", labels[[i]], "' has no exact p-value ordering domain; rebuild it with pvalue_order=TRUE or use pvalue_order='reconstructed'", call. = FALSE)
+      }
+      if (pvalue_threshold > as.numeric(domain$threshold)) {
+        stop("pvalue_threshold (", pvalue_threshold, ") exceeds the exact p-value ordering domain threshold (",
+             as.numeric(domain$threshold), ") of store '", labels[[i]], "'", call. = FALSE)
+      }
+    }
   }
   columns <- c("chromosome", "base_pair_location", "effect_allele", "other_allele", "p_value")
   # The aligned flag returns immutable zero-based row IDs.  The current
@@ -566,14 +600,83 @@ fastmr_compressed_candidate_data <- function(paths, labels, pvalue_threshold,
   # concurrently.  This avoids a full variant-table scan just to translate
   # the flag rows back to keys.
   reader_threads <- if (length(paths) > 1L && io_threads > 1L) 1L else io_threads
+  have_candidates <- is.null(rows) && fastmr_have_compressor_fn("read_candidates")
   reader <- function(i) {
-    tryCatch(
-      CompreSSoR::read_sumstats(paths[[i]], variants = rows[[i]], columns = columns,
-                                threads = reader_threads),
-      error = function(e) stop("failed to read candidates from ", paths[[i]], ": ",
-                               conditionMessage(e), call. = FALSE)
-    )
+    tryCatch({
+      if (!is.null(rows)) {
+        x <- CompreSSoR::read_sumstats(paths[[i]], variants = rows[[i]], columns = columns,
+                                       threads = reader_threads)
+        attr(x, "fastmr_row") <- as.integer(rows[[i]])
+        return(x)
+      }
+      # Full-store candidates: avoid passing seq.int(0, n - 1) as `variants`
+      # (58 s / 6.4 GB per 10M-row store).  Same rows, same native order.
+      # read_candidates() only *selects* rows (with a hair of slack, since its
+      # erfc p can differ from read_sumstats() in the last ulp); the values
+      # and the final p <= threshold test come from read_sumstats(), so the
+      # result is identical to the full read.
+      slack <- min(1, pvalue_threshold * (1 + 1e-9))
+      sel <- NULL
+      if (have_candidates) {
+        sel <- tryCatch(
+          CompreSSoR::read_candidates(paths[[i]],
+                                      pvalue_threshold = slack,
+                                      columns = "base_pair_location", order = "none",
+                                      threads = reader_threads),
+          error = function(e) NULL)
+      }
+      if (is.data.frame(sel) && "row" %in% names(sel)) {
+        row <- as.integer(sel[["row"]])
+      } else {
+        pv <- CompreSSoR::read_sumstats(paths[[i]], columns = "p_value", threads = reader_threads)
+        pv <- suppressWarnings(as.numeric(pv[["p_value"]]))
+        row <- which(is.finite(pv) & pv <= slack) - 1L
+      }
+      x <- CompreSSoR::read_sumstats(paths[[i]], variants = if (length(row)) row else 0L,
+                                     columns = columns, threads = reader_threads)
+      if (!length(row)) x <- x[0L, , drop = FALSE]
+      if (nrow(x) != length(row)) stop("candidate selection/read row mismatch")
+      attr(x, "fastmr_row") <- row
+      x
+    }, error = function(e) stop("failed to read candidates from ", paths[[i]], ": ",
+                               conditionMessage(e), call. = FALSE))
   }
+  data <- NULL
+  if (is.null(rows) && fastmr_have_one_pass_candidates()) {
+    # One read_candidates_batch() per exposure batch: candidate rows, key, p and
+    # (for exact ordering) the exact rank in one block-selective pass per store,
+    # with same-panel identity decoded once.  No p slack is needed because p is
+    # bit-identical to the full read.
+    got <- tryCatch(
+      CompreSSoR::read_candidates_batch(
+        as.list(stats::setNames(paths, labels)), pvalue_threshold = pvalue_threshold,
+        columns = c("key", "p_value", "chromosome", "base_pair_location"),
+        order = if (exact_order) "exact" else "none", threads = io_threads),
+      error = function(e) NULL)
+    if (is.list(got) && length(got) == length(paths)) {
+      data <- lapply(seq_along(got), function(i) {
+        x <- got[[i]]
+        x <- x[order(x$row), , drop = FALSE]
+        p <- suppressWarnings(as.numeric(x[["p_value"]]))
+        keep <- is.finite(p) & p <= pvalue_threshold
+        out <- data.frame(SNP = x[["key"]][keep], id.exposure = rep(labels[[i]], sum(keep)),
+                          pval.exposure = p[keep],
+                          chr_name = as.character(x[["chromosome"]][keep]),
+                          chrom_start = as.numeric(x[["base_pair_location"]][keep]),
+                          stringsAsFactors = FALSE)
+        if (exact_order) {
+          rank <- x[["exact_rank"]][keep]
+          if (anyNA(rank) || any(rank <= 0L)) {
+            stop("store '", labels[[i]], "' has candidates without an exact p-value rank; cannot guarantee exact clumping order",
+                 call. = FALSE)
+          }
+          out$pvalue_rank <- as.integer(rank)
+        }
+        out
+      })
+    }
+  }
+  if (is.null(data)) {
   pieces <- if (.Platform$OS.type != "windows" && io_threads > 1L && length(paths) > 1L) {
     parallel::mclapply(seq_along(paths), reader,
                        mc.cores = min(io_threads, length(paths)), mc.preschedule = TRUE)
@@ -593,15 +696,31 @@ fastmr_compressed_candidate_data <- function(paths, labels, pvalue_threshold,
     )
     p <- suppressWarnings(as.numeric(x[["p_value"]]))
     keep <- is.finite(p) & p <= pvalue_threshold
-    data.frame(SNP = key[keep], id.exposure = labels[[i]], pval.exposure = p[keep],
-               chr_name = as.character(x[["chromosome"]][keep]),
-               chrom_start = as.numeric(x[["base_pair_location"]][keep]),
-               stringsAsFactors = FALSE)
+    out <- data.frame(SNP = key[keep], id.exposure = labels[[i]], pval.exposure = p[keep],
+                      chr_name = as.character(x[["chromosome"]][keep]),
+                      chrom_start = as.numeric(x[["base_pair_location"]][keep]),
+                      stringsAsFactors = FALSE)
+    if (exact_order) {
+      ranks <- CompreSSoR::read_pvalue_order(paths[[i]], as = "ranks", fallback = "error",
+                                             threads = reader_threads)
+      rank <- ranks[attr(x, "fastmr_row")[keep] + 1L]
+      if (anyNA(rank) || any(rank <= 0L)) {
+        stop("store '", labels[[i]], "' has candidates without an exact p-value rank; cannot guarantee exact clumping order",
+             call. = FALSE)
+      }
+      out$pvalue_rank <- as.integer(rank)
+    }
+    out
   })
+  }
   names(data) <- labels
+  if (exact_order) {
+    for (i in seq_along(data)) if (!"pvalue_rank" %in% names(data[[i]])) data[[i]]$pvalue_rank <- integer()
+  }
   list(data = do.call(rbind, data), stores = stores,
-       exact = FALSE,
-       source = if (identical(candidate_source, "pvalue_flag")) "pvalue_flag_then_reconstructed_p" else "full_store_reconstructed_p")
+       exact = exact_order,
+       source = paste0(if (identical(candidate_source, "pvalue_flag")) "pvalue_flag" else "full_store",
+                       if (exact_order) "_then_exact_rank_order" else "_then_reconstructed_p"))
 }
 
 #' Generate clumped instruments directly from Pcodec exposure stores
@@ -616,8 +735,14 @@ fastmr_compressed_candidate_data <- function(paths, labels, pvalue_threshold,
 #' @param pvalue_threshold Candidate p-value threshold.
 #' @param candidate_source `"pvalue_flag"` (default) or `"full"`.
 #' @param pvalue_order `"reconstructed"` (default) or `"require_exact"`.
+#'   The latter uses CompreSSoR's `read_pvalue_order()` rank domain when the
+#'   installed CompreSSoR and each store provide it, and errors otherwise.
 #' @param output Optional Parquet path for the clumped candidate table.
-#' @param partition `"global"` (default), `"chromosome"`, or `"lead_row"`.
+#' @param partition `"global"` (default), `"chromosome"`, `"lead_row"`, or
+#'   `"graph"` (recommended for large exposure sets: one PLINK2 all-pairs LD
+#'   call per chromosome plus a C++ greedy pass; falls back to lead-row mode
+#'   above `max_graph_pairs`, see [fast_clump_data_graph()]; instruments are
+#'   identical to the other partitions).
 #'   Chromosome partitioning avoids an unnecessarily large cross-chromosome
 #'   target union; lead-row mode shares only the LD row relevant to each
 #'   current lead and is preferable when exposures overlap substantially.
@@ -628,7 +753,7 @@ fast_clump_compressed <- function(
     exposure_files, pvalue_threshold = 5e-8,
     candidate_source = c("pvalue_flag", "full"),
     pvalue_order = c("reconstructed", "require_exact"), output = NULL,
-    partition = c("global", "chromosome", "lead_row"), ...) {
+    partition = c("global", "chromosome", "lead_row", "graph"), ...) {
   fastmr_require_compressor()
   paths <- fastmr_normalize_compressed_files(exposure_files, "exposure_files")
   pvalue_threshold <- fastmr_clump_number(pvalue_threshold, "pvalue_threshold", 0, 1)
@@ -650,7 +775,8 @@ fast_clump_compressed <- function(
   clump_fun <- switch(partition,
                       global = fast_clump_data_batched,
                       chromosome = fast_clump_data_batched_chromosomal,
-                      lead_row = fast_clump_data_lead_rows)
+                      lead_row = fast_clump_data_lead_rows,
+                      graph = fast_clump_data_graph)
   clumped <- do.call(clump_fun, c(list(dat = candidates$data), dots))
   if (!is.null(output)) fast_write_parquet(clumped$data, output)
   clumped$diagnostics$compressed_input <- list(

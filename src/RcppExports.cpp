@@ -10,6 +10,33 @@ Rcpp::Rostream<true>&  Rcpp::Rcout = Rcpp::Rcpp_cout_get();
 Rcpp::Rostream<false>& Rcpp::Rcerr = Rcpp::Rcpp_cerr_get();
 #endif
 
+// fastmr_vcor_read
+List fastmr_vcor_read(std::string path, CharacterVector ids);
+RcppExport SEXP _fastMR_fastmr_vcor_read(SEXP pathSEXP, SEXP idsSEXP) {
+BEGIN_RCPP
+    Rcpp::RObject rcpp_result_gen;
+    Rcpp::RNGScope rcpp_rngScope_gen;
+    Rcpp::traits::input_parameter< std::string >::type path(pathSEXP);
+    Rcpp::traits::input_parameter< CharacterVector >::type ids(idsSEXP);
+    rcpp_result_gen = Rcpp::wrap(fastmr_vcor_read(path, ids));
+    return rcpp_result_gen;
+END_RCPP
+}
+// fastmr_graph_clump
+LogicalVector fastmr_graph_clump(int n_snp, IntegerVector ea, IntegerVector eb, IntegerVector row_snp, IntegerVector exp_start);
+RcppExport SEXP _fastMR_fastmr_graph_clump(SEXP n_snpSEXP, SEXP eaSEXP, SEXP ebSEXP, SEXP row_snpSEXP, SEXP exp_startSEXP) {
+BEGIN_RCPP
+    Rcpp::RObject rcpp_result_gen;
+    Rcpp::RNGScope rcpp_rngScope_gen;
+    Rcpp::traits::input_parameter< int >::type n_snp(n_snpSEXP);
+    Rcpp::traits::input_parameter< IntegerVector >::type ea(eaSEXP);
+    Rcpp::traits::input_parameter< IntegerVector >::type eb(ebSEXP);
+    Rcpp::traits::input_parameter< IntegerVector >::type row_snp(row_snpSEXP);
+    Rcpp::traits::input_parameter< IntegerVector >::type exp_start(exp_startSEXP);
+    rcpp_result_gen = Rcpp::wrap(fastmr_graph_clump(n_snp, ea, eb, row_snp, exp_start));
+    return rcpp_result_gen;
+END_RCPP
+}
 // fastmr_run_native
 Rcpp::List fastmr_run_native(Rcpp::NumericVector exposure_beta, Rcpp::NumericVector outcome_beta, Rcpp::NumericVector exposure_se, Rcpp::NumericVector outcome_se, Rcpp::CharacterVector methods, int nboot, SEXP seed, int threads, double phi, double penk);
 RcppExport SEXP _fastMR_fastmr_run_native(SEXP exposure_betaSEXP, SEXP outcome_betaSEXP, SEXP exposure_seSEXP, SEXP outcome_seSEXP, SEXP methodsSEXP, SEXP nbootSEXP, SEXP seedSEXP, SEXP threadsSEXP, SEXP phiSEXP, SEXP penkSEXP) {
@@ -67,8 +94,8 @@ BEGIN_RCPP
 END_RCPP
 }
 // fastmr_sparse_ivw_native
-Rcpp::List fastmr_sparse_ivw_native(Rcpp::IntegerVector row_ptr, Rcpp::IntegerVector col_index, Rcpp::NumericVector exposure_beta, Rcpp::NumericMatrix outcome_beta, Rcpp::NumericMatrix outcome_se, Rcpp::LogicalMatrix outcome_present, int threads);
-RcppExport SEXP _fastMR_fastmr_sparse_ivw_native(SEXP row_ptrSEXP, SEXP col_indexSEXP, SEXP exposure_betaSEXP, SEXP outcome_betaSEXP, SEXP outcome_seSEXP, SEXP outcome_presentSEXP, SEXP threadsSEXP) {
+Rcpp::List fastmr_sparse_ivw_native(Rcpp::IntegerVector row_ptr, Rcpp::IntegerVector col_index, Rcpp::NumericVector exposure_beta, Rcpp::NumericMatrix outcome_beta, Rcpp::NumericMatrix outcome_se, Rcpp::LogicalMatrix outcome_present, int threads, Rcpp::Nullable<Rcpp::LogicalMatrix> pair_snp_keep, Rcpp::Nullable<Rcpp::NumericVector> steiger_exposure_rsq, Rcpp::Nullable<Rcpp::NumericMatrix> steiger_outcome_rsq, Rcpp::Nullable<Rcpp::IntegerVector> drop_outcome, Rcpp::Nullable<Rcpp::IntegerVector> drop_entry);
+RcppExport SEXP _fastMR_fastmr_sparse_ivw_native(SEXP row_ptrSEXP, SEXP col_indexSEXP, SEXP exposure_betaSEXP, SEXP outcome_betaSEXP, SEXP outcome_seSEXP, SEXP outcome_presentSEXP, SEXP threadsSEXP, SEXP pair_snp_keepSEXP, SEXP steiger_exposure_rsqSEXP, SEXP steiger_outcome_rsqSEXP, SEXP drop_outcomeSEXP, SEXP drop_entrySEXP) {
 BEGIN_RCPP
     Rcpp::RObject rcpp_result_gen;
     Rcpp::RNGScope rcpp_rngScope_gen;
@@ -79,16 +106,116 @@ BEGIN_RCPP
     Rcpp::traits::input_parameter< Rcpp::NumericMatrix >::type outcome_se(outcome_seSEXP);
     Rcpp::traits::input_parameter< Rcpp::LogicalMatrix >::type outcome_present(outcome_presentSEXP);
     Rcpp::traits::input_parameter< int >::type threads(threadsSEXP);
-    rcpp_result_gen = Rcpp::wrap(fastmr_sparse_ivw_native(row_ptr, col_index, exposure_beta, outcome_beta, outcome_se, outcome_present, threads));
+    Rcpp::traits::input_parameter< Rcpp::Nullable<Rcpp::LogicalMatrix> >::type pair_snp_keep(pair_snp_keepSEXP);
+    Rcpp::traits::input_parameter< Rcpp::Nullable<Rcpp::NumericVector> >::type steiger_exposure_rsq(steiger_exposure_rsqSEXP);
+    Rcpp::traits::input_parameter< Rcpp::Nullable<Rcpp::NumericMatrix> >::type steiger_outcome_rsq(steiger_outcome_rsqSEXP);
+    Rcpp::traits::input_parameter< Rcpp::Nullable<Rcpp::IntegerVector> >::type drop_outcome(drop_outcomeSEXP);
+    Rcpp::traits::input_parameter< Rcpp::Nullable<Rcpp::IntegerVector> >::type drop_entry(drop_entrySEXP);
+    rcpp_result_gen = Rcpp::wrap(fastmr_sparse_ivw_native(row_ptr, col_index, exposure_beta, outcome_beta, outcome_se, outcome_present, threads, pair_snp_keep, steiger_exposure_rsq, steiger_outcome_rsq, drop_outcome, drop_entry));
+    return rcpp_result_gen;
+END_RCPP
+}
+// fastmr_run_groups_native
+Rcpp::List fastmr_run_groups_native(Rcpp::IntegerVector offsets, Rcpp::NumericVector exposure_beta, Rcpp::NumericVector outcome_beta, Rcpp::NumericVector exposure_se, Rcpp::NumericVector outcome_se, Rcpp::CharacterVector methods, int nboot, int threads, double phi, double penk);
+RcppExport SEXP _fastMR_fastmr_run_groups_native(SEXP offsetsSEXP, SEXP exposure_betaSEXP, SEXP outcome_betaSEXP, SEXP exposure_seSEXP, SEXP outcome_seSEXP, SEXP methodsSEXP, SEXP nbootSEXP, SEXP threadsSEXP, SEXP phiSEXP, SEXP penkSEXP) {
+BEGIN_RCPP
+    Rcpp::RObject rcpp_result_gen;
+    Rcpp::RNGScope rcpp_rngScope_gen;
+    Rcpp::traits::input_parameter< Rcpp::IntegerVector >::type offsets(offsetsSEXP);
+    Rcpp::traits::input_parameter< Rcpp::NumericVector >::type exposure_beta(exposure_betaSEXP);
+    Rcpp::traits::input_parameter< Rcpp::NumericVector >::type outcome_beta(outcome_betaSEXP);
+    Rcpp::traits::input_parameter< Rcpp::NumericVector >::type exposure_se(exposure_seSEXP);
+    Rcpp::traits::input_parameter< Rcpp::NumericVector >::type outcome_se(outcome_seSEXP);
+    Rcpp::traits::input_parameter< Rcpp::CharacterVector >::type methods(methodsSEXP);
+    Rcpp::traits::input_parameter< int >::type nboot(nbootSEXP);
+    Rcpp::traits::input_parameter< int >::type threads(threadsSEXP);
+    Rcpp::traits::input_parameter< double >::type phi(phiSEXP);
+    Rcpp::traits::input_parameter< double >::type penk(penkSEXP);
+    rcpp_result_gen = Rcpp::wrap(fastmr_run_groups_native(offsets, exposure_beta, outcome_beta, exposure_se, outcome_se, methods, nboot, threads, phi, penk));
+    return rcpp_result_gen;
+END_RCPP
+}
+// fastmr_run_groups_drop_native
+Rcpp::List fastmr_run_groups_drop_native(Rcpp::IntegerVector offsets, Rcpp::NumericVector exposure_beta, Rcpp::NumericVector outcome_beta, Rcpp::NumericVector exposure_se, Rcpp::NumericVector outcome_se, Rcpp::IntegerVector job_group, Rcpp::IntegerVector job_drop, Rcpp::CharacterVector methods, int threads, double phi, double penk);
+RcppExport SEXP _fastMR_fastmr_run_groups_drop_native(SEXP offsetsSEXP, SEXP exposure_betaSEXP, SEXP outcome_betaSEXP, SEXP exposure_seSEXP, SEXP outcome_seSEXP, SEXP job_groupSEXP, SEXP job_dropSEXP, SEXP methodsSEXP, SEXP threadsSEXP, SEXP phiSEXP, SEXP penkSEXP) {
+BEGIN_RCPP
+    Rcpp::RObject rcpp_result_gen;
+    Rcpp::RNGScope rcpp_rngScope_gen;
+    Rcpp::traits::input_parameter< Rcpp::IntegerVector >::type offsets(offsetsSEXP);
+    Rcpp::traits::input_parameter< Rcpp::NumericVector >::type exposure_beta(exposure_betaSEXP);
+    Rcpp::traits::input_parameter< Rcpp::NumericVector >::type outcome_beta(outcome_betaSEXP);
+    Rcpp::traits::input_parameter< Rcpp::NumericVector >::type exposure_se(exposure_seSEXP);
+    Rcpp::traits::input_parameter< Rcpp::NumericVector >::type outcome_se(outcome_seSEXP);
+    Rcpp::traits::input_parameter< Rcpp::IntegerVector >::type job_group(job_groupSEXP);
+    Rcpp::traits::input_parameter< Rcpp::IntegerVector >::type job_drop(job_dropSEXP);
+    Rcpp::traits::input_parameter< Rcpp::CharacterVector >::type methods(methodsSEXP);
+    Rcpp::traits::input_parameter< int >::type threads(threadsSEXP);
+    Rcpp::traits::input_parameter< double >::type phi(phiSEXP);
+    Rcpp::traits::input_parameter< double >::type penk(penkSEXP);
+    rcpp_result_gen = Rcpp::wrap(fastmr_run_groups_drop_native(offsets, exposure_beta, outcome_beta, exposure_se, outcome_se, job_group, job_drop, methods, threads, phi, penk));
+    return rcpp_result_gen;
+END_RCPP
+}
+// fastmr_group_sum_native
+Rcpp::NumericVector fastmr_group_sum_native(Rcpp::IntegerVector offsets, Rcpp::NumericVector x, bool narm);
+RcppExport SEXP _fastMR_fastmr_group_sum_native(SEXP offsetsSEXP, SEXP xSEXP, SEXP narmSEXP) {
+BEGIN_RCPP
+    Rcpp::RObject rcpp_result_gen;
+    Rcpp::RNGScope rcpp_rngScope_gen;
+    Rcpp::traits::input_parameter< Rcpp::IntegerVector >::type offsets(offsetsSEXP);
+    Rcpp::traits::input_parameter< Rcpp::NumericVector >::type x(xSEXP);
+    Rcpp::traits::input_parameter< bool >::type narm(narmSEXP);
+    rcpp_result_gen = Rcpp::wrap(fastmr_group_sum_native(offsets, x, narm));
+    return rcpp_result_gen;
+END_RCPP
+}
+// fastmr_group_mean_native
+Rcpp::NumericVector fastmr_group_mean_native(Rcpp::IntegerVector offsets, Rcpp::NumericVector x);
+RcppExport SEXP _fastMR_fastmr_group_mean_native(SEXP offsetsSEXP, SEXP xSEXP) {
+BEGIN_RCPP
+    Rcpp::RObject rcpp_result_gen;
+    Rcpp::RNGScope rcpp_rngScope_gen;
+    Rcpp::traits::input_parameter< Rcpp::IntegerVector >::type offsets(offsetsSEXP);
+    Rcpp::traits::input_parameter< Rcpp::NumericVector >::type x(xSEXP);
+    rcpp_result_gen = Rcpp::wrap(fastmr_group_mean_native(offsets, x));
+    return rcpp_result_gen;
+END_RCPP
+}
+// fastmr_run_groups_boot_native
+Rcpp::List fastmr_run_groups_boot_native(Rcpp::IntegerVector offsets, Rcpp::NumericVector exposure_beta, Rcpp::NumericVector outcome_beta, Rcpp::NumericVector exposure_se, Rcpp::NumericVector outcome_se, Rcpp::CharacterVector methods, int nboot, int threads, double phi, double penk, SEXP reseed, double batch_draws);
+RcppExport SEXP _fastMR_fastmr_run_groups_boot_native(SEXP offsetsSEXP, SEXP exposure_betaSEXP, SEXP outcome_betaSEXP, SEXP exposure_seSEXP, SEXP outcome_seSEXP, SEXP methodsSEXP, SEXP nbootSEXP, SEXP threadsSEXP, SEXP phiSEXP, SEXP penkSEXP, SEXP reseedSEXP, SEXP batch_drawsSEXP) {
+BEGIN_RCPP
+    Rcpp::RObject rcpp_result_gen;
+    Rcpp::RNGScope rcpp_rngScope_gen;
+    Rcpp::traits::input_parameter< Rcpp::IntegerVector >::type offsets(offsetsSEXP);
+    Rcpp::traits::input_parameter< Rcpp::NumericVector >::type exposure_beta(exposure_betaSEXP);
+    Rcpp::traits::input_parameter< Rcpp::NumericVector >::type outcome_beta(outcome_betaSEXP);
+    Rcpp::traits::input_parameter< Rcpp::NumericVector >::type exposure_se(exposure_seSEXP);
+    Rcpp::traits::input_parameter< Rcpp::NumericVector >::type outcome_se(outcome_seSEXP);
+    Rcpp::traits::input_parameter< Rcpp::CharacterVector >::type methods(methodsSEXP);
+    Rcpp::traits::input_parameter< int >::type nboot(nbootSEXP);
+    Rcpp::traits::input_parameter< int >::type threads(threadsSEXP);
+    Rcpp::traits::input_parameter< double >::type phi(phiSEXP);
+    Rcpp::traits::input_parameter< double >::type penk(penkSEXP);
+    Rcpp::traits::input_parameter< SEXP >::type reseed(reseedSEXP);
+    Rcpp::traits::input_parameter< double >::type batch_draws(batch_drawsSEXP);
+    rcpp_result_gen = Rcpp::wrap(fastmr_run_groups_boot_native(offsets, exposure_beta, outcome_beta, exposure_se, outcome_se, methods, nboot, threads, phi, penk, reseed, batch_draws));
     return rcpp_result_gen;
 END_RCPP
 }
 
 static const R_CallMethodDef CallEntries[] = {
+    {"_fastMR_fastmr_vcor_read", (DL_FUNC) &_fastMR_fastmr_vcor_read, 2},
+    {"_fastMR_fastmr_graph_clump", (DL_FUNC) &_fastMR_fastmr_graph_clump, 5},
     {"_fastMR_fastmr_run_native", (DL_FUNC) &_fastMR_fastmr_run_native, 10},
     {"_fastMR_fastmr_grid_native", (DL_FUNC) &_fastMR_fastmr_grid_native, 10},
     {"_fastMR_fastmr_masked_ivw_native", (DL_FUNC) &_fastMR_fastmr_masked_ivw_native, 6},
-    {"_fastMR_fastmr_sparse_ivw_native", (DL_FUNC) &_fastMR_fastmr_sparse_ivw_native, 7},
+    {"_fastMR_fastmr_sparse_ivw_native", (DL_FUNC) &_fastMR_fastmr_sparse_ivw_native, 12},
+    {"_fastMR_fastmr_run_groups_native", (DL_FUNC) &_fastMR_fastmr_run_groups_native, 10},
+    {"_fastMR_fastmr_run_groups_drop_native", (DL_FUNC) &_fastMR_fastmr_run_groups_drop_native, 11},
+    {"_fastMR_fastmr_group_sum_native", (DL_FUNC) &_fastMR_fastmr_group_sum_native, 3},
+    {"_fastMR_fastmr_group_mean_native", (DL_FUNC) &_fastMR_fastmr_group_mean_native, 2},
+    {"_fastMR_fastmr_run_groups_boot_native", (DL_FUNC) &_fastMR_fastmr_run_groups_boot_native, 12},
     {NULL, NULL, 0}
 };
 

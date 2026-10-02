@@ -5,5 +5,7 @@
 ^fastMR\.Rcheck$
 ^benchmarks$
 ^outputs$
+^results$
 ^HANDOFF\.md$
 ^.*\.tar\.gz$
+^slurm$

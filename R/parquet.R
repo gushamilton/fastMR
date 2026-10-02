@@ -29,6 +29,9 @@ fast_read_parquet <- function(path) {
 #'   [arrow::write_parquet()]. Defaults to `"zstd"`.
 #' @param compression_level Optional codec compression level.
 #' @param overwrite Whether an existing destination may be replaced.
+#' @param chunk_pairs Only for a `fastmr_compact_grid` input: grid pairs
+#'   converted and written per row group (default 1e6), keeping peak memory
+#'   near one chunk instead of the whole tidy table.
 #' @return The normalized destination path, invisibly.
 #' @export
 fast_write_parquet <- function(
@@ -36,11 +39,13 @@ fast_write_parquet <- function(
     path,
     compression = "zstd",
     compression_level = NULL,
-    overwrite = FALSE) {
+    overwrite = FALSE,
+    chunk_pairs = 1e6) {
   if (!requireNamespace("arrow", quietly = TRUE)) {
     stop("fast_write_parquet() requires the optional 'arrow' package; install.packages('arrow')", call. = FALSE)
   }
-  if (!is.data.frame(x)) {
+  compact <- inherits(x, "fastmr_compact_grid")
+  if (!compact && !is.data.frame(x)) {
     stop("x must be a data.frame", call. = FALSE)
   }
   if (length(path) != 1L || !is.character(path) || is.na(path) || !nzchar(path)) {
@@ -67,6 +72,11 @@ fast_write_parquet <- function(
   if (file.exists(path) && !isTRUE(overwrite)) {
     stop("destination already exists; set overwrite = TRUE to replace it", call. = FALSE)
   }
+  if (compact) {
+    return(fastmr_stream_parquet(fastmr_compact_chunks(x, chunk_pairs), path,
+                                 compression = compression,
+                                 compression_level = compression_level))
+  }
   # `compressed_input` is useful on the returned object, but Arrow otherwise
   # serializes it as R-specific schema metadata. Keep result files portable
   # and avoid duplicating potentially large instrument lists in every output.
@@ -78,6 +88,47 @@ fast_write_parquet <- function(
     compression = compression,
     compression_level = compression_level
   )
+  invisible(path)
+}
+
+# Stream tidy chunks to one Parquet file, one row group per chunk. `next_chunk`
+# is a function returning a data.frame, or NULL when exhausted. The path must
+# already be validated/normalised (fast_write_parquet) or is checked here.
+fastmr_stream_parquet <- function(next_chunk, path, compression = "zstd",
+                                  compression_level = NULL) {
+  if (!requireNamespace("arrow", quietly = TRUE)) {
+    stop("streamed Parquet output requires the optional 'arrow' package; install.packages('arrow')", call. = FALSE)
+  }
+  if (!file.exists(path)) {
+    path <- path.expand(path)
+    parent <- dirname(path)
+    if (!dir.exists(parent)) stop("the destination directory does not exist: ", parent, call. = FALSE)
+    path <- file.path(normalizePath(parent, mustWork = TRUE), basename(path))
+  }
+  if (file.exists(path)) {
+    stop("destination already exists; set overwrite = TRUE to replace it", call. = FALSE)
+  }
+  writer <- NULL
+  sink <- NULL
+  done <- FALSE
+  on.exit({
+    if (!is.null(writer)) try(writer$Close(), silent = TRUE)
+    if (!is.null(sink)) try(sink$close(), silent = TRUE)
+    if (!done && file.exists(path)) unlink(path)
+  }, add = TRUE)
+  repeat {
+    chunk <- next_chunk()
+    if (is.null(chunk)) break
+    tbl <- arrow::Table$create(chunk)
+    if (is.null(writer)) {
+      sink <- arrow::FileOutputStream$create(path)
+      props <- arrow::ParquetWriterProperties$create(
+        names(chunk), compression = compression, compression_level = compression_level)
+      writer <- arrow::ParquetFileWriter$create(tbl$schema, sink, properties = props)
+    }
+    writer$WriteTable(tbl, chunk_size = max(1L, nrow(chunk)))
+  }
+  done <- TRUE
   invisible(path)
 }
 

@@ -136,13 +136,10 @@ fastmr_validate_csr <- function(row_ptr, col_index, exposure_beta,
     stop("col_index must contain zero-based SNP indices in the outcome range",
          call. = FALSE)
   }
-  for (i in seq_len(length(row_ptr) - 1L)) {
-    first <- row_ptr[[i]] + 1L
-    last <- row_ptr[[i + 1L]]
-    indices <- if (first <= last) col_index[seq.int(first, last)] else integer()
-    if (anyDuplicated(indices)) {
-      stop("CSR rows must not contain duplicate SNP indices", call. = FALSE)
-    }
+  # One duplicate scan over (row, SNP) keys instead of one per CSR row.
+  csr_row <- rep.int(seq_len(length(row_ptr) - 1L), diff(row_ptr))
+  if (anyDuplicated(csr_row * as.numeric(snp_count) + col_index)) {
+    stop("CSR rows must not contain duplicate SNP indices", call. = FALSE)
   }
   valid_outcome <- outcome_present &
     (!is.finite(outcome_beta) | !is.finite(outcome_se) | outcome_se <= 0)
@@ -152,6 +149,24 @@ fastmr_validate_csr <- function(row_ptr, col_index, exposure_beta,
   }
   list(row_ptr = row_ptr, col_index = col_index,
        exposure_beta = as.numeric(exposure_beta))
+}
+
+fastmr_validate_pair_snp_keep <- function(pair_snp_keep, outcome_count,
+                                          entry_count) {
+  if (is.null(pair_snp_keep)) return(NULL)
+  pair_snp_keep <- as.matrix(pair_snp_keep)
+  if (!is.logical(pair_snp_keep)) {
+    stop("pair_snp_keep must be a logical matrix", call. = FALSE)
+  }
+  expected_dim <- c(outcome_count, entry_count)
+  if (!identical(dim(pair_snp_keep), expected_dim)) {
+    stop("pair_snp_keep must have one row per outcome and one column per CSR entry",
+         call. = FALSE)
+  }
+  if (anyNA(pair_snp_keep)) {
+    stop("pair_snp_keep must not contain NA", call. = FALSE)
+  }
+  pair_snp_keep
 }
 
 #' Run low-memory IVW over masked exposure and outcome matrices
@@ -215,13 +230,38 @@ fast_mr_masked_ivw <- function(exposure_beta, outcome_beta, outcome_se,
 #'   prevents accidentally materialising an unbounded all-by-all result.
 #' @param max_memory_mb Conservative bound for native result workspace,
 #'   excluding input matrices already held by R.
+#' @param pair_snp_keep Optional logical `O x N` matrix, where `N` is
+#'   `length(col_index)`. Row `o` and column `k` determine whether outcome `o`
+#'   keeps the SNP stored at CSR entry `k`. This is indexed by concatenated CSR
+#'   entry, not SNP column, so each exposure row uses only the columns between
+#'   its adjacent `row_ptr` offsets. `NA` is rejected. `NULL` keeps every entry.
+#' @param steiger_exposure_rsq Optional numeric vector of exposure R-squared
+#'   values, one per CSR entry (parallel to `col_index`).
+#' @param steiger_outcome_rsq Optional numeric `O x S` matrix of outcome
+#'   R-squared values, indexed like `outcome_beta`. When both Steiger arguments
+#'   are supplied, outcome `o` keeps CSR entry `k` (SNP `s`) only if
+#'   `steiger_exposure_rsq[k] > steiger_outcome_rsq[o, s]`. `NA` in either
+#'   value drops the entry, matching `subset(steiger_dir)` after
+#'   [fast_mr_steiger_filtering()]. The comparison is evaluated inside the
+#'   native kernel; no `O x N` matrix is allocated. See
+#'   [fast_mr_steiger_rsq_matrix()] to compute these inputs.
+#' @param pair_snp_drop Optional memory-light list `list(outcome = <int>,
+#'   entry = <int>)` of equal-length, **1-based** integer vectors naming
+#'   outcome rows and concatenated CSR entries to drop. Combined with
+#'   `pair_snp_keep` and the Steiger arguments by logical AND of keeps.
 #' @return A `fastmr_sparse_ivw_compact` list containing `nsnp`, `beta`, `se`,
-#'   `Q`, and `sigma`, each an `E x O` matrix.
+#'   `Q`, and `sigma`, each an `E x O` matrix. `nsnp` is the post-filter count.
+#'   When the Steiger arguments or `pair_snp_drop` are used, an extra `nsnp_prefilter` matrix gives the count of present outcome
+#'   values before those filters; without filters the element set is unchanged.
 #' @export
 fast_mr_sparse_ivw <- function(row_ptr, col_index, exposure_beta,
                                outcome_beta, outcome_se, outcome_present,
                                threads = 1L, max_output_cells = 1e8,
-                               max_memory_mb = 2048) {
+                               max_memory_mb = 2048,
+                               pair_snp_keep = NULL,
+                               steiger_exposure_rsq = NULL,
+                               steiger_outcome_rsq = NULL,
+                               pair_snp_drop = NULL) {
   outcome_beta <- fastmr_matrix_numeric(outcome_beta, "outcome_beta")
   outcome_se <- fastmr_matrix_numeric(outcome_se, "outcome_se")
   outcome_present <- as.matrix(outcome_present)
@@ -250,6 +290,35 @@ fast_mr_sparse_ivw <- function(row_ptr, col_index, exposure_beta,
     row_ptr, col_index, exposure_beta, outcome_beta, outcome_se,
     outcome_present
   )
+  pair_snp_keep <- fastmr_validate_pair_snp_keep(
+    pair_snp_keep, nrow(outcome_beta), length(csr$col_index)
+  )
+  if (xor(is.null(steiger_exposure_rsq), is.null(steiger_outcome_rsq))) {
+    stop("steiger_exposure_rsq and steiger_outcome_rsq must be supplied together",
+         call. = FALSE)
+  }
+  if (!is.null(steiger_exposure_rsq)) {
+    steiger_exposure_rsq <- as.numeric(steiger_exposure_rsq)
+    if (length(steiger_exposure_rsq) != length(csr$col_index)) {
+      stop("steiger_exposure_rsq must have one value per CSR entry", call. = FALSE)
+    }
+    steiger_outcome_rsq <- fastmr_matrix_numeric(
+      steiger_outcome_rsq, "steiger_outcome_rsq")
+    if (!identical(dim(steiger_outcome_rsq), dim(outcome_beta))) {
+      stop("steiger_outcome_rsq must have the same dimensions as outcome_beta",
+           call. = FALSE)
+    }
+  }
+  drop_outcome <- drop_entry <- NULL
+  if (!is.null(pair_snp_drop)) {
+    if (!is.list(pair_snp_drop) ||
+        !setequal(names(pair_snp_drop), c("outcome", "entry"))) {
+      stop("pair_snp_drop must be list(outcome = <int>, entry = <int>)",
+           call. = FALSE)
+    }
+    drop_outcome <- fastmr_validate_csr_integer(pair_snp_drop$outcome, "pair_snp_drop$outcome")
+    drop_entry <- fastmr_validate_csr_integer(pair_snp_drop$entry, "pair_snp_drop$entry")
+  }
   controls <- fastmr_validate_controls(0L, NULL, threads)
   fastmr_check_batch_bounds(
     length(csr$row_ptr) - 1L, nrow(outcome_beta), ncol(outcome_beta),
@@ -260,14 +329,43 @@ fast_mr_sparse_ivw <- function(row_ptr, col_index, exposure_beta,
     list(row_ptr = csr$row_ptr, col_index = csr$col_index,
          exposure_beta = csr$exposure_beta, outcome_beta = outcome_beta,
          outcome_se = outcome_se, outcome_present = outcome_present,
-         threads = controls$threads),
+         threads = controls$threads, pair_snp_keep = pair_snp_keep,
+         steiger_exposure_rsq = steiger_exposure_rsq,
+         steiger_outcome_rsq = steiger_outcome_rsq,
+         drop_outcome = drop_outcome, drop_entry = drop_entry),
     NULL
   )
   exposure_names <- NULL
   outcome_names <- rownames(outcome_beta)
   if (is.null(outcome_names)) outcome_names <- seq_len(nrow(outcome_beta))
-  for (name in c("nsnp", "beta", "se", "Q", "sigma")) {
+  for (name in intersect(c("nsnp", "nsnp_prefilter", "beta", "se", "Q", "sigma"),
+                         names(result))) {
     dimnames(result[[name]]) <- list(exposure_names, outcome_names)
   }
   result
+}
+
+#' Per-SNP Steiger R-squared inputs for [fast_mr_sparse_ivw()]
+#'
+#' Thin wrapper over [fast_mr_steiger_r2()] returning only `rsq`, preserving
+#' the shape of matrix input. Use it on per-CSR-entry exposure vectors and on
+#' the `O x S` outcome matrices, then pass the results as
+#' `steiger_exposure_rsq` / `steiger_outcome_rsq`. Invalid inputs give `NA`,
+#' which the sparse kernel treats as drop.
+#'
+#' @inheritParams fast_mr_steiger_r2
+#' @return Numeric R-squared values with the dimensions of `beta`.
+#' @export
+fast_mr_steiger_rsq_matrix <- function(beta, se = NULL, n = NULL, eaf = NULL,
+                                       model = c("continuous_bsen", "standardized",
+                                                 "binary_lor"),
+                                       prevalence = NULL, ncase = NULL,
+                                       ncontrol = NULL) {
+  model <- match.arg(model)
+  flat <- function(x) if (is.null(x)) NULL else as.numeric(x)
+  rsq <- fast_mr_steiger_r2(
+    as.numeric(beta), flat(se), flat(n), flat(eaf), model = model,
+    prevalence = prevalence, ncase = ncase, ncontrol = ncontrol)$rsq
+  if (!is.null(dim(beta))) dim(rsq) <- dim(beta)
+  rsq
 }

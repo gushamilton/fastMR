@@ -14,6 +14,8 @@ fast_mr_grid(
   seed = NULL,
   threads = 1,
   output = NULL,
+  return = c("tidy", "compact", "none"),
+  chunk_pairs = 1e+06,
   ...
 )
 }
@@ -35,14 +37,35 @@ fast_mr_grid(
 \item{threads}{Maximum native worker count.}
 
 \item{output}{Optional path for a Zstandard-compressed Parquet copy of the
-result. The path must not already exist; use \code{\link{fast_write_parquet}} when
+result. The path must not already exist; use \code{\link[=fast_write_parquet]{fast_write_parquet()}} when
 an overwrite or another compression codec is required.}
+
+\item{return}{What to return. \code{"tidy"} (default) is the full tidy data frame.
+\code{"compact"} returns a light \code{fastmr_compact_grid} object (see
+\code{\link[=fastmr_grid_chunk]{fastmr_grid_chunk()}}) that converts to the identical tidy data frame via
+\code{as.data.frame()}. \code{"none"} requires \code{output} and returns the path
+invisibly. Streamed IVW-only output (\code{return = "none"}) is computed in
+exposure blocks and equals the tidy result to about 1e-15 relative (a
+blocked BLAS \code{dgemm}, e.g. OpenBLAS, can differ in the last bits); it is
+identical when the grid is not blocked.}
+
+\item{chunk_pairs}{Number of grid pairs converted to tidy form per Parquet
+row group when a non-\code{"tidy"} \code{return} is combined with \code{output}
+(default 1e6). Only the tidy conversion is chunked, so results are
+identical for every chunk size. For IVW-only grids the native kernel is
+also run in exposure blocks of about \code{chunk_pairs} pairs, which is
+deterministic and pair-independent (blocked results agree with the
+unblocked ones to about 1e-15 relative, see \code{return}); other methods
+(including seeded bootstraps) always use one native call.}
 
 \item{...}{Optional \code{phi} bandwidth multiplier for mode methods and \code{penk}
 penalty multiplier for penalised weighted median (default 20).}
 }
 \value{
-A tidy data frame with one row per method and grid pair.
+With \code{return = "tidy"}, a tidy data frame with one row per method
+and grid pair; see \code{return} for the other modes. With \code{return != "tidy"}
+and \code{output}, the Parquet file is written in row groups of \code{chunk_pairs}
+pairs (Zstandard compressed, schema identical to the tidy output).
 }
 \description{
 Matrix rows are exposures/outcomes and columns are shared SNPs. Results are

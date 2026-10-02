@@ -203,6 +203,19 @@ For p-value thresholds such as 0.01, use `candidate_source = "full"` only for
 small stores or a future regional cis-selection helper; the 5e-8 flag is not a
 general p <= 0.01 index.
 
+For large exposure sets pass `partition = "graph"` (recommended; the default
+stays `"global"`). It issues one PLINK2 `--r2-phased` all-pairs call per
+chromosome over the union of candidate SNPs (`--ld-window-kb` = `clump_kb`,
+`--ld-window-r2` = `clump_r2`, a very large `--ld-window`), then clumps each
+exposure in C++ against that graph in the same exact (p, SNP) order, so the
+instruments are identical to `"global"` and `"lead_row"`. Chromosomes whose
+estimated pair count exceeds `max_graph_pairs` (default 5e7) fall back to
+lead-row mode, with the reason in `diagnostics$fallbacks`;
+`diagnostics$ld_provenance` records the PLINK2 version, LD flags, reference and
+manifest MD5. With `pvalue_order = "require_exact"` the exact CompreSSoR rank
+domain (`read_pvalue_order()`) is used when the stores carry it; otherwise the
+call errors.
+
 The reproducible I/O benchmark uses a frozen panel of 25 real FinnGen
 index variants selected at p < 1e-5 and clumped against GRCh38 1000 Genomes
 EUR (r2 < 0.001, 10 Mb); it does not ask the compressed reader to discover
@@ -459,6 +472,10 @@ with the reproducible script at
   naturally stored as a zero-based CSR panel. Both return compact `E x O`
   matrices and reject oversized output/native workspaces before allocation;
   process outcomes in batches when the limits are exceeded.
+- Sparse scans can pass `pair_snp_keep` as an outcome-by-stored-entry logical
+  matrix. Its columns follow concatenated CSR storage order, so columns between
+  adjacent `row_ptr` offsets apply only to that exposure; `NULL` keeps all
+  stored entries and `NA` mask values are rejected.
 - Pre-harmonise and clump once, then reuse the resulting matrices across scans.
 - Increase `threads` for large grids, but do not expect linear scaling on tiny
   workloads.

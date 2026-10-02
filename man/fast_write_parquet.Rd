@@ -9,27 +9,33 @@ fast_write_parquet(
   path,
   compression = "zstd",
   compression_level = NULL,
-  overwrite = FALSE
+  overwrite = FALSE,
+  chunk_pairs = 1e+06
 )
 }
 \arguments{
-\item{x}{A data frame, normally a result returned by a \code{fast_mr*()} function.}
+\item{x}{A data frame, normally a result returned by a \verb{fast_mr*()}
+function.}
 
 \item{path}{Destination Parquet file. Existing files are rejected unless
 \code{overwrite = TRUE}.}
 
 \item{compression}{Parquet compression codec passed to
-\code{arrow::write_parquet()}. Defaults to \code{"zstd"}.}
+\code{\link[arrow:write_parquet]{arrow::write_parquet()}}. Defaults to \code{"zstd"}.}
 
 \item{compression_level}{Optional codec compression level.}
 
 \item{overwrite}{Whether an existing destination may be replaced.}
+
+\item{chunk_pairs}{Only for a \code{fastmr_compact_grid} input: grid pairs
+converted and written per row group (default 1e6), keeping peak memory
+near one chunk instead of the whole tidy table.}
 }
 \value{
 The normalized destination path, invisibly.
 }
 \description{
-Results are written with Zstandard compression by default. This is useful for
-large MR grids, while retaining column types and allowing selective reads with
-Arrow-compatible tools.
+Results are written with Zstandard compression by default. This is useful
+for large MR grids, while retaining column types and allowing selective
+reads with Arrow-compatible tools.
 }

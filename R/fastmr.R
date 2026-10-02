@@ -8,8 +8,10 @@
 #' @param nboot Number of normal bootstrap draws for median and mode methods.
 #' @param seed Optional integer seed. Seeded median/mode methods share one
 #'   ratio bootstrap layout per pair.
-#' @param threads Maximum native worker count. It is most useful for
-#'   [fast_mr_grid()]; single-pair calls remain bounded and deterministic.
+#' @param threads Maximum native worker count. Exposure/outcome pairs run in
+#'   parallel, including bootstrap methods: their normal draws are made on the
+#'   main thread in the serial order, so results (seeded or unseeded) and the
+#'   RNG state afterwards are identical for every thread count.
 #' @param output Optional path for a Zstandard-compressed Parquet copy of the
 #'   result. The path must not already exist; use [fast_write_parquet()] when
 #'   an overwrite or another compression codec is required.
@@ -50,37 +52,68 @@ fast_mr <- function(data,
   id.out <- if ("id.outcome" %in% names(data)) as.character(data$id.outcome) else rep("", n)
   id.exp[is.na(id.exp)] <- ""
   id.out[is.na(id.out)] <- ""
-  groups <- unique(data.frame(id.exposure = id.exp, id.outcome = id.out,
-                              stringsAsFactors = FALSE))
-  rows <- vector("list", nrow(groups))
-  for (i in seq_len(nrow(groups))) {
-    group_index <- which(id.exp == groups$id.exposure[[i]] &
-                         id.out == groups$id.outcome[[i]])
-    index <- group_index[keep[group_index]]
-    # Joins and multi-study exports often repeat the same SNP row. Count each
-    # SNP once per MR pair; retain the first row deterministically. Repeated
-    # p-values are metadata and do not affect this rule.
-    index <- index[!duplicated(snp[index])]
-    representative <- group_index[[1L]]
-    native <- fastmr_native_call(
-      fastmr_run_native,
-      list(
-        exposure_beta = prepared[["beta.exposure"]][index],
-        outcome_beta = prepared[["beta.outcome"]][index],
-        exposure_se = prepared[["se.exposure"]][index],
-        outcome_se = prepared[["se.outcome"]][index],
-        methods = methods, nboot = controls[["nboot"]], seed = NULL,
-        threads = controls[["threads"]], phi = phi, penk = penk
-      ),
-      if (is.null(controls[["seed"]])) NULL else controls[["seed"]] + i - 1L
-    )
-    label.exp <- if ("exposure" %in% names(data)) as.character(data$exposure[representative]) else id.exp[representative]
-    label.out <- if ("outcome" %in% names(data)) as.character(data$outcome[representative]) else id.out[representative]
-    rows[[i]] <- fastmr_tidy_native(native, methods, id.exp[representative], id.out[representative],
-                                     exposure_label = label.exp, outcome_label = label.out)
+  # Group rows once (first-appearance order of each exposure/outcome pair).
+  # Integer codes avoid any separator collision between ids.
+  gid <- fastmr_group_ids(id.exp, id.out)
+  group_count <- attr(gid, "n")
+  if (!group_count) return(fastmr_write_result(fastmr_tidy_native(list(), methods), output))
+  # Joins and multi-study exports often repeat the same SNP row. Count each
+  # SNP once per MR pair; retain the first kept row deterministically. Repeated
+  # p-values are metadata and do not affect this rule.
+  kept <- which(keep)
+  snp_code <- match(snp[kept], unique(snp[kept]))
+  kept <- kept[!duplicated(gid[kept] + group_count * as.numeric(snp_code))]
+  kept <- kept[order(gid[kept], method = "radix")]
+  counts <- tabulate(gid[kept], nbins = group_count)
+  offsets <- c(0L, cumsum(counts))
+  # Groups are numbered by first appearance, so first rows are in group order.
+  first <- which(!duplicated(gid))
+  args <- list(
+    offsets = offsets,
+    exposure_beta = prepared[["beta.exposure"]][kept],
+    outcome_beta = prepared[["beta.outcome"]][kept],
+    exposure_se = prepared[["se.exposure"]][kept],
+    outcome_se = prepared[["se.outcome"]][kept],
+    methods = methods, nboot = controls[["nboot"]],
+    threads = controls[["threads"]], phi = phi, penk = penk
+  )
+  native <- if (fastmr_methods_use_rng(methods, controls[["nboot"]])) {
+    fastmr_run_bootstrap_groups(args, controls[["seed"]])
+  } else {
+    fastmr_native_call(fastmr_run_groups_native, args, NULL)
   }
-  if (!length(rows)) return(fastmr_write_result(fastmr_tidy_native(list(), methods), output))
-  fastmr_write_result(do.call(rbind, rows), output)
+  fastmr_write_result(
+    fastmr_tidy_groups_native(native, length(methods), id.exp[first], id.out[first]),
+    output)
+}
+
+# Bootstrap groups, threaded and bit-identical to one fastmr_run_native() call
+# per group. All RNG draws happen natively on the main thread in the order those
+# calls consumed the RNG: one continuous stream from the caller's .Random.seed
+# when `seed` is NULL, otherwise a fresh set.seed(seed + i - 1) stream per group
+# i (the caller's RNG state is then restored). With one worker, draws stream
+# straight into each group's bootstrap layout as before; with several, groups
+# run in batches whose normals (at most getOption("fastMR.bootstrap_batch_draws"),
+# default 2^23 = 64 MB, or a single group streamed serially) are drawn into a
+# reused native buffer. Batching does not change any result.
+fastmr_run_bootstrap_groups <- function(args, seed) {
+  args$batch_draws <- as.numeric(getOption("fastMR.bootstrap_batch_draws", 2^23))
+  if (!is.null(seed)) {
+    state_env <- .GlobalEnv
+    had_state <- exists(".Random.seed", envir = state_env, inherits = FALSE)
+    old_state <- if (had_state) get(".Random.seed", envir = state_env, inherits = FALSE) else NULL
+    on.exit({
+      if (had_state) {
+        assign(".Random.seed", old_state, envir = state_env)
+      } else if (exists(".Random.seed", envir = state_env, inherits = FALSE)) {
+        rm(".Random.seed", envir = state_env)
+      }
+    }, add = TRUE)
+    args$reseed <- function(i) set.seed(seed + i - 1L)
+  }
+  # The native call's RNGScope creates .Random.seed when absent, as each
+  # per-group call did.
+  do.call(fastmr_run_groups_boot_native, args)
 }
 
 #' Run every exposure/outcome pair in a shared exact grid
@@ -99,13 +132,39 @@ fast_mr <- function(data,
 #' @param output Optional path for a Zstandard-compressed Parquet copy of the
 #'   result. The path must not already exist; use [fast_write_parquet()] when
 #'   an overwrite or another compression codec is required.
+#' @param return What to return. `"tidy"` (default) is the full tidy data frame.
+#'   `"compact"` returns a light `fastmr_compact_grid` object (see
+#'   [fastmr_grid_chunk()]) that converts to the identical tidy data frame via
+#'   `as.data.frame()`. `"none"` requires `output` and returns the path
+#'   invisibly. Streamed IVW-only output (`return = "none"`) is computed in
+#'   exposure blocks and equals the tidy result to about 1e-15 relative (a
+#'   blocked BLAS `dgemm`, e.g. OpenBLAS, can differ in the last bits); it is
+#'   identical when the grid is not blocked.
+#' @param chunk_pairs Number of grid pairs converted to tidy form per Parquet
+#'   row group when a non-`"tidy"` `return` is combined with `output`
+#'   (default 1e6). Only the tidy conversion is chunked, so results are
+#'   identical for every chunk size. For IVW-only grids the native kernel is
+#'   also run in exposure blocks of about `chunk_pairs` pairs, which is
+#'   deterministic and pair-independent (blocked results agree with the
+#'   unblocked ones to about 1e-15 relative, see `return`); other methods
+#'   (including seeded bootstraps) always use one native call.
 #' @param ... Optional `phi` bandwidth multiplier for mode methods and `penk`
 #'   penalty multiplier for penalised weighted median (default 20).
-#' @return A tidy data frame with one row per method and grid pair.
+#' @return With `return = "tidy"`, a tidy data frame with one row per method
+#'   and grid pair; see `return` for the other modes. With `return != "tidy"`
+#'   and `output`, the Parquet file is written in row groups of `chunk_pairs`
+#'   pairs (Zstandard compressed, schema identical to the tidy output).
 #' @export
 fast_mr_grid <- function(exposure_beta, outcome_beta, exposure_se, outcome_se,
                          methods = c("ivw", "egger", "weighted_median", "simple_mode", "weighted_mode"),
-                         nboot = 1000, seed = NULL, threads = 1, output = NULL, ...) {
+                         nboot = 1000, seed = NULL, threads = 1, output = NULL,
+                         return = c("tidy", "compact", "none"), chunk_pairs = 1e6, ...) {
+  return <- match.arg(return)
+  if (!is.numeric(chunk_pairs) || length(chunk_pairs) != 1L || !is.finite(chunk_pairs) || chunk_pairs < 1) {
+    stop("chunk_pairs must be one number >= 1", call. = FALSE)
+  }
+  chunk_pairs <- floor(chunk_pairs)
+  if (return == "none" && is.null(output)) stop("return = \"none\" requires output", call. = FALSE)
   controls <- fastmr_validate_controls(nboot, seed, threads)
   methods <- fastmr_normalize_methods(methods)
   dots <- list(...)
@@ -132,21 +191,39 @@ fast_mr_grid <- function(exposure_beta, outcome_beta, exposure_se, outcome_se,
       (!is.null(exp.snps) && !identical(exp.snps, out.snps))) {
     stop("exposure and outcome matrices must use the same SNP column names and order", call. = FALSE)
   }
-  native <- fastmr_native_call(
-    fastmr_grid_native,
-    list(
-      exposure_beta = arrays[["exposure_beta"]],
-      outcome_beta = arrays[["outcome_beta"]],
-      exposure_se = arrays[["exposure_se"]],
-      outcome_se = arrays[["outcome_se"]],
-      methods = methods, nboot = controls[["nboot"]], seed = NULL,
-      threads = controls[["threads"]], phi = phi, penk = penk
-    ),
-    controls[["seed"]]
-  )
   exp.labels <- rownames(arrays$exposure_beta)
   out.labels <- rownames(arrays$outcome_beta)
   if (is.null(exp.labels)) exp.labels <- as.character(seq_len(nrow(arrays$exposure_beta)))
   if (is.null(out.labels)) out.labels <- as.character(seq_len(nrow(arrays$outcome_beta)))
-  fastmr_write_result(fastmr_tidy_grid_native(native, methods, exp.labels, out.labels), output)
+  run_native <- function(eb, es) {
+    fastmr_native_call(
+      fastmr_grid_native,
+      list(
+        exposure_beta = eb,
+        outcome_beta = arrays[["outcome_beta"]],
+        exposure_se = es,
+        outcome_se = arrays[["outcome_se"]],
+        methods = methods, nboot = controls[["nboot"]], seed = NULL,
+        threads = controls[["threads"]], phi = phi, penk = penk
+      ),
+      controls[["seed"]]
+    )
+  }
+  if (return == "none" && identical(methods, "ivw")) {
+    # RNG-free: run the kernel in exposure blocks and stream each to Parquet.
+    path <- fastmr_stream_parquet(
+      fastmr_ivw_blocks(arrays, run_native, exp.labels, out.labels, methods, chunk_pairs),
+      output)
+    return(invisible(path))
+  }
+  native <- run_native(arrays[["exposure_beta"]], arrays[["exposure_se"]])
+  if (return == "tidy") {
+    return(fastmr_write_result(fastmr_tidy_grid_native(native, methods, exp.labels, out.labels), output))
+  }
+  res <- fastmr_new_compact_grid(native, methods, exp.labels, out.labels)
+  if (!is.null(output)) {
+    path <- fast_write_parquet(res, output, chunk_pairs = chunk_pairs)
+    if (return == "none") return(invisible(path))
+  }
+  res
 }

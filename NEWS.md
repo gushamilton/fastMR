@@ -1,3 +1,75 @@
+# fastMR 0.2.0
+
+- Graph clumping now asks PLINK2 for an uncompressed `.vcor` (about 30 bytes
+  per edge, written to the work directory and deleted after parsing) and
+  parses it in C++ straight into vertex ids; zstd is no longer needed for
+  graph clumping. Unknown IDs, short lines and unrecognised headers error.
+- Adds `fast_mr_steiger_r2()` as a composable vectorized primitive for
+  continuous beta/SE/sample-size, standardized beta/EAF, and binary log-odds
+  models. Scalar inputs recycle deterministically, invalid rows carry explicit
+  validity/reason fields, and binary prevalence is never assumed.
+- Updates `fast_mr_steiger_filtering()` to use the explicit R-squared models,
+  compute continuous-trait R-squared without requiring p-values, and report
+  why R-squared estimates or Steiger p-values are unavailable while preserving
+  the established result columns.
+- Adds optional pair-specific SNP filtering to `fast_mr_sparse_ivw()` through
+  an outcome-by-concatenated-CSR-entry `pair_snp_keep` matrix. `NULL` preserves
+  the existing path, `NA` is rejected, and returned `nsnp` is post-filter.
+- Synchronizes package and citation metadata and excludes benchmark-result
+  placeholders from source-package builds.
+
+- Performance batch (streaming pipeline):
+  - `fast_mr(threads = k)` now runs bootstrap methods (medians, penalised
+    weighted median, modes, Egger bootstrap) on `k` threads. Standard normals
+    are pre-drawn on the main thread in exactly the per-pair order (the
+    caller's stream when `seed = NULL`, `set.seed(seed + i - 1)` per pair
+    otherwise) into a reused native buffer of at most
+    `options(fastMR.bootstrap_batch_draws)` draws (default 2^23, 64 MB), and
+    p-values are computed serially. With `threads = 1`, or for a group whose
+    draws alone exceed that budget, draws stream straight into the bootstrap
+    layouts exactly as before, with no buffer (so such large groups run
+    serially; raise the option to parallelise them at the cost of memory).
+    Output and the post-call RNG state are byte-identical to the previous
+    serial implementation for every thread count.
+  - `fast_mr()` groups rows once and batches non-RNG methods in a single native
+    call; output is byte-identical to the previous implementation (attribute
+    order, compact `row.names`).
+  - `fast_mr_steiger_filtering()` and diagnostic grouping are vectorised;
+    supplied `effective_n`/`rsq_valid`/`rsq_reason` columns are still
+    overwritten as before.
+  - `fast_mr_heterogeneity()`, `fast_mr_pleiotropy_test()`,
+    `fast_mr_singlesnp()`, `fast_mr_leaveoneout()` and
+    `fast_mr_directionality_test()` no longer loop over pairs in R: each makes
+    one batched `fast_mr()` call (Egger leave-one-out adds one native call
+    over drop-one fits, with no expanded copy of the data) and builds its
+    output column-wise. Output is identical to the per-pair code, including
+    row order, `row.names` and attribute order. `threads` now takes effect:
+    RNG-free `fast_mr()` groups run on `threads` workers, with identical
+    results for every thread count. Egger leave-one-out of a pair with a
+    single SNP used to error when a sample-size column was present; it now
+    reports `NA` for that row's `samplesize`.
+  - `fast_mr_sparse_ivw()` checks CSR rows for duplicate SNP indices in one
+    vectorised pass.
+  - `fast_mr_sparse_ivw()` gains `steiger_exposure_rsq`, `steiger_outcome_rsq`
+    and `pair_snp_drop` so Steiger and drop masks are applied inside the
+    kernel; Q uses a stable two-pass computation and `se` matches `fast_mr()`.
+  - `fast_mr_compressed()` gains `estimator = c("auto", "pairwise")`. With the
+    `"auto"` default, IVW-only runs with non-shared instrument sets use the
+    sparse CSR kernel; counts, errors and row order match `"pairwise"` and
+    estimates agree to within 1e-14 relative (usually bit-identical). The path
+    taken is recorded as `estimator_path` in the `compressed_input` attribute.
+  - `fast_mr_grid()` gains `return = c("tidy", "compact", "none")` and
+    `chunk_pairs` for compact and streamed Parquet output
+    (`fastmr_grid_chunk()` accessor); `fast_write_parquet()` gains
+    `chunk_pairs`. Streamed IVW-only grids are computed in exposure blocks and
+    agree with the tidy result to about 1e-15 relative.
+  - New `partition = "graph"` clumping (`fast_clump_data_graph()`,
+    `max_graph_pairs`): one exact PLINK2 all-pairs call per chromosome, with ID-only
+    LD columns, streamed block parsing of the LD table, and empty-graph handling
+    when no candidates are in the reference. Also adds
+    `fast_clump_data_lead_rows()` and `fast_clump_data_batched_chromosomal()`.
+  - Source builds now exclude `slurm/`.
+
 # fastMR 0.1.9
 
 - Updates the optional compressed-input integration for CompreSSoR 0.5's
