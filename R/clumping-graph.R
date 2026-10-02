@@ -8,8 +8,10 @@
 # (p, SNP) order, against that graph in C++.
 
 # Internal LD oracle for the graph strategy (mockable in tests/benchmarks).
-# Returns a data frame with columns `lead` and `target` (each reported pair
-# once or twice; the caller symmetrises).
+# Returns a list of 1-based integer vertex ids `lead` and `target` (positions
+# in `snps`; each reported pair once or twice; the caller symmetrises).  PLINK2
+# writes an UNCOMPRESSED .vcor (about 30 bytes/edge, e.g. ~200 MB for 6M edges)
+# into `workdir`; it is parsed in C++ and deleted.  No zstd is needed.
 fastmr_clump_run_graph <- function(snps, reference_args, plink2_bin, clump_kb,
                                    clump_r2, threads, workdir, tag,
                                    ld_window_variants = 1e9) {
@@ -17,7 +19,7 @@ fastmr_clump_run_graph <- function(snps, reference_args, plink2_bin, clump_kb,
   extract_file <- paste0(stem, ".extract.txt")
   writeLines(as.character(snps), extract_file)
   args <- c(reference_args, "--extract", fastmr_clump_quote(extract_file),
-            "--r2-unphased", "zs", "cols=id", "--ld-window-kb", format(clump_kb, trim = TRUE, scientific = FALSE),
+            "--r2-unphased", "cols=id", "--ld-window-kb", format(clump_kb, trim = TRUE, scientific = FALSE),
             "--ld-window", format(ld_window_variants, trim = TRUE, scientific = FALSE),
             "--ld-window-r2", format(clump_r2, trim = TRUE),
             "--threads", as.integer(threads), "--out", fastmr_clump_quote(stem))
@@ -25,12 +27,12 @@ fastmr_clump_run_graph <- function(snps, reference_args, plink2_bin, clump_kb,
                      error = function(e) structure(character(), status = 1L, error = conditionMessage(e)))
   status <- attr(output, "status")
   if (is.null(status)) status <- 0L
-  path <- paste0(stem, ".vcor.zst")
+  path <- paste0(stem, ".vcor")
   if (status != 0L && any(grepl("No variants remaining after", output, fixed = TRUE))) {
     # None of these candidates is in the reference: no LD edges (lead-row
     # semantics keep such SNPs, so the graph must not abort).
     unlink(extract_file)
-    return(data.frame(lead = character(), target = character(), stringsAsFactors = FALSE))
+    return(list(lead = integer(), target = integer()))
   }
   if (status != 0L || !file.exists(path)) {
     detail <- attr(output, "error")
@@ -38,54 +40,9 @@ fastmr_clump_run_graph <- function(snps, reference_args, plink2_bin, clump_kb,
     stop("PLINK2 all-pairs LD graph query failed (", tag, "): ", detail, call. = FALSE)
   }
   on.exit(unlink(c(path, extract_file)), add = TRUE)
-  zstdcat <- Sys.which("zstdcat")
-  if (nzchar(zstdcat)) cmd_args <- shQuote(path) else {
-    zstdcat <- Sys.which("zstd")
-    if (!nzchar(zstdcat)) stop("PLINK produced a .vcor.zst file but neither zstdcat nor zstd is available", call. = FALSE)
-    cmd_args <- c("-dc", shQuote(path))
-  }
-  # Stream the decompressed table in blocks so that only a block of lines (not
-  # the whole ~200 B/edge line vector) is ever resident; each block is reduced
-  # to its two ID columns, which share interned CHARSXPs.
-  # "rb": a text-mode pipe silently drops an unterminated final line.
-  con <- pipe(paste(shQuote(zstdcat), paste(cmd_args, collapse = " ")), "rb")
-  closed <- FALSE
-  on.exit(if (!closed) try(close(con), silent = TRUE), add = TRUE)
-  fa <- NA_integer_; fb <- NA_integer_  # set from the header
-  first <- TRUE
-  leads <- list(); targets <- list()
-  repeat {
-    block <- readLines(con, n = 1000000L, warn = FALSE)
-    if (!length(block)) break
-    if (first) {
-      first <- FALSE
-      if (startsWith(block[[1L]], "#")) {
-        header <- strsplit(sub("^#", "", block[[1L]]), "\t", fixed = TRUE)[[1L]]
-        ia <- match("ID_A", header); ib <- match("ID_B", header)
-        if (!is.na(ia) && !is.na(ib) && ia < ib) { fa <- ia; fb <- ib }
-      }
-      if (is.na(fa)) {
-        stop("unrecognised PLINK2 .vcor header (need ID_A and ID_B): ",
-             substr(block[[1L]], 1L, 200L), call. = FALSE)
-      }
-    }
-    ids <- .fastmr_vcor_ids(block, fa, fb)
-    data_lines <- sum(nzchar(block) & !startsWith(block, "#"))
-    if (length(ids$lead) != data_lines) {
-      stop("malformed PLINK2 .vcor line(s): ", data_lines - length(ids$lead),
-           " line(s) have fewer than ", fb, " fields", call. = FALSE)
-    }
-    leads[[length(leads) + 1L]] <- ids$lead
-    targets[[length(targets) + 1L]] <- ids$target
-  }
-  status <- close(con)
-  closed <- TRUE
-  if (!is.null(status) && !identical(as.integer(status), 0L)) {
-    stop("could not decompress PLINK LD output", call. = FALSE)
-  }
-  data.frame(lead = as.character(unlist(leads, use.names = FALSE)),
-             target = as.character(unlist(targets, use.names = FALSE)),
-             stringsAsFactors = FALSE)
+  # Parsed natively (buffered fread, hash map ID -> vertex): an ID outside
+  # `snps` is an error.  Returns 1-based integer vertex ids.
+  .fastmr_vcor_read(path, as.character(snps))
 }
 
 fastmr_clump_plink_version <- function(plink2_bin) {
@@ -216,11 +173,11 @@ fast_clump_data_graph <- function(
                                threads, workdir, tag)
       } else {
         # No candidate pair within the window: the graph is empty.
-        data.frame(lead = character(), target = character(), stringsAsFactors = FALSE)
+        list(lead = integer(), target = integer())
       }
-      a <- match(as.character(ld$lead), usnp)
-      b <- match(as.character(ld$target), usnp)
-      ok <- !is.na(a) & !is.na(b) & a != b
+      a <- ld$lead
+      b <- ld$target
+      ok <- a != b
       a <- a[ok]; b <- b[ok]
       near <- abs(ubp[a] - ubp[b]) <= window
       a <- a[near]; b <- b[near]
@@ -243,7 +200,7 @@ fast_clump_data_graph <- function(
   ld_provenance <- list(
     plink2_version = fastmr_clump_plink_version(plink2_bin),
     mode = "all_pairs_graph",
-    flags = c("--r2-unphased zs cols=id", paste("--ld-window-kb", format(clump_kb, trim = TRUE, scientific = FALSE)),
+    flags = c("--r2-unphased cols=id", paste("--ld-window-kb", format(clump_kb, trim = TRUE, scientific = FALSE)),
               "--ld-window 1000000000", paste("--ld-window-r2", format(clump_r2, trim = TRUE))),
     reference = paste(gsub("'", "", reference_args), collapse = " "),
     reference_manifest_md5 = reference_md5,
