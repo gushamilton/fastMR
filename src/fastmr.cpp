@@ -978,12 +978,42 @@ Result compute_wald(const Prepared& p) {
   return result;
 }
 
-void make_bootstrap(Prepared& p, int nboot, SEXP seed,
+// Standard-normal draw source. The default reads R's RNG (main thread only);
+// PredrawnNormals replays draws made beforehand by R's rnorm() in exactly the
+// order the default would consume them, so worker threads never touch R.
+struct RNormals {
+  double operator()() const { return R::rnorm(0.0, 1.0); }
+};
+
+struct PredrawnNormals {
+  const double* next;
+  double operator()() { return *next++; }
+};
+
+// Number of standard-normal draws make_bootstrap() + make_mode_bootstrap()
+// consume for a pair with `snps` usable rows and `ratios` non-zero exposures.
+double bootstrap_draw_count(std::size_t snps, std::size_t ratios, int nboot,
+                            bool needs_median, bool needs_egger,
+                            bool needs_penalised, bool needs_mode) {
+  if (nboot <= 0) return 0.0;
+  double count = 0.0;
+  if (snps >= 3 && (needs_median || needs_egger || needs_penalised)) {
+    const double stream = 2.0 * static_cast<double>(nboot) * static_cast<double>(snps);
+    count += stream;
+    if (needs_penalised) count += stream;
+  }
+  if (needs_mode && ratios >= 3) {
+    count += static_cast<double>(nboot) * static_cast<double>(ratios);
+  }
+  return count;
+}
+
+template <typename Draw>
+void make_bootstrap(Prepared& p, int nboot, Draw& next_normal,
                     bool needs_median, bool needs_egger,
                     bool needs_penalised) {
   if (nboot <= 0 || p.x.size() < 3 ||
       (!needs_median && !needs_egger && !needs_penalised)) return;
-  (void) seed;
   const std::size_t n = p.ratio.size();
   auto draw_stream = [&](bool penalised) {
     if (penalised) {
@@ -1001,12 +1031,12 @@ void make_bootstrap(Prepared& p, int nboot, SEXP seed,
     // column by column, so consume each RNG stream in SNP-major order.
     for (std::size_t snp = 0; snp < p.x.size(); ++snp) {
       for (int draw = 0; draw < nboot; ++draw) {
-        exp_z[static_cast<std::size_t>(draw) * p.x.size() + snp] = R::rnorm(0.0, 1.0);
+        exp_z[static_cast<std::size_t>(draw) * p.x.size() + snp] = next_normal();
       }
     }
     for (std::size_t snp = 0; snp < p.x.size(); ++snp) {
       for (int draw = 0; draw < nboot; ++draw) {
-        out_z[static_cast<std::size_t>(draw) * p.x.size() + snp] = R::rnorm(0.0, 1.0);
+        out_z[static_cast<std::size_t>(draw) * p.x.size() + snp] = next_normal();
       }
     }
     for (int draw = 0; draw < nboot; ++draw) {
@@ -1036,7 +1066,8 @@ void make_bootstrap(Prepared& p, int nboot, SEXP seed,
   if (needs_penalised) draw_stream(true);
 }
 
-void make_mode_bootstrap(Prepared& p, int nboot) {
+template <typename Draw>
+void make_mode_bootstrap(Prepared& p, int nboot, Draw& next_normal) {
   if (nboot <= 0 || p.ratio.size() < 3) return;
   const std::size_t n = p.ratio.size();
   p.mode_bootstrap.resize(static_cast<std::size_t>(nboot) * n);
@@ -1044,34 +1075,56 @@ void make_mode_bootstrap(Prepared& p, int nboot) {
   for (std::size_t snp = 0; snp < n; ++snp) {
     for (int draw = 0; draw < nboot; ++draw) {
       p.mode_bootstrap[static_cast<std::size_t>(draw) * n + snp] =
-        p.ratio[snp] + p.ratio_se[snp] * R::rnorm(0.0, 1.0);
+        p.ratio[snp] + p.ratio_se[snp] * next_normal();
     }
   }
 }
 
+struct BootstrapNeeds {
+  bool median = false;
+  bool penalised = false;
+  bool mode = false;
+  bool egger = false;
+};
+
+BootstrapNeeds bootstrap_needs(const std::vector<std::string>& methods) {
+  BootstrapNeeds needs;
+  for (const std::string& method : methods) {
+    needs.median = needs.median || method == "simple_median" ||
+                   method == "weighted_median";
+    needs.penalised = needs.penalised || method == "penalised_weighted_median";
+    needs.mode = needs.mode || method == "simple_mode" || method == "weighted_mode";
+    needs.egger = needs.egger || method == "egger_bootstrap";
+  }
+  return needs;
+}
+
+// `draws` == nullptr draws from R's RNG (main thread only); otherwise the
+// bootstrap consumes pre-drawn standard normals from `draws` in the same order.
 std::vector<Result> compute_pair(Prepared p,
                                  const std::vector<std::string>& methods,
                                  int nboot, SEXP seed,
                                  bool prepare_bootstrap = true,
                                  double phi = 1.0,
-                                 double penk = 20.0) {
+                                 double penk = 20.0,
+                                 const double* draws = nullptr) {
+  (void) seed;
   prepare_ratios(p);
   if (prepare_bootstrap) {
-    bool needs_median = false;
-    bool needs_penalised = false;
-    bool needs_mode = false;
-    bool needs_egger = false;
-    for (const std::string& method : methods) {
-      needs_median = needs_median || method == "simple_median" ||
-                     method == "weighted_median";
-      needs_penalised = needs_penalised || method == "penalised_weighted_median";
-      needs_mode = needs_mode || method == "simple_mode" || method == "weighted_mode";
-      needs_egger = needs_egger || method == "egger_bootstrap";
+    const BootstrapNeeds needs = bootstrap_needs(methods);
+    auto fill = [&](auto& source) {
+      if (needs.median || needs.egger || needs.penalised) {
+        make_bootstrap(p, nboot, source, needs.median, needs.egger, needs.penalised);
+      }
+      if (needs.mode) make_mode_bootstrap(p, nboot, source);
+    };
+    if (draws == nullptr) {
+      RNormals source;
+      fill(source);
+    } else {
+      PredrawnNormals source{draws};
+      fill(source);
     }
-    if (needs_median || needs_egger || needs_penalised) {
-      make_bootstrap(p, nboot, seed, needs_median, needs_egger, needs_penalised);
-    }
-    if (needs_mode) make_mode_bootstrap(p, nboot);
   }
   std::vector<Result> result;
   result.resize(methods.size());
@@ -2343,13 +2396,147 @@ Rcpp::List fastmr_sparse_ivw_native(
                                  steiger_outcome_rsq, drop_outcome, drop_entry);
 }
 
+namespace {
+
+struct GroupInputs {
+  std::vector<R_xlen_t> offsets;
+  const double* x;
+  const double* y;
+  const double* sx;
+  const double* sy;
+  R_xlen_t groups;
+};
+
+GroupInputs check_group_inputs(Rcpp::IntegerVector offsets,
+                               Rcpp::NumericVector exposure_beta,
+                               Rcpp::NumericVector outcome_beta,
+                               Rcpp::NumericVector exposure_se,
+                               Rcpp::NumericVector outcome_se) {
+  if (offsets.size() < 1 || offsets[0] != 0) Rcpp::stop("offsets must start at 0");
+  const R_xlen_t groups = offsets.size() - 1;
+  const R_xlen_t total_rows = exposure_beta.size();
+  if (outcome_beta.size() != total_rows || exposure_se.size() != total_rows ||
+      outcome_se.size() != total_rows || offsets[groups] != total_rows) {
+    Rcpp::stop("MR vectors must have equal lengths matching offsets");
+  }
+  for (R_xlen_t g = 0; g < groups; ++g) {
+    if (offsets[g + 1] < offsets[g]) Rcpp::stop("offsets must be non-decreasing");
+  }
+  GroupInputs in;
+  in.offsets.assign(offsets.begin(), offsets.end());
+  in.x = REAL(exposure_beta); in.y = REAL(outcome_beta);
+  in.sx = REAL(exposure_se); in.sy = REAL(outcome_se);
+  in.groups = groups;
+  return in;
+}
+
+// Same row filter as one_pair_from_vectors() (NA is never finite), without
+// touching R objects so worker threads may call it.
+Prepared group_prepared(const GroupInputs& in, R_xlen_t g) {
+  Prepared p;
+  const R_xlen_t begin = in.offsets[static_cast<std::size_t>(g)];
+  const R_xlen_t end = in.offsets[static_cast<std::size_t>(g) + 1];
+  p.x.reserve(end - begin); p.y.reserve(end - begin);
+  p.sx.reserve(end - begin); p.sy.reserve(end - begin);
+  for (R_xlen_t i = begin; i < end; ++i) {
+    const double x = in.x[i], y = in.y[i], sx = in.sx[i], sy = in.sy[i];
+    if (!std::isfinite(x) || !std::isfinite(y) || !std::isfinite(sx) ||
+        !std::isfinite(sy) || sx <= 0.0 || sy <= 0.0) continue;
+    p.x.push_back(x); p.y.push_back(y); p.sx.push_back(sx); p.sy.push_back(sy);
+  }
+  return p;
+}
+
+// Flat group-major, method-minor list matching rbind(fastmr_tidy_native()).
+Rcpp::List group_results_to_flat(const std::vector<Result>& results) {
+  const std::size_t total = results.size();
+  Rcpp::CharacterVector method_out(total);
+  Rcpp::NumericVector n_out(total, NA_REAL), beta(total, NA_REAL), se(total, NA_REAL),
+    pval(total, NA_REAL), q(total, NA_REAL), q_df(total, NA_REAL), q_pval(total, NA_REAL),
+    sigma(total, NA_REAL), intercept(total, NA_REAL), intercept_se(total, NA_REAL),
+    intercept_pval(total, NA_REAL), ratio_se_mean(total, NA_REAL), boot(total, NA_REAL),
+    phi_out(total, NA_REAL), flipped(total, NA_REAL), se_exposure_mean(total, NA_REAL);
+  for (std::size_t k = 0; k < total; ++k) {
+    const Result& r = results[k];
+    method_out[k] = r.method;
+    n_out[k] = r.n;
+    beta[k] = finite_or_na(r.beta);
+    se[k] = finite_or_na(r.se);
+    pval[k] = finite_or_na(r.pval);
+    if (r.ratio_se_mean) ratio_se_mean[k] = finite_or_na(r.ratio_se_mean_value);
+    if (r.bootstrap) boot[k] = r.bootstrap_value;
+    if (r.phi) phi_out[k] = finite_or_na(r.phi_value);
+    if (r.q) {
+      q[k] = finite_or_na(r.q_value);
+      q_df[k] = r.q_df;
+      q_pval[k] = finite_or_na(r.q_pval);
+    }
+    if (r.sigma) sigma[k] = finite_or_na(r.sigma_value);
+    if (r.intercept) {
+      intercept[k] = finite_or_na(r.intercept_value);
+      intercept_se[k] = finite_or_na(r.intercept_se);
+      intercept_pval[k] = finite_or_na(r.intercept_pval);
+      flipped[k] = r.flipped;
+      se_exposure_mean[k] = finite_or_na(r.se_exposure_mean);
+    }
+  }
+  return Rcpp::List::create(
+    Rcpp::_["method"] = method_out, Rcpp::_["n"] = n_out, Rcpp::_["beta"] = beta,
+    Rcpp::_["se"] = se, Rcpp::_["pval"] = pval, Rcpp::_["Q"] = q, Rcpp::_["Q_df"] = q_df,
+    Rcpp::_["Q_pval"] = q_pval, Rcpp::_["sigma"] = sigma, Rcpp::_["intercept"] = intercept,
+    Rcpp::_["intercept_se"] = intercept_se, Rcpp::_["intercept_pval"] = intercept_pval,
+    Rcpp::_["ratio_se_mean"] = ratio_se_mean, Rcpp::_["bootstrap"] = boot,
+    Rcpp::_["phi"] = phi_out, Rcpp::_["flipped"] = flipped,
+    Rcpp::_["se_exposure_mean"] = se_exposure_mean);
+}
+
+// Defers R-backed p-values for the guard's lifetime (restored on unwind).
+struct DeferRMath {
+  DeferRMath() { defer_r_math.store(true, std::memory_order_relaxed); }
+  ~DeferRMath() { defer_r_math.store(false, std::memory_order_relaxed); }
+};
+
+// Run job(index) for index in [0, jobs) on `threads` workers. job must not
+// touch the R API. Dynamic scheduling; results are written by index, so the
+// output does not depend on the schedule.
+template <typename Job>
+void run_parallel(std::size_t jobs, int threads, Job job) {
+  const int thread_count = bounded_threads(threads, jobs);
+  if (thread_count == 1) {
+    for (std::size_t index = 0; index < jobs; ++index) job(index);
+    return;
+  }
+#ifdef _OPENMP
+#pragma omp parallel for schedule(dynamic, 1) num_threads(thread_count)
+  for (long long index = 0; index < static_cast<long long>(jobs); ++index) {
+    job(static_cast<std::size_t>(index));
+  }
+#else
+  std::atomic<std::size_t> next(0);
+  std::vector<std::thread> pool;
+  pool.reserve(static_cast<std::size_t>(thread_count));
+  for (int worker = 0; worker < thread_count; ++worker) {
+    pool.emplace_back([&]() {
+      while (true) {
+        const std::size_t index = next.fetch_add(1, std::memory_order_relaxed);
+        if (index >= jobs) break;
+        job(index);
+      }
+    });
+  }
+  for (std::thread& worker : pool) worker.join();
+#endif
+}
+
+} // namespace
+
 // Batched equivalent of calling fastmr_run_native() once per group. Groups are
 // CSR-style slices [offsets[g], offsets[g+1]) of the concatenated vectors. Each
 // group goes through exactly the same one_pair_from_vectors() filtering and
 // compute_pair() code path (including inline p-values), so results are
 // bit-identical to the per-group calls. Only valid when no requested method
-// draws random numbers (callers keep the R loop for bootstrap methods); the
-// calls are therefore serial and `threads` is accepted for API symmetry only.
+// draws random numbers (bootstrap methods use fastmr_run_groups_boot_native());
+// the calls are therefore serial and `threads` is accepted for API symmetry.
 // Returns flat vectors in group-major, method-minor order.
 // [[Rcpp::export]]
 Rcpp::List fastmr_run_groups_native(Rcpp::IntegerVector offsets,
@@ -2365,73 +2552,109 @@ Rcpp::List fastmr_run_groups_native(Rcpp::IntegerVector offsets,
   validate_controls(nboot, threads, phi);
   if (!std::isfinite(penk) || penk <= 0.0) Rcpp::stop("penk must be positive and finite");
   const std::vector<std::string> parsed_methods = parse_methods(methods);
-  if (offsets.size() < 1 || offsets[0] != 0) Rcpp::stop("offsets must start at 0");
-  const R_xlen_t groups = offsets.size() - 1;
-  const R_xlen_t total_rows = exposure_beta.size();
-  if (outcome_beta.size() != total_rows || exposure_se.size() != total_rows ||
-      outcome_se.size() != total_rows || offsets[groups] != total_rows) {
-    Rcpp::stop("MR vectors must have equal lengths matching offsets");
-  }
-  for (R_xlen_t g = 0; g < groups; ++g) {
-    if (offsets[g + 1] < offsets[g]) Rcpp::stop("offsets must be non-decreasing");
-  }
+  const GroupInputs in = check_group_inputs(offsets, exposure_beta, outcome_beta,
+                                            exposure_se, outcome_se);
   const std::size_t method_count = parsed_methods.size();
-  const std::size_t total = static_cast<std::size_t>(groups) * method_count;
-  Rcpp::CharacterVector method_out(total);
-  Rcpp::NumericVector n_out(total, NA_REAL), beta(total, NA_REAL), se(total, NA_REAL),
-    pval(total, NA_REAL), q(total, NA_REAL), q_df(total, NA_REAL), q_pval(total, NA_REAL),
-    sigma(total, NA_REAL), intercept(total, NA_REAL), intercept_se(total, NA_REAL),
-    intercept_pval(total, NA_REAL), ratio_se_mean(total, NA_REAL), boot(total, NA_REAL),
-    phi_out(total, NA_REAL), flipped(total, NA_REAL), se_exposure_mean(total, NA_REAL);
-  for (R_xlen_t g = 0; g < groups; ++g) {
-    Prepared p;
-    const R_xlen_t begin = offsets[g];
-    const R_xlen_t end = offsets[g + 1];
-    p.x.reserve(end - begin); p.y.reserve(end - begin);
-    p.sx.reserve(end - begin); p.sy.reserve(end - begin);
-    for (R_xlen_t i = begin; i < end; ++i) {
-      const double x = exposure_beta[i], y = outcome_beta[i];
-      const double sx = exposure_se[i], sy = outcome_se[i];
-      if (Rcpp::NumericVector::is_na(x) || Rcpp::NumericVector::is_na(y) ||
-          Rcpp::NumericVector::is_na(sx) || Rcpp::NumericVector::is_na(sy)) continue;
-      if (!std::isfinite(x) || !std::isfinite(y) || !std::isfinite(sx) ||
-          !std::isfinite(sy) || sx <= 0.0 || sy <= 0.0) continue;
-      p.x.push_back(x); p.y.push_back(y); p.sx.push_back(sx); p.sy.push_back(sy);
-    }
+  std::vector<Result> all;
+  all.reserve(static_cast<std::size_t>(in.groups) * method_count);
+  for (R_xlen_t g = 0; g < in.groups; ++g) {
     std::vector<Result> results =
-      compute_pair(std::move(p), parsed_methods, nboot, R_NilValue, true, phi, penk);
-    for (std::size_t m = 0; m < method_count; ++m) {
-      const Result& r = results[m];
-      const std::size_t k = static_cast<std::size_t>(g) * method_count + m;
-      method_out[k] = r.method;
-      n_out[k] = r.n;
-      beta[k] = finite_or_na(r.beta);
-      se[k] = finite_or_na(r.se);
-      pval[k] = finite_or_na(r.pval);
-      if (r.ratio_se_mean) ratio_se_mean[k] = finite_or_na(r.ratio_se_mean_value);
-      if (r.bootstrap) boot[k] = r.bootstrap_value;
-      if (r.phi) phi_out[k] = finite_or_na(r.phi_value);
-      if (r.q) {
-        q[k] = finite_or_na(r.q_value);
-        q_df[k] = r.q_df;
-        q_pval[k] = finite_or_na(r.q_pval);
-      }
-      if (r.sigma) sigma[k] = finite_or_na(r.sigma_value);
-      if (r.intercept) {
-        intercept[k] = finite_or_na(r.intercept_value);
-        intercept_se[k] = finite_or_na(r.intercept_se);
-        intercept_pval[k] = finite_or_na(r.intercept_pval);
-        flipped[k] = r.flipped;
-        se_exposure_mean[k] = finite_or_na(r.se_exposure_mean);
-      }
-    }
+      compute_pair(group_prepared(in, g), parsed_methods, nboot, R_NilValue, true, phi, penk);
+    for (Result& r : results) all.push_back(std::move(r));
   }
-  return Rcpp::List::create(
-    Rcpp::_["method"] = method_out, Rcpp::_["n"] = n_out, Rcpp::_["beta"] = beta,
-    Rcpp::_["se"] = se, Rcpp::_["pval"] = pval, Rcpp::_["Q"] = q, Rcpp::_["Q_df"] = q_df,
-    Rcpp::_["Q_pval"] = q_pval, Rcpp::_["sigma"] = sigma, Rcpp::_["intercept"] = intercept,
-    Rcpp::_["intercept_se"] = intercept_se, Rcpp::_["intercept_pval"] = intercept_pval,
-    Rcpp::_["ratio_se_mean"] = ratio_se_mean, Rcpp::_["bootstrap"] = boot,
-    Rcpp::_["phi"] = phi_out, Rcpp::_["flipped"] = flipped,
-    Rcpp::_["se_exposure_mean"] = se_exposure_mean);
+  return group_results_to_flat(all);
+}
+
+// Number of standard-normal draws each group's bootstrap consumes (the same
+// count a per-group fastmr_run_native() call takes from R's RNG), as doubles.
+// [[Rcpp::export]]
+Rcpp::NumericVector fastmr_groups_draw_counts(Rcpp::IntegerVector offsets,
+                                              Rcpp::NumericVector exposure_beta,
+                                              Rcpp::NumericVector outcome_beta,
+                                              Rcpp::NumericVector exposure_se,
+                                              Rcpp::NumericVector outcome_se,
+                                              Rcpp::CharacterVector methods,
+                                              int nboot) {
+  validate_controls(nboot, 1, 1.0);
+  const std::vector<std::string> parsed_methods = parse_methods(methods);
+  const GroupInputs in = check_group_inputs(offsets, exposure_beta, outcome_beta,
+                                            exposure_se, outcome_se);
+  const BootstrapNeeds needs = bootstrap_needs(parsed_methods);
+  Rcpp::NumericVector counts(in.groups);
+  for (R_xlen_t g = 0; g < in.groups; ++g) {
+    const Prepared p = group_prepared(in, g);
+    std::size_t ratios = 0;
+    for (double x : p.x) if (x != 0.0) ++ratios;
+    counts[g] = bootstrap_draw_count(p.x.size(), ratios, nboot, needs.median,
+                                     needs.egger, needs.penalised, needs.mode);
+  }
+  return counts;
+}
+
+// Threaded equivalent of calling fastmr_run_native() once per group with
+// bootstrap methods. `draws` holds every group's standard-normal draws,
+// concatenated in group order (group g uses draw_offsets[g] onwards, exactly
+// fastmr_groups_draw_counts()[g] of them), as R's rnorm() produced them in the
+// order the per-group calls would have consumed R's RNG. Workers rebuild the
+// identical bootstrap layouts from those draws and run the same compute_pair()
+// code with R-backed p-values deferred; p-values are then filled serially on
+// the main thread by the same functions, so output is bit-identical for every
+// thread count.
+// [[Rcpp::export]]
+Rcpp::List fastmr_run_groups_boot_native(Rcpp::IntegerVector offsets,
+                                         Rcpp::NumericVector exposure_beta,
+                                         Rcpp::NumericVector outcome_beta,
+                                         Rcpp::NumericVector exposure_se,
+                                         Rcpp::NumericVector outcome_se,
+                                         Rcpp::NumericVector draws,
+                                         Rcpp::NumericVector draw_offsets,
+                                         Rcpp::CharacterVector methods,
+                                         int nboot = 1000,
+                                         int threads = 1,
+                                         double phi = 1.0,
+                                         double penk = 20.0) {
+  validate_controls(nboot, threads, phi);
+  if (!std::isfinite(penk) || penk <= 0.0) Rcpp::stop("penk must be positive and finite");
+  const std::vector<std::string> parsed_methods = parse_methods(methods);
+  const GroupInputs in = check_group_inputs(offsets, exposure_beta, outcome_beta,
+                                            exposure_se, outcome_se);
+  if (draw_offsets.size() != in.groups + 1 || draw_offsets[0] != 0.0 ||
+      draw_offsets[in.groups] != static_cast<double>(draws.size())) {
+    Rcpp::stop("draw_offsets must start at 0 and end at length(draws)");
+  }
+  const BootstrapNeeds needs = bootstrap_needs(parsed_methods);
+  std::vector<std::size_t> draw_start(static_cast<std::size_t>(in.groups));
+  for (R_xlen_t g = 0; g < in.groups; ++g) {
+    const Prepared p = group_prepared(in, g);
+    std::size_t ratios = 0;
+    for (double x : p.x) if (x != 0.0) ++ratios;
+    const double expected = bootstrap_draw_count(p.x.size(), ratios, nboot, needs.median,
+                                                 needs.egger, needs.penalised, needs.mode);
+    if (draw_offsets[g + 1] - draw_offsets[g] != expected) {
+      Rcpp::stop("draw counts do not match the bootstrap layout");
+    }
+    draw_start[static_cast<std::size_t>(g)] = static_cast<std::size_t>(draw_offsets[g]);
+  }
+  const double* draw_data = REAL(draws);
+  const std::size_t method_count = parsed_methods.size();
+  std::vector<Result> all(static_cast<std::size_t>(in.groups) * method_count);
+  {
+  DeferRMath deferred;
+  run_parallel(static_cast<std::size_t>(in.groups), threads, [&](std::size_t g) {
+    std::vector<Result> results = compute_pair(
+      group_prepared(in, static_cast<R_xlen_t>(g)), parsed_methods, nboot, R_NilValue,
+      true, phi, penk, draw_data + draw_start[g]);
+    std::move(results.begin(), results.end(),
+              all.begin() + static_cast<std::ptrdiff_t>(g * method_count));
+  });
+  }
+  for (Result& result : all) populate_result_pvalues(result);
+  return group_results_to_flat(all);
+}
+
+// Read and write back R's RNG state without drawing: the side effect of each
+// per-group Rcpp::RNGScope (it creates .Random.seed when absent).
+// [[Rcpp::export]]
+void fastmr_touch_rng() {
+  Rcpp::RNGScope scope;
 }
