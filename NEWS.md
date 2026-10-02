@@ -24,7 +24,11 @@
   - `fast_mr_sparse_ivw()` gains `steiger_exposure_rsq`, `steiger_outcome_rsq`
     and `pair_snp_drop` so Steiger and drop masks are applied inside the
     kernel; Q uses a stable two-pass computation and `se` matches `fast_mr()`.
-  - IVW-only `fast_mr_compressed()` dispatches to the sparse CSR kernel.
+  - `fast_mr_compressed()` gains `estimator = c("auto", "pairwise")`. With the
+    `"auto"` default, IVW-only runs with non-shared instrument sets use the
+    sparse CSR kernel; counts, errors and row order match `"pairwise"` and
+    estimates agree to within 1e-14 relative (usually bit-identical). The path
+    taken is recorded as `estimator_path` in the `compressed_input` attribute.
   - `fast_mr_grid()` gains `return = c("tidy", "compact", "none")` and
     `chunk_pairs` for compact and streamed Parquet output
     (`fastmr_grid_chunk()` accessor); `fast_write_parquet()` gains
