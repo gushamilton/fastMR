@@ -188,8 +188,8 @@ test_that("graph partition runs through the PLINK2 argument surface", {
   expect_identical(res$instruments$E, c("A", "C"))
   args <- readLines(log)
   expect_length(args, 2L)  # --version + one all-pairs call
-  call <- args[grepl("--r2-unphased", args)]
-  expect_match(call, "--r2-unphased cols=id --ld-window-kb 500 --ld-window 1000000000 --ld-window-r2 0.01", fixed = TRUE)
+  call <- args[grepl("--r2-phased", args)]
+  expect_match(call, "--r2-phased cols=id --ld-window-kb 500 --ld-window 1000000000 --ld-window-r2 0.01", fixed = TRUE)
   expect_match(call, "--extract", fixed = TRUE)
 })
 
@@ -293,7 +293,7 @@ test_that("graph clumping skips PLINK when no candidate pairs exist", {
                     chr_name = "1", chrom_start = c(1000, 900000))
   res <- fast_clump_data_graph(dat, clump_kb = 1, clump_r2 = 0.01, bfile = "panel", plink2_bin = plink2)
   expect_identical(res$instruments$E, c("A", "B"))
-  expect_false(any(grepl("--r2-unphased", readLines(log))))
+  expect_false(any(grepl("--r2-phased", readLines(log))))
 })
 
 write_vcor <- function(lines, final_newline = TRUE, eol = "\n") {
@@ -422,4 +422,51 @@ test_that("one-pass compressed candidates equal the three-pass fallback (3-expos
     expect_gt(nrow(new$data), 0L)
     expect_identical(new, old)
   }
+})
+
+# Regression: PLINK --clump (1.9 and 2) uses haplotype-frequency ("phased", EM
+# when phase is unknown) r2.  The graph and lead-row LD queries used
+# --r2-unphased (squared dosage correlation), which disagrees for rare
+# variants: on 1000G EUR, rs55942980 -> rs10157022 has unphased r2 0.00192 but
+# phased r2 0.000548, so at clump_r2 = 0.001 fastMR dropped a SNP PLINK keeps.
+# Fixture (20 unphased samples): A-B unphased 0.396 / phased 0.103 (PLINK
+# keeps B); C-D unphased 0.116 / phased 0.306 (PLINK drops D).
+test_that("graph and lead-row clumping use the same r2 as PLINK --clump", {
+  skip_on_os("windows")
+  plink2 <- Sys.getenv("FASTMR_PLINK2", Sys.which("plink2"))
+  skip_if(!nzchar(plink2), "plink2 not available")
+  g <- list(A = c(0,0,0,1,0,1,0,0,0,0,0,1,0,1,1,1,2,0,0,0),
+            B = c(0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1,0,0,0),
+            C = c(1,1,1,1,1,0,1,2,1,2,1,1,0,1,0,0,1,1,1,1),
+            D = c(1,0,1,0,0,0,0,1,1,0,1,1,0,1,0,0,0,0,1,0))
+  chr <- c(A = "1", B = "1", C = "2", D = "2")
+  bp <- c(A = 1000, B = 2000, C = 1000, D = 2000)
+  dir <- tempfile("fastMR_r2fx_"); dir.create(dir)
+  on.exit(unlink(dir, recursive = TRUE), add = TRUE)
+  vcf <- file.path(dir, "fx.vcf")
+  writeLines(c("##fileformat=VCFv4.2", "##contig=<ID=1,length=100000>", "##contig=<ID=2,length=100000>",
+               "##FORMAT=<ID=GT,Number=1,Type=String,Description=\"Genotype\">",
+               paste(c("#CHROM", "POS", "ID", "REF", "ALT", "QUAL", "FILTER", "INFO", "FORMAT",
+                       sprintf("s%02d", 1:20)), collapse = "\t"),
+               vapply(names(g), function(s) paste(c(chr[[s]], bp[[s]], s, "A", "G", ".", ".", ".", "GT",
+                                                    c("0/0", "0/1", "1/1")[g[[s]] + 1]), collapse = "\t"), "")),
+             vcf)
+  pref <- file.path(dir, "fx")
+  st <- system2(plink2, c("--vcf", shQuote(vcf), "--make-pgen", "--out", shQuote(pref)), stdout = FALSE, stderr = FALSE)
+  skip_if(st != 0L, "plink2 could not build the fixture")
+  dat <- data.frame(SNP = names(g), id.exposure = "E", pval.exposure = c(1e-10, 1e-9, 1e-10, 1e-9),
+                    chr_name = unname(chr), chrom_start = unname(bp), stringsAsFactors = FALSE)
+  # PLINK2's own --clump defines the expected set.
+  pfile <- file.path(dir, "p.txt")
+  write.table(data.frame(SNP = dat$SNP, P = dat$pval.exposure), pfile, row.names = FALSE, quote = FALSE)
+  system2(plink2, c("--pfile", shQuote(pref), "--clump", shQuote(pfile), "--clump-p1", "1", "--clump-p2", "1",
+                    "--clump-r2", "0.2", "--clump-kb", "250", "--out", shQuote(file.path(dir, "c"))),
+          stdout = FALSE, stderr = FALSE)
+  clumps <- utils::read.table(file.path(dir, "c.clumps"), header = FALSE, comment.char = "#")
+  expect_setequal(clumps[[3]], c("A", "B", "C"))
+  res <- fast_clump_data_graph(dat, clump_kb = 250, clump_r2 = 0.2, pfile = pref, plink2_bin = plink2)
+  expect_setequal(res$instruments$E, c("A", "B", "C"))
+  skip_if(!nzchar(Sys.which("zstdcat")) && !nzchar(Sys.which("zstd")), "zstd not available")
+  lr <- fast_clump_data_lead_rows(dat, clump_kb = 250, clump_r2 = 0.2, pfile = pref, plink2_bin = plink2)
+  expect_setequal(lr$instruments$E, c("A", "B", "C"))
 })

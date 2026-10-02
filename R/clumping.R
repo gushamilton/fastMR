@@ -77,7 +77,7 @@ fastmr_clump_run_frontier <- function(leads, targets, reference_args, plink2_bin
   writeLines(unique(as.character(targets)), target_file)
   args <- c(reference_args, "--extract", fastmr_clump_quote(target_file),
             "--ld-snp-list", fastmr_clump_quote(lead_file),
-            "--r2-unphased", "zs", "--ld-window-kb", format(clump_kb, trim = TRUE),
+            "--r2-phased", "zs", "--ld-window-kb", format(clump_kb, trim = TRUE),
             "--ld-window-r2", format(clump_r2, trim = TRUE), "--threads", as.integer(threads),
             "--out", fastmr_clump_quote(stem))
   output <- tryCatch(suppressWarnings(system2(plink2_bin, args, stdout = TRUE, stderr = TRUE)),

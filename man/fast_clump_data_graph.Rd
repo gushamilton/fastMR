@@ -58,7 +58,7 @@ A list with \code{data}, named \code{instruments}, and \code{diagnostics}
 }
 \description{
 Clump every exposure with a single PLINK2 all-pairs LD call per chromosome
-over the union of candidate SNPs (\code{--r2-unphased} with \code{--ld-window-kb}
+over the union of candidate SNPs (\code{--r2-phased} with \code{--ld-window-kb}
 equal to \code{clump_kb}, \code{--ld-window-r2} equal to \code{clump_r2} and a very large
 \code{--ld-window} variant count), then run each exposure's greedy clump in C++
 against the symmetrised graph.  Retained instruments are identical to

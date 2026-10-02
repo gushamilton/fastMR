@@ -204,7 +204,7 @@ small stores or a future regional cis-selection helper; the 5e-8 flag is not a
 general p <= 0.01 index.
 
 For large exposure sets pass `partition = "graph"` (recommended; the default
-stays `"global"`). It issues one PLINK2 `--r2-unphased` all-pairs call per
+stays `"global"`). It issues one PLINK2 `--r2-phased` all-pairs call per
 chromosome over the union of candidate SNPs (`--ld-window-kb` = `clump_kb`,
 `--ld-window-r2` = `clump_r2`, a very large `--ld-window`), then clumps each
 exposure in C++ against that graph in the same exact (p, SNP) order, so the
