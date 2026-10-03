@@ -51,7 +51,8 @@ fix_method <- function(sp) {
   sp
 }
 set.seed(as.integer(REP) * 7919L + 13L)
-order_fmt <- sample(FORMATS)
+FMT_SEL <- strsplit(Sys.getenv("STORAGE_FORMATS", paste(FORMATS, collapse = ",")), ",")[[1]]   # e.g. "cpr" to re-time one format
+order_fmt <- sample(intersect(FORMATS, FMT_SEL))
 cat("format order:", order_fmt, "\n"); fwrite(data.table(rep = REP, order = paste(order_fmt, collapse = ",")), file.path(RES, sprintf("%s%s_order.csv", TAG, REP)))
 capped <- character(); ALL <- list()
 dest <- file.path(ROOT, "work", sprintf("%s%s", TAG, REP)); dir.create(dest, FALSE, TRUE)

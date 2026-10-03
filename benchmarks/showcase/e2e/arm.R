@@ -107,40 +107,27 @@ if (ARM == "C") {
   suppressMessages({library(CompreSSoR); library(fastMR); loadNamespace("arrow")})   # loaded before any timed stage, like the other arms
   ef <- setNames(file.path(TRAITS, "cpr", paste0(expo, ".cpr")), expo)
   of <- setNames(file.path(TRAITS, "cpr", paste0(outc, ".cpr")), outc)
-  # select + clump are one public call (candidate read from the p-value flag/order domains, then graph clump)
+  # select + clump are one public call: candidates from the p-value flag/order domains, then the
+  # default size-based clump strategy (per-exposure plink2 --clump on a candidate subset, or the LD graph)
   cl <- stage("clump", fast_clump_compressed(ef, pvalue_threshold = PTHR, candidate_source = "pvalue_flag",
-          pvalue_order = "require_exact", partition = "graph", pfile = REF, plink2_bin = PLINK2,
+          pvalue_order = "require_exact", partition = "auto", pfile = REF, plink2_bin = PLINK2,
           clump_kb = KB, clump_r2 = P1, threads = TH, io_threads = TH))
   inst <- cl$instruments[expo]
   res$instruments <- lapply(inst, as.character)
+  res$clump_strategy <- cl$diagnostics$auto
   methods <- c("ivw", "egger", "weighted_median", "simple_mode", "weighted_mode")
+  # Extract, harmonise, MR and Steiger in one pass over the stores; N comes from the design table
+  # because the stores carry no sample size.
   mrres <- stage("mr_total_incl_extract", fast_mr_compressed(ef, of, inst, methods = methods, nboot = 1000, seed = SEED,
-                                                threads = TH, io_threads = TH))
+                                                threads = TH, io_threads = TH, steiger = TRUE,
+                                                samplesize_exposure = Nof[expo], samplesize_outcome = Nof[outc]))
   tim <- attr(mrres, "compressed_input")$timing
-  fwrite(data.table(stage = c("extract", "harmonise", "mr"), wall_s = c(tim$io_seconds, 0, tim$estimator_seconds), cpu_s = NA_real_),
+  fwrite(data.table(stage = c("extract", "harmonise", "mr", "steiger"),
+                    wall_s = c(tim$io_seconds, 0, tim$estimator_seconds, tim$steiger_seconds), cpu_s = NA_real_),
          stages, append = TRUE)
   res$counts <- attr(mrres, "compressed_input")$counts
-  # Steiger: the store carries no sample size, so N comes from the simulation design table.
-  stg <- stage("steiger", {
-    # Stores are read in parallel (one per worker) and joined with data.table: the
-    # reads are I/O the TSMR arms already did in their extract stage.
-    rd1 <- function(path, keys) as.data.table(fast_read_compressed(path, variants = keys,
-              columns = c("beta", "standard_error", "effect_allele_frequency", "p_value")))
-    allk <- unique(unlist(inst, use.names = FALSE))
-    par <- function(ids, f) if (TH > 1L) parallel::mclapply(ids, f, mc.cores = min(TH, length(ids))) else lapply(ids, f)
-    ex <- rbindlist(par(expo, function(id) rd1(ef[[id]], inst[[id]])[, id.exposure := id]))
-    ou <- rbindlist(par(outc, function(id) rd1(of[[id]], allk)[, id.outcome := id]))
-    setnames(ex, c("beta", "standard_error", "effect_allele_frequency", "p_value"),
-             c("beta.exposure", "se.exposure", "eaf.exposure", "pval.exposure"))
-    setnames(ou, c("beta", "standard_error", "effect_allele_frequency", "p_value"),
-             c("beta.outcome", "se.outcome", "eaf.outcome", "pval.outcome"))
-    d <- ex[ou, on = "variant_key", nomatch = NULL, allow.cartesian = TRUE]
-    d[, `:=`(SNP = variant_key, exposure = id.exposure, outcome = id.outcome, units.exposure = "", units.outcome = "",
-             samplesize.exposure = Nof[id.exposure], samplesize.outcome = Nof[id.outcome], mr_keep = TRUE)]
-    setorder(d, id.exposure, id.outcome)
-    d <- as.data.frame(d); res$harm <- split(d$SNP, paste(d$id.exposure, d$id.outcome, sep = "|"))
-    fast_mr_steiger_filtering(d)
-  })
+  stg <- as.data.frame(attr(mrres, "steiger"))
+  res$harm <- split(stg$SNP, paste(stg$id.exposure, stg$id.outcome, sep = "|"))
   stage("write", { fast_write_parquet(as.data.frame(mrres), file.path(OUT, "mr.parquet"), overwrite = TRUE)
                    fast_write_parquet(as.data.frame(stg), file.path(OUT, "steiger.parquet"), overwrite = TRUE) })
   fwrite(as.data.table(mrres), file.path(OUT, "mr_for_agreement.tsv"), sep = "\t")   # untimed copy for the agreement script

@@ -23,6 +23,9 @@ cells in fresh R processes under `/usr/bin/time -v`, arms in randomised order, a
 `mr/aggregate.R`, `storage/aggregate.R`, `multi/aggregate_multi.R` and
 `e2e/aggregate_e2e.R` (after `e2e/agree.R` per replicate and size).
 
-Versions used for the published numbers: fastMR 0.2.0 at `5a189f7`, CompreSSoR 0.6.0
-(`d84e1aa`; `.cpr` write re-timed on `a27b32d`), TwoSampleMR 0.7.11 (`f492045`),
-ieugwasr 1.2.0, PLINK 1.9 b7.7, PLINK2 2.00a6.8, bcftools/htslib 1.19, R 4.5.1.
+Versions used for the published numbers: fastMR 0.2.0 at `fb62057`, CompreSSoR 0.7.0 at `f91bb8d`
+(store format 0.4.6; stores re-encoded by `prep/reencode_v7.*`), TwoSampleMR 0.7.11 (`f492045`),
+ieugwasr 1.2.0, PLINK 1.9 b7.7, PLINK2 2.00a6.8, bcftools/htslib 1.19, R 4.5.1. The final fastMR arms
+come from `e2e/e2e_v7.sbatch` (1x1 to 50x50); `e2e/scaling_model.R` fits the per-stage scaling model on
+the 1x1 and 10x10 runs. `storage/run_rep.R` and `multi/run_multi.R` take `STORAGE_FORMATS` /
+`MULTI_FORMATS` to re-time a single format.

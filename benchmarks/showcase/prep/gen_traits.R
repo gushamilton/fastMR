@@ -22,7 +22,7 @@ setup_libs(c("cs"))
 suppressMessages(library(data.table))
 SEED <- as.integer(Sys.getenv("SEED", "20261002")); NT <- as.integer(Sys.getenv("NTHREADS", "16"))
 setDTthreads(NT)
-NEXP <- 10L; NOUT <- 10L; NT_TOT <- NEXP + NOUT
+NEXP <- as.integer(Sys.getenv("NEXP", "10")); NOUT <- as.integer(Sys.getenv("NOUT", "10")); NT_TOT <- NEXP + NOUT   # 25+25 for the 25x25 study (own TRAITS dir)
 TMP <- file.path(TRAITS, "tmp"); dir.create(TMP, recursive = TRUE, showWarnings = FALSE)
 log <- function(...) cat(format(Sys.time(), "%H:%M:%S"), ..., "\n")
 set.seed(SEED)
@@ -102,7 +102,7 @@ for (o in 1:NOUT) {
 
 # design tables (written by every run; identical content)
 fwrite(rbindlist(truth), file.path(TRAITS, "truth_theta.csv"))
-fwrite(data.table(trait = trait_id, role = rep(c("exposure", "outcome"), each = 10), N = Ns,
+fwrite(data.table(trait = trait_id, role = rep(c("exposure", "outcome"), c(NEXP, NOUT)), N = Ns,
                   K = c(K, rep(NA, NOUT))), file.path(TRAITS, "traits.csv"))
 saveRDS(list(causal_ids = lapply(causal, function(i) pv$id[i]), seed = SEED), file.path(TRAITS, "causal.rds"))
 if (nzchar(Sys.getenv("STAGE1_ONLY"))) { log("stage 1 done"); quit(save = "no") }
