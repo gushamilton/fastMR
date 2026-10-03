@@ -198,8 +198,8 @@ Steiger rows are exactly the rows MR used. The default (`steiger = FALSE`) reads
 and returns the same as before. Instrument discovery,
 association-threshold selection, and LD clumping remain explicit upstream
 steps. For many exposures, the opt-in `fast_clump_compressed()` helper reads
-Pcodec candidate rows and shares one exposure-grouped PLINK2 LD frontier across
-all current leads while preserving each exposure's greedy decisions:
+Pcodec candidate rows and clumps every exposure exactly, preserving each
+exposure's greedy decisions (strategies below):
 
 ```r
 clumped <- fast_clump_compressed(
@@ -223,18 +223,37 @@ For p-value thresholds such as 0.01, use `candidate_source = "full"` only for
 small stores or a future regional cis-selection helper; the 5e-8 flag is not a
 general p <= 0.01 index.
 
-For large exposure sets pass `partition = "graph"` (recommended; the default
-stays `"global"`). It issues one PLINK2 `--r2-phased` all-pairs call per
-chromosome over the union of candidate SNPs (`--ld-window-kb` = `clump_kb`,
-`--ld-window-r2` = `clump_r2`, a very large `--ld-window`), then clumps each
-exposure in C++ against that graph in the same exact (p, SNP) order, so the
-instruments are identical to `"global"` and `"lead_row"`. Chromosomes whose
-estimated pair count exceeds `max_graph_pairs` (default 5e7) fall back to
-lead-row mode, with the reason in `diagnostics$fallbacks`;
-`diagnostics$ld_provenance` records the PLINK2 version, LD flags, reference and
-manifest MD5. With `pvalue_order = "require_exact"` the exact CompreSSoR rank
-domain (`read_pvalue_order()`) is used when the stores carry it; otherwise the
-call errors.
+The default `partition = "auto"` chooses between two exact strategies from
+the estimated number of candidate pairs within `clump_kb`, the number of
+exposures and `threads`, and records the choice in `diagnostics$auto`:
+
+- `"graph"` issues one PLINK2 `--r2-phased` all-pairs call over the union of
+  candidate SNPs (`--ld-window-kb` = `clump_kb`, `--ld-window-r2` =
+  `clump_r2`, a very large `--ld-window`), then clumps each exposure in C++
+  against that graph in the same exact (p, SNP) order. Chromosomes whose
+  estimated pair count exceeds `max_graph_pairs` (default 5e7) fall back to
+  lead-row mode, with the reason in `diagnostics$fallbacks`.
+- `"per_exposure"` extracts the candidate union once (`--extract
+  --make-pgen`) and runs one single-threaded PLINK2 `--clump` per exposure on
+  that subset, `threads` at a time. The P column is each candidate's exact
+  greedy rank and the window/r2 arguments are translated to the graph's
+  inclusive comparisons. The leads are then certified with one lead-restricted
+  `--r2-phased` query (the graph's own LD statistic): the result is used only
+  if the greedy pass over that lead-incident graph reproduces it exactly,
+  otherwise the graph runs. (PLINK2 2.00a6.8's `--clump` mis-estimates r2 for
+  some rare-variant pairs with |D'| = 1, so this check is not optional.) At
+  permissive settings (r2 0.001, 10 Mb) the pair graph is nearly complete and
+  this is several times faster.
+
+Auto picks per-exposure when its predicted cost (about 1.0 s + 15.5 ms per
+exposure divided by `max(1, min(threads, E) / 3.5)`) is below the graph's
+(about 1.1 s + 0.75 us per estimated pair + 2 us per candidate row).
+`"graph"`, `"per_exposure"`, `"global"`,
+`"chromosome"` and `"lead_row"` can also be requested explicitly; all return
+identical instruments. `diagnostics$ld_provenance` records the PLINK2 version,
+LD flags, reference and manifest MD5. With `pvalue_order = "require_exact"`
+the exact CompreSSoR rank domain is used when the stores carry it; otherwise
+the call errors.
 
 The reproducible I/O benchmark uses a frozen panel of 25 real FinnGen
 index variants selected at p < 1e-5 and clumped against GRCh38 1000 Genomes

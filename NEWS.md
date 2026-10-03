@@ -1,5 +1,18 @@
 # fastMR 0.2.0
 
+- `fast_clump_compressed()` now defaults to `partition = "auto"`
+  (`fast_clump_data_auto()`), which picks between the all-pairs graph and the
+  new `fast_clump_data_per_exposure()` (one PLINK2 `--clump` per exposure on a
+  candidate-only `--extract --make-pgen` subset, P = exact greedy rank,
+  window/r2 arguments translated to the graph's inclusive comparisons, leads
+  certified against the graph's `--r2-phased` LD) from the estimated
+  candidate pair count. Instruments are identical to the graph
+  and lead-row strategies; the choice is recorded in `diagnostics$auto`.
+- `candidate_source = "pvalue_flag"` reads candidates with one
+  `CompreSSoR::read_candidates_batch(strategy = "pvalue_flag")` pass, decoding
+  only the flagged rows' exact ranks instead of each store's full rank vector.
+  Membership is still the writer-time flag, filtered to `pvalue_threshold`.
+
 - Graph clumping now asks PLINK2 for an uncompressed `.vcor` (about 30 bytes
   per edge, written to the work directory and deleted after parsing) and
   parses it in C++ straight into vertex ids; zstd is no longer needed for
