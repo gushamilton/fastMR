@@ -225,9 +225,9 @@ fastmr_clump_reference_mismatch <- function(pvar, snp, chr, bp) {
 #' has duplicate candidate IDs, or when `clump_r2 <= 0`.
 #'
 #' @inheritParams fast_clump_data_graph
-#' @param subset `"auto"` (extract a candidate subset when there is more than
-#'   one exposure; a single exposure is clumped on the full reference),
-#'   `"always"` or `"never"`.
+#' @param subset `"auto"` or `"always"` (default behaviour: extract the
+#'   candidate subset), or `"never"` (clump and certify on the full reference
+#'   with `--extract`; slower, since the reference is parsed twice).
 #' @param ... Forwarded to [fast_clump_data_graph()] when the call is
 #'   delegated (for example `max_graph_pairs`).
 #' @return A list with `data`, named `instruments`, and `diagnostics`.
@@ -300,7 +300,10 @@ fast_clump_data_per_exposure <- function(
   if (workdir_owned) on.exit(unlink(workdir, recursive = TRUE, force = TRUE), add = TRUE)
 
   e_ids <- unique(expo[elig])
-  use_subset <- subset == "always" || (subset == "auto" && length(e_ids) > 1L)
+  # Always subset by default: without a subset the certificate query has to
+  # parse the full reference a second time (~1 s for 9M variants), which costs
+  # more than the subset itself even for one exposure.
+  use_subset <- subset != "never"
   plink_calls <- 0L
   subset_variants <- NA_integer_
   retained_key <- character()
@@ -453,7 +456,7 @@ fastmr_clump_auto_model <- list(
   graph_fixed = 1.1,          # PLINK2 start + reference .pvar parse
   graph_per_pair = 0.75e-6,   # all-pairs LD + .vcor parse + R, per estimated pair
   graph_per_row = 2e-6,       # per eligible candidate row (R bookkeeping)
-  per_exposure_fixed = 0.95,  # candidate subset (or one full-reference --clump)
+  per_exposure_fixed = 1.0,   # candidate subset + lead certificate query
   per_exposure_each = 0.0155, # one single-threaded --clump on the subset
   worker_divisor = 3.5        # concurrent --clump processes scale ~ threads / 3.5
 )
@@ -510,7 +513,7 @@ fastmr_clump_auto_plan <- function(dat, clump_kb, clump_p1, threads,
 #' a 9M-variant reference: graph about `1.1 s + 0.75 us x P + 2 us x rows`,
 #' with `P` the estimated candidate pairs within `clump_kb` (from sorted
 #' positions) and `rows` the eligible candidate rows; per-exposure about
-#' `0.95 s + 15.5 ms x E / w`, with `w = max(1, min(threads, E) / 3.5)`
+#' `1.0 s + 15.5 ms x E / w`, with `w = max(1, min(threads, E) / 3.5)`
 #' concurrent workers.  The cheaper prediction wins.  Both strategies return
 #' identical instruments; the choice and the model inputs
 #' are recorded in `diagnostics$auto`.  If the per-exposure run fails, the

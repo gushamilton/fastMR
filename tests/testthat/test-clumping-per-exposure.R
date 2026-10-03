@@ -149,7 +149,7 @@ test_that("per-exposure clumping is identical to graph and lead_row for E = 1, 1
         expect_identical(pe$instruments, g$instruments)
         expect_identical(pe$data, g$data)
         expect_identical(pe$data, lr$data)
-        expect_identical(pe$diagnostics$subset, sub == "always" || (sub == "auto" && E > 1L))
+        expect_identical(pe$diagnostics$subset, sub != "never")
       }
       au <- do.call(fast_clump_data_auto, c(list(dat), common))
       expect_identical(au$data, g$data)
@@ -282,8 +282,8 @@ test_that("auto dispatch follows the cost model and records it", {
   with_pe_oracle(ref)
   one <- pe_make_dat(1L, 9L, ref)
   a1 <- fast_clump_data_auto(one, clump_kb = 5, clump_r2 = 0.5, bfile = "mock", plink2_bin = "/bin/true")
-  expect_identical(a1$diagnostics$auto$strategy, "per_exposure")   # E = 1: one --clump, no subset
-  expect_false(a1$diagnostics$subset)
+  expect_identical(a1$diagnostics$auto$strategy, "per_exposure")   # E = 1: subset + one --clump
+  expect_true(a1$diagnostics$subset)
   plan <- fastMR:::fastmr_clump_auto_plan
   big <- data.frame(SNP = paste0("s", 1:2000), id.exposure = rep(sprintf("e%02d", 1:10), 200),
                     pval.exposure = 1e-9, chr_name = "1", chrom_start = seq_len(2000) * 10)

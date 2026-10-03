@@ -36,9 +36,9 @@ fast_clump_data_per_exposure(
 
 \item{threads}{Threads passed to each PLINK query.}
 
-\item{subset}{\code{"auto"} (extract a candidate subset when there is more than
-one exposure; a single exposure is clumped on the full reference),
-\code{"always"} or \code{"never"}.}
+\item{subset}{\code{"auto"} or \code{"always"} (default behaviour: extract the
+candidate subset), or \code{"never"} (clump and certify on the full reference
+with \code{--extract}; slower, since the reference is parsed twice).}
 
 \item{workdir}{Optional directory for query files.}
 

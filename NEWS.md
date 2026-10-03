@@ -4,8 +4,9 @@
   (`fast_clump_data_auto()`), which picks between the all-pairs graph and the
   new `fast_clump_data_per_exposure()` (one PLINK2 `--clump` per exposure on a
   candidate-only `--extract --make-pgen` subset, P = exact greedy rank,
-  window/r2 arguments translated to the graph's inclusive comparisons) from
-  the estimated candidate pair count. Instruments are identical to the graph
+  window/r2 arguments translated to the graph's inclusive comparisons, leads
+  certified against the graph's `--r2-phased` LD) from the estimated
+  candidate pair count. Instruments are identical to the graph
   and lead-row strategies; the choice is recorded in `diagnostics$auto`.
 - `candidate_source = "pvalue_flag"` reads candidates with one
   `CompreSSoR::read_candidates_batch(strategy = "pvalue_flag")` pass, decoding

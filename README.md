@@ -235,14 +235,17 @@ exposures and `threads`, and records the choice in `diagnostics$auto`:
   lead-row mode, with the reason in `diagnostics$fallbacks`.
 - `"per_exposure"` extracts the candidate union once (`--extract
   --make-pgen`) and runs one single-threaded PLINK2 `--clump` per exposure on
-  that subset, `threads` at a time (a single exposure is clumped on the full
-  reference without a subset). The P column is each candidate's exact greedy
-  rank and the window/r2 arguments are translated to the graph's inclusive
-  comparisons, so the instruments are identical. At permissive settings
-  (r2 0.001, 10 Mb) the pair graph is nearly complete and this is several
-  times faster.
+  that subset, `threads` at a time. The P column is each candidate's exact
+  greedy rank and the window/r2 arguments are translated to the graph's
+  inclusive comparisons. The leads are then certified with one lead-restricted
+  `--r2-phased` query (the graph's own LD statistic): the result is used only
+  if the greedy pass over that lead-incident graph reproduces it exactly,
+  otherwise the graph runs. (PLINK2 2.00a6.8's `--clump` mis-estimates r2 for
+  some rare-variant pairs with |D'| = 1, so this check is not optional.) At
+  permissive settings (r2 0.001, 10 Mb) the pair graph is nearly complete and
+  this is several times faster.
 
-Auto picks per-exposure when its predicted cost (about 0.95 s + 15.5 ms per
+Auto picks per-exposure when its predicted cost (about 1.0 s + 15.5 ms per
 exposure divided by `max(1, min(threads, E) / 3.5)`) is below the graph's
 (about 1.1 s + 0.75 us per estimated pair + 2 us per candidate row).
 `"graph"`, `"per_exposure"`, `"global"`,
