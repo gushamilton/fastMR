@@ -48,6 +48,28 @@ BEGIN_RCPP
     return rcpp_result_gen;
 END_RCPP
 }
+// fastmr_set_mode_direct_max_native
+double fastmr_set_mode_direct_max_native(double ratios);
+RcppExport SEXP _fastMR_fastmr_set_mode_direct_max_native(SEXP ratiosSEXP) {
+BEGIN_RCPP
+    Rcpp::RObject rcpp_result_gen;
+    Rcpp::RNGScope rcpp_rngScope_gen;
+    Rcpp::traits::input_parameter< double >::type ratios(ratiosSEXP);
+    rcpp_result_gen = Rcpp::wrap(fastmr_set_mode_direct_max_native(ratios));
+    return rcpp_result_gen;
+END_RCPP
+}
+// fastmr_mode_path_counts_native
+Rcpp::NumericVector fastmr_mode_path_counts_native(bool reset);
+RcppExport SEXP _fastMR_fastmr_mode_path_counts_native(SEXP resetSEXP) {
+BEGIN_RCPP
+    Rcpp::RObject rcpp_result_gen;
+    Rcpp::RNGScope rcpp_rngScope_gen;
+    Rcpp::traits::input_parameter< bool >::type reset(resetSEXP);
+    rcpp_result_gen = Rcpp::wrap(fastmr_mode_path_counts_native(reset));
+    return rcpp_result_gen;
+END_RCPP
+}
 // fastmr_run_native
 Rcpp::List fastmr_run_native(Rcpp::NumericVector exposure_beta, Rcpp::NumericVector outcome_beta, Rcpp::NumericVector exposure_se, Rcpp::NumericVector outcome_se, Rcpp::CharacterVector methods, int nboot, SEXP seed, int threads, double phi, double penk);
 RcppExport SEXP _fastMR_fastmr_run_native(SEXP exposure_betaSEXP, SEXP outcome_betaSEXP, SEXP exposure_seSEXP, SEXP outcome_seSEXP, SEXP methodsSEXP, SEXP nbootSEXP, SEXP seedSEXP, SEXP threadsSEXP, SEXP phiSEXP, SEXP penkSEXP) {
@@ -219,6 +241,8 @@ static const R_CallMethodDef CallEntries[] = {
     {"_fastMR_fastmr_vcor_read", (DL_FUNC) &_fastMR_fastmr_vcor_read, 2},
     {"_fastMR_fastmr_graph_clump", (DL_FUNC) &_fastMR_fastmr_graph_clump, 5},
     {"_fastMR_fastmr_set_work_scale_native", (DL_FUNC) &_fastMR_fastmr_set_work_scale_native, 1},
+    {"_fastMR_fastmr_set_mode_direct_max_native", (DL_FUNC) &_fastMR_fastmr_set_mode_direct_max_native, 1},
+    {"_fastMR_fastmr_mode_path_counts_native", (DL_FUNC) &_fastMR_fastmr_mode_path_counts_native, 1},
     {"_fastMR_fastmr_run_native", (DL_FUNC) &_fastMR_fastmr_run_native, 10},
     {"_fastMR_fastmr_grid_native", (DL_FUNC) &_fastMR_fastmr_grid_native, 10},
     {"_fastMR_fastmr_masked_ivw_native", (DL_FUNC) &_fastMR_fastmr_masked_ivw_native, 6},
