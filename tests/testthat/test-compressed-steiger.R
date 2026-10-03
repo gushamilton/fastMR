@@ -131,7 +131,7 @@ test_that("compressed Steiger uses the rows MR keeps", {
   skip_if_compressor_unavailable()
   study <- compressed_steiger_study()
   instruments <- study$instruments
-  instruments$exposure_b <- c(instruments$exposure_b, "1:250000000:A:C")
+  instruments$exposure_b <- c(instruments$exposure_b, "2:200000000:A:C")
   expect_warning(
     result <- fast_mr_compressed(
       study$exposures, study$outcomes, instruments, methods = "ivw",
@@ -141,7 +141,7 @@ test_that("compressed Steiger uses the rows MR keeps", {
     "missing requested"
   )
   steiger <- attr(result, "steiger")
-  expect_false("1:250000000:A:C" %in% steiger$SNP)
+  expect_false("2:200000000:A:C" %in% steiger$SNP)
   expected <- compressed_steiger_two_pass(study, study$instruments)
   rownames(steiger) <- rownames(expected) <- NULL
   expect_identical(steiger, expected)
