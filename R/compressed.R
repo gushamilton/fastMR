@@ -482,6 +482,193 @@ fastmr_compressed_sparse_ivw <- function(
   list(result = result, counts = counts)
 }
 
+# Per-trait sample sizes for Steiger filtering of compressed input. Stores carry
+# no sample size, so the caller supplies one per exposure/outcome label: a
+# scalar shared by every trait, a vector named by label (extra names are
+# ignored), or an unnamed vector in store order. Labels listed in `binary` take
+# their effective N from case/control counts and may be omitted here.
+fastmr_compressed_samplesize <- function(value, labels, binary, argument) {
+  needed <- setdiff(labels, binary)
+  if (is.null(value)) {
+    if (length(needed)) {
+      stop(argument, " is required when steiger = TRUE (stores carry no sample size)",
+           call. = FALSE)
+    }
+    return(stats::setNames(rep(NA_real_, length(labels)), labels))
+  }
+  if (!is.numeric(value) || !length(value)) {
+    stop(argument, " must be a numeric vector of sample sizes", call. = FALSE)
+  }
+  if (!is.null(names(value)) && all(nzchar(names(value)))) {
+    if (anyDuplicated(names(value))) {
+      stop(argument, " must not contain duplicate names", call. = FALSE)
+    }
+    missing <- setdiff(needed, names(value))
+    if (length(missing)) {
+      stop(argument, " is missing sample size(s) for: ",
+           paste(missing, collapse = ", "), call. = FALSE)
+    }
+    out <- unname(as.numeric(value)[match(labels, names(value))])
+  } else if (!is.null(names(value)) && any(nzchar(names(value)))) {
+    stop(argument, " must be either fully named or completely unnamed", call. = FALSE)
+  } else if (length(value) == 1L) {
+    out <- rep(as.numeric(value), length(labels))
+  } else if (length(value) == length(labels)) {
+    out <- as.numeric(value)
+  } else {
+    stop(argument, " must have length one, one value per store, or names ",
+         "matching the store labels", call. = FALSE)
+  }
+  names(out) <- labels
+  bad <- labels %in% needed & !(is.finite(out) & out > 0)
+  if (any(bad)) {
+    stop(argument, " must be finite and positive for: ",
+         paste(labels[bad], collapse = ", "), call. = FALSE)
+  }
+  out
+}
+
+fastmr_compressed_steiger_binary <- function(binary, labels) {
+  if (is.null(binary)) return(NULL)
+  required <- c("id", "ncase", "ncontrol", "prevalence")
+  if (!is.data.frame(binary) || !all(required %in% names(binary))) {
+    stop("steiger_binary must be a data frame with columns ",
+         paste(required, collapse = ", "), call. = FALSE)
+  }
+  id <- as.character(binary$id)
+  if (anyNA(id) || any(!nzchar(id)) || anyDuplicated(id)) {
+    stop("steiger_binary$id must contain unique non-empty trait labels", call. = FALSE)
+  }
+  unknown <- setdiff(id, labels)
+  if (length(unknown)) {
+    stop("steiger_binary$id contains label(s) that are not exposure or outcome stores: ",
+         paste(unknown, collapse = ", "), call. = FALSE)
+  }
+  out <- data.frame(
+    id = id,
+    ncase = fastmr_numeric(binary$ncase, "steiger_binary$ncase"),
+    ncontrol = fastmr_numeric(binary$ncontrol, "steiger_binary$ncontrol"),
+    prevalence = fastmr_numeric(binary$prevalence, "steiger_binary$prevalence"),
+    stringsAsFactors = FALSE
+  )
+  bad <- !(is.finite(out$ncase) & out$ncase > 0 &
+             is.finite(out$ncontrol) & out$ncontrol > 0 &
+             is.finite(out$prevalence) & out$prevalence > 0 & out$prevalence < 1)
+  if (any(bad)) {
+    stop("steiger_binary needs positive ncase/ncontrol and 0 < prevalence < 1 for: ",
+         paste(out$id[bad], collapse = ", "), call. = FALSE)
+  }
+  out
+}
+
+# Validates the Steiger options of fast_mr_compressed(); NULL when disabled.
+fastmr_compressed_steiger_options <- function(steiger, samplesize_exposure,
+                                              samplesize_outcome, steiger_binary,
+                                              exposure_labels, outcome_labels) {
+  if (length(steiger) != 1L || !is.logical(steiger) || is.na(steiger)) {
+    stop("steiger must be TRUE or FALSE", call. = FALSE)
+  }
+  if (!steiger) {
+    supplied <- c(
+      samplesize_exposure = !is.null(samplesize_exposure),
+      samplesize_outcome = !is.null(samplesize_outcome),
+      steiger_binary = !is.null(steiger_binary)
+    )
+    if (any(supplied)) {
+      stop(paste(names(supplied)[supplied], collapse = ", "),
+           " only applies when steiger = TRUE", call. = FALSE)
+    }
+    return(NULL)
+  }
+  binary <- fastmr_compressed_steiger_binary(
+    steiger_binary, union(exposure_labels, outcome_labels)
+  )
+  binary_ids <- if (is.null(binary)) character() else binary$id
+  list(
+    samplesize_exposure = fastmr_compressed_samplesize(
+      samplesize_exposure, exposure_labels, binary_ids, "samplesize_exposure"
+    ),
+    samplesize_outcome = fastmr_compressed_samplesize(
+      samplesize_outcome, outcome_labels, binary_ids, "samplesize_outcome"
+    ),
+    binary = binary
+  )
+}
+
+# Steiger filtering on the rows already read for MR. A pair's rows are its
+# exposure instruments found in both stores with finite beta and positive
+# standard error (the rows MR uses), in instrument order; pairs with fewer than
+# `minimum_snps` such rows are dropped, as MR drops them. Rows are
+# exposure-major, outcomes in store order.
+fastmr_compressed_steiger <- function(exposure_data, outcome_data, instrument_sets,
+                                      minimum_snps, options) {
+  valid_values <- function(data) {
+    is.finite(data$beta) & is.finite(data$standard_error) & data$standard_error > 0
+  }
+  outcome_valid <- lapply(outcome_data, valid_values)
+  parts <- list()
+  for (exposure_name in names(exposure_data)) {
+    exposure <- exposure_data[[exposure_name]]
+    rows <- match(instrument_sets[[exposure_name]], exposure$variant_key, nomatch = 0L)
+    rows <- rows[rows > 0L]
+    rows <- rows[valid_values(exposure)[rows]]
+    keys <- exposure$variant_key[rows]
+    for (outcome_name in names(outcome_data)) {
+      hit <- match(keys, outcome_data[[outcome_name]]$variant_key, nomatch = 0L)
+      keep <- hit > 0L
+      keep[keep] <- outcome_valid[[outcome_name]][hit[keep]]
+      if (sum(keep) < minimum_snps) next
+      parts[[length(parts) + 1L]] <- list(
+        exposure = exposure_name, outcome = outcome_name,
+        exposure_rows = rows[keep], outcome_rows = hit[keep]
+      )
+    }
+  }
+  if (!length(parts)) return(data.frame())
+  size <- vapply(parts, function(part) length(part$exposure_rows), integer(1))
+  id_exposure <- rep(vapply(parts, `[[`, character(1), "exposure"), size)
+  id_outcome <- rep(vapply(parts, `[[`, character(1), "outcome"), size)
+  gather <- function(side, column) {
+    source <- if (side == "exposure") exposure_data else outcome_data
+    rows_name <- paste0(side, "_rows")
+    unlist(lapply(parts, function(part) {
+      source[[part[[side]]]][[column]][part[[rows_name]]]
+    }), use.names = FALSE)
+  }
+  data <- data.frame(
+    SNP = gather("exposure", "variant_key"),
+    id.exposure = id_exposure,
+    id.outcome = id_outcome,
+    exposure = id_exposure,
+    outcome = id_outcome,
+    beta.exposure = gather("exposure", "beta"),
+    beta.outcome = gather("outcome", "beta"),
+    se.exposure = gather("exposure", "standard_error"),
+    se.outcome = gather("outcome", "standard_error"),
+    eaf.exposure = gather("exposure", "effect_allele_frequency"),
+    eaf.outcome = gather("outcome", "effect_allele_frequency"),
+    pval.exposure = gather("exposure", "p_value"),
+    pval.outcome = gather("outcome", "p_value"),
+    samplesize.exposure = unname(options$samplesize_exposure[id_exposure]),
+    samplesize.outcome = unname(options$samplesize_outcome[id_outcome]),
+    units.exposure = "",
+    units.outcome = "",
+    mr_keep = TRUE,
+    stringsAsFactors = FALSE
+  )
+  binary <- options$binary
+  if (!is.null(binary)) {
+    for (side in c("exposure", "outcome")) {
+      index <- match(data[[paste0("id.", side)]], binary$id)
+      data[[paste0("units.", side)]][!is.na(index)] <- "log odds"
+      data[[paste0("ncase.", side)]] <- binary$ncase[index]
+      data[[paste0("ncontrol.", side)]] <- binary$ncontrol[index]
+      data[[paste0("prevalence.", side)]] <- binary$prevalence[index]
+    }
+  }
+  fast_mr_steiger_filtering(data)
+}
+
 #' Read selected variants from a Pcodec CompreSSoR GWAS
 #'
 #' This is the FastMR-facing reader for a self-contained CompreSSoR store. It
@@ -557,9 +744,30 @@ fast_read_compressed <- function(
 #'   (and every other method set) always uses the per-pair path. The path used
 #'   is reported as `estimator_path` in the `compressed_input` attribute
 #'   (`"sparse_ivw"`, `"pairwise"` or `"shared_instrument_grid"`).
+#' @param steiger If `TRUE`, also run per-SNP Steiger filtering
+#'   ([fast_mr_steiger_filtering()]) for every retained exposure-outcome pair.
+#'   `effect_allele_frequency` and `p_value` are read in the same pass as
+#'   beta/standard error, so no store is read twice. The result is returned in
+#'   the `steiger` attribute; the MR result itself is unchanged. Steiger rows
+#'   are the rows MR uses: instruments found in both stores with finite beta
+#'   and positive standard error, for pairs meeting `minimum_snps`.
+#' @param samplesize_exposure,samplesize_outcome Sample sizes for Steiger
+#'   (stores carry none): a vector named by store label (as in
+#'   `exposure_files`/`outcome_files`), an unnamed vector in store order, or
+#'   one value for every store. Required when `steiger = TRUE`, except for
+#'   traits listed in `steiger_binary`.
+#' @param steiger_binary Optional data frame for binary (log-odds) traits with
+#'   columns `id` (an exposure or outcome store label), `ncase`, `ncontrol` and
+#'   `prevalence`. Those traits use the log-odds R-squared model with the
+#'   harmonic effective sample size, as in [fast_mr_steiger_filtering()]; a
+#'   label shared by an exposure and an outcome applies to both.
 #' @param ... Additional options passed to [fast_mr()].
 #' @return A tidy FastMR result with extraction metadata in the
-#'   `compressed_input` attribute.
+#'   `compressed_input` attribute. With `steiger = TRUE`, the `steiger`
+#'   attribute holds the per-SNP [fast_mr_steiger_filtering()] output
+#'   (exposure-major, instruments in supplied order) and
+#'   `compressed_input$timing$steiger_seconds` its compute time. The
+#'   `steiger` attribute is not written to `output`.
 #' @export
 fast_mr_compressed <- function(
     exposure_files,
@@ -574,6 +782,10 @@ fast_mr_compressed <- function(
     strict = TRUE,
     output = NULL,
     estimator = c("auto", "pairwise"),
+    steiger = FALSE,
+    samplesize_exposure = NULL,
+    samplesize_outcome = NULL,
+    steiger_binary = NULL,
     ...) {
   estimator <- match.arg(estimator)
   total_started <- unname(proc.time()[["elapsed"]])
@@ -587,11 +799,34 @@ fast_mr_compressed <- function(
     stop("strict must be TRUE or FALSE", call. = FALSE)
   }
   methods <- fastmr_normalize_methods(methods)
+  steiger_options <- fastmr_compressed_steiger_options(
+    steiger, samplesize_exposure, samplesize_outcome, steiger_binary,
+    names(exposure_files), names(outcome_files)
+  )
   dots <- list(...)
   instrument_sets <- fastmr_normalize_instruments(instruments, names(exposure_files))
   union_keys <- unique(unlist(instrument_sets, use.names = FALSE))
   columns <- c("chromosome", "base_pair_location", "effect_allele", "other_allele",
                "beta", "standard_error")
+  if (!is.null(steiger_options)) {
+    columns <- c(columns, "effect_allele_frequency", "p_value")
+  }
+  # Attach Steiger (when requested) after estimation, so it never runs on a
+  # study that strict mode or minimum_snps rejected.
+  # The Parquet copy is written before the `steiger` attribute is attached.
+  finish <- function(result) {
+    if (is.null(steiger_options)) return(fastmr_write_result(result, output))
+    steiger_started <- unname(proc.time()[["elapsed"]])
+    steiger_result <- fastmr_compressed_steiger(
+      exposure_data, outcome_data, instrument_sets, minimum_snps, steiger_options
+    )
+    metadata <- attr(result, "compressed_input")
+    metadata$timing$steiger_seconds <- unname(proc.time()[["elapsed"]]) - steiger_started
+    attr(result, "compressed_input") <- metadata
+    result <- fastmr_write_result(result, output)
+    attr(result, "steiger") <- steiger_result
+    result
+  }
   outcome_keys <- rep(list(union_keys), length(outcome_files))
   io_started <- unname(proc.time()[["elapsed"]])
   invisible(lapply(
@@ -633,7 +868,7 @@ fast_mr_compressed <- function(
       source_bytes_read = source_bytes_read
     )
     attr(grid_result, "compressed_input") <- metadata
-    return(fastmr_write_result(grid_result, output))
+    return(finish(grid_result))
   }
 
   if (identical(estimator, "auto") && identical(methods, "ivw") && !length(dots)) {
@@ -657,7 +892,7 @@ fast_mr_compressed <- function(
           source_bytes_read = source_bytes_read
         )
       )
-      return(fastmr_write_result(result, output))
+      return(finish(result))
     }
   }
 
@@ -797,5 +1032,5 @@ fast_mr_compressed <- function(
       source_bytes_read = source_bytes_read
     )
   )
-  fastmr_write_result(result, output)
+  finish(result)
 }

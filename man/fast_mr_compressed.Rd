@@ -8,7 +8,9 @@ exposure-outcome analysis without rsID lookup or whole-GWAS materialisation.}
 fast_mr_compressed(exposure_files, outcome_files, instruments,
   methods = "ivw", nboot = 0, seed = NULL, threads = 1,
   io_threads = 1, minimum_snps = 1L, strict = TRUE, output = NULL,
-  estimator = c("auto", "pairwise"), ...)
+  estimator = c("auto", "pairwise"), steiger = FALSE,
+  samplesize_exposure = NULL, samplesize_outcome = NULL,
+  steiger_binary = NULL, ...)
 }
 \arguments{
   \item{exposure_files}{Named character vector of Pcodec CompreSSoR stores.}
@@ -37,8 +39,31 @@ fast_mr_compressed(exposure_files, outcome_files, instruments,
   se and Q; usually bit-identical). \code{"pairwise"} and
   every other method set always use the per-pair path. The path used is
   reported as \code{estimator_path} in the \code{compressed_input} attribute.}
+  \item{steiger}{If \code{TRUE}, also run per-SNP Steiger filtering
+  (\code{\link{fast_mr_steiger_filtering}}) for every retained
+  exposure-outcome pair. \code{effect_allele_frequency} and \code{p_value} are
+  read in the same pass as beta/standard error, so no store is read twice. The
+  MR result itself is unchanged. Steiger rows are the rows MR uses: instruments
+  found in both stores with finite beta and positive standard error, for pairs
+  meeting \code{minimum_snps}.}
+  \item{samplesize_exposure, samplesize_outcome}{Sample sizes for Steiger
+  (stores carry none): a vector named by store label (as in
+  \code{exposure_files}/\code{outcome_files}; extra names are ignored), an
+  unnamed vector in store order, or one value for every store. Required when
+  \code{steiger = TRUE}, except for traits listed in \code{steiger_binary}.}
+  \item{steiger_binary}{Optional data frame for binary (log-odds) traits with
+  columns \code{id} (an exposure or outcome store label), \code{ncase},
+  \code{ncontrol} and \code{prevalence}. Those traits use the log-odds
+  R-squared model with the harmonic effective sample size, as in
+  \code{\link{fast_mr_steiger_filtering}}; a label shared by an exposure and an
+  outcome applies to both.}
   \item{...}{Additional options passed to \code{fast_mr()}.}
 }
 \value{A tidy FastMR result. Extraction counts and input details are retained
-in the \code{compressed_input} attribute.}
-\seealso{\code{\link{fast_mr}}, \code{\link{fast_read_compressed}}}
+in the \code{compressed_input} attribute. With \code{steiger = TRUE}, the
+\code{steiger} attribute holds the per-SNP
+\code{\link{fast_mr_steiger_filtering}} output (exposure-major, instruments in
+supplied order) and \code{compressed_input$timing$steiger_seconds} its compute
+time. The \code{steiger} attribute is not written to \code{output}.}
+\seealso{\code{\link{fast_mr}}, \code{\link{fast_read_compressed}},
+\code{\link{fast_mr_steiger_filtering}}}
