@@ -1,0 +1,17 @@
+#!/bin/bash
+#SBATCH --job-name=sc-traits
+#SBATCH --account=sscm013902
+#SBATCH --partition=test
+#SBATCH --cpus-per-task=16
+#SBATCH --mem=64G
+#SBATCH --time=01:00:00
+#SBATCH --output=/user/work/fh6520/showcase/prep/logs/traits-%A_%a.out
+# Stage 1 (plink2 --glm/--freq/--r-unphased, design tables):  sbatch --export=ALL,STAGE1_ONLY=1 gen_traits.sbatch
+# Stage 2 (7 array tasks x 3 traits; test partition has a 1 h limit):
+#   sbatch --array=1-7 --dependency=afterok:<stage1> --export=ALL,TASK_CHUNK=3 gen_traits.sbatch
+# Override LIB_CS / LIB_FASTMR / LIB_TSMR / SEED via --export.  Re-running skips finished traits.
+set -euo pipefail
+module load languages/R/4.5.1 apps/plink2/2.00a68LM bcftools/1.19-openblas-5yp2 htslib/1.19.1-jbbb
+export OMP_NUM_THREADS=1 OPENBLAS_NUM_THREADS=1 NTHREADS=${SLURM_CPUS_PER_TASK}
+cd /user/work/fh6520/showcase/prep
+Rscript gen_traits.R
