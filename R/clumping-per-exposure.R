@@ -471,7 +471,12 @@ fastmr_clump_auto_plan <- function(dat, clump_kb, clump_p1, threads,
   elig <- which(is.finite(p) & p <= clump_p1)
   expo <- if ("id.exposure" %in% names(dat)) as.character(dat$id.exposure) else rep("exposure", nrow(dat))
   E <- length(unique(expo[elig]))
-  position <- fastmr_clump_position(dat)
+  # Estimate only: avoid fastmr_clump_position()'s as.character() round trip.
+  position <- list(
+    chr = if ("chr_name" %in% names(dat)) as.character(dat$chr_name) else rep(NA_character_, nrow(dat)),
+    bp = if (!"chrom_start" %in% names(dat)) rep(NA_real_, nrow(dat))
+         else if (is.numeric(dat$chrom_start)) as.numeric(dat$chrom_start)
+         else suppressWarnings(as.numeric(as.character(dat$chrom_start))))
   plan <- list(exposures = E, threads = threads, estimated_pairs = NA_real_,
                effective_workers = NA_real_, cost_graph = NA_real_,
                cost_per_exposure = NA_real_, strategy = "graph", reason = "")
