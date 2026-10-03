@@ -168,6 +168,10 @@ struct FFTPlan {
   std::vector<std::size_t> bit_reverse;
   std::vector<std::vector<std::complex<double>>> forward_factors;
   std::vector<std::vector<std::complex<double>>> inverse_factors;
+  // Largest distance of a stored twiddle factor from cos/sin evaluated
+  // directly (the recurrence below accumulates rounding). Only used to bound
+  // the transform's rounding error; it does not change the factors.
+  double twiddle_error = 0.0;
 
   explicit FFTPlan(std::size_t size) : n(size), bit_reverse(size) {
     for (std::size_t i = 1, j = 0; i < n; ++i) {
@@ -188,6 +192,10 @@ struct FFTPlan {
       for (std::size_t i = 0; i < half; ++i) {
         forward[i] = forward_factor;
         inverse[i] = inverse_factor;
+        const double theta = angle * static_cast<double>(i);
+        const std::complex<double> direct(std::cos(theta), std::sin(theta));
+        twiddle_error = std::max(twiddle_error, std::abs(inverse_factor - direct));
+        twiddle_error = std::max(twiddle_error, std::abs(forward_factor - std::conj(direct)));
         forward_factor *= forward_step;
         inverse_factor *= inverse_step;
       }
@@ -205,6 +213,34 @@ const FFTPlan& fft_plan(std::size_t n) {
   return *fallback;
 }
 
+// Bound on ||fft(x) - FFT(x)||_2 / ||FFT(x)||_2 for fft_inplace() with this
+// plan (Higham 2002, Accuracy and Stability of Numerical Algorithms, Thm 24.2:
+// log2(n) eta / (1 - log2(n) eta), eta = mu + gamma_4 (sqrt(2) + mu), with mu
+// the twiddle-factor error). mu is the measured error plus 16 unit roundoffs
+// for the error of the cos/sin reference itself.
+double fft_relative_error_bound(const FFTPlan& plan) {
+  const double u = DBL_EPSILON / 2.0;
+  const double mu = plan.twiddle_error + 16.0 * u;
+  const double gamma4 = 4.0 * u / (1.0 - 4.0 * u);
+  const double eta = mu + gamma4 * (std::sqrt(2.0) + mu);
+  const double stages = std::log2(static_cast<double>(plan.n));
+  return stages * eta / (1.0 - stages * eta);
+}
+
+// Complex product in the same operation order as the compiler's complex
+// multiply (libgcc / compiler-rt __muldc3) for finite operands, without its
+// NaN-recovery branch, which blocks vectorisation. Mode inputs are finite, so
+// the result is bit-identical. Separate statements keep compilers that only
+// contract within one expression (clang's default -ffp-contract=on) from
+// fusing a multiply-add here.
+inline std::complex<double> cmul(const std::complex<double>& a, const std::complex<double>& b) {
+  const double ac = a.real() * b.real();
+  const double bd = a.imag() * b.imag();
+  const double ad = a.real() * b.imag();
+  const double bc = a.imag() * b.real();
+  return std::complex<double>(ac - bd, ad + bc);
+}
+
 void fft_inplace(std::vector<std::complex<double>>& values, bool inverse) {
   const std::size_t n = values.size();
   const FFTPlan& plan = fft_plan(n);
@@ -219,7 +255,7 @@ void fft_inplace(std::vector<std::complex<double>>& values, bool inverse) {
       const std::size_t half = length >> 1;
       for (std::size_t i = 0; i < half; ++i) {
         const std::complex<double> even = values[start + i];
-        const std::complex<double> odd = factors[i] * values[start + i + half];
+        const std::complex<double> odd = cmul(factors[i], values[start + i + half]);
         values[start + i] = even + odd;
         values[start + i + half] = even - odd;
       }
@@ -237,6 +273,11 @@ struct ModeDensityWorkspace {
   std::vector<std::complex<double>> simple;
   std::vector<std::complex<double>> weighted;
   std::vector<std::complex<double>> kernel;
+  // Direct path: binned weights and densities per weight vector, and the
+  // truncated symmetric kernel.
+  std::vector<double> direct_bins[2];
+  std::vector<double> direct_density[2];
+  std::vector<double> direct_kernel;
 };
 
 ModeDensityWorkspace& mode_workspace() {
@@ -244,14 +285,21 @@ ModeDensityWorkspace& mode_workspace() {
   return workspace;
 }
 
-double mode_point_r_density(const double* values, const double* weights,
-                            std::size_t count, double phi) {
-  if (count == 0) return NA_VALUE;
-  for (std::size_t i = 0; i < count; ++i) {
-    if (!std::isfinite(values[i]) || !std::isfinite(weights[i]) || weights[i] < 0.0) return NA_VALUE;
-  }
-  ModeDensityWorkspace& workspace = mode_workspace();
-  std::vector<double>& scratch = workspace.scratch;
+// Bandwidth and grids shared by every mode-density path: density() on n = 512
+// points with a bw.nrd0-style bandwidth (times phi) and cut = 3, linearly
+// binned on [lo, up], then approx() back onto the output grid [from, to].
+struct ModeGrid {
+  double bandwidth;
+  double from;
+  double output_step;
+  double lo;
+  double delta;
+  double position_start;
+  double position_step;
+};
+
+ModeGrid mode_grid(const double* values, std::size_t count, double phi,
+                   std::vector<double>& scratch) {
   scratch.clear();
   scratch.reserve(count);
   const double raw_bandwidth = 0.9 * std::min(sample_std_ptr(values, count),
@@ -267,63 +315,323 @@ double mode_point_r_density(const double* values, const double* weights,
   const double from = minimum - 3.0 * bandwidth;
   const double to = maximum + 3.0 * bandwidth;
   const int n = MODE_GRID_SIZE;
-  const int length = 2 * n;
   const double lo = from - 4.0 * bandwidth;
   const double up = to + 4.0 * bandwidth;
-  const double delta = (up - lo) / static_cast<double>(n - 1);
-  const double output_step = (to - from) / static_cast<double>(n - 1);
-  const double position_start = (from - lo) / delta;
-  const double position_step = output_step / delta;
-  std::vector<std::complex<double>>& binned = workspace.binned;
-  binned.assign(length, std::complex<double>(0.0, 0.0));
+  ModeGrid grid;
+  grid.bandwidth = bandwidth;
+  grid.from = from;
+  grid.lo = lo;
+  grid.delta = (up - lo) / static_cast<double>(n - 1);
+  grid.output_step = (to - from) / static_cast<double>(n - 1);
+  grid.position_start = (from - lo) / grid.delta;
+  grid.position_step = grid.output_step / grid.delta;
+  return grid;
+}
+
+// Linear binning of `weights` onto the n-point grid (density()'s BinDist).
+// Calls add(cell, amount) in the same order for every path, so all paths see
+// bit-identical bins.
+template <typename Add>
+void mode_bin(const double* values, const double* weights, std::size_t count,
+              const ModeGrid& grid, Add add) {
+  const int n = MODE_GRID_SIZE;
   for (std::size_t i = 0; i < count; ++i) {
-    const double xpos = (values[i] - lo) / delta;
+    const double xpos = (values[i] - grid.lo) / grid.delta;
     if (!std::isfinite(xpos) || xpos > static_cast<double>(std::numeric_limits<int>::max()) ||
         xpos < static_cast<double>(std::numeric_limits<int>::min())) continue;
     const int index = static_cast<int>(std::floor(xpos));
     const double fraction = xpos - static_cast<double>(index);
     if (0 <= index && index <= n - 2) {
-      binned[index] += (1.0 - fraction) * weights[i];
-      binned[index + 1] += fraction * weights[i];
+      add(index, (1.0 - fraction) * weights[i]);
+      add(index + 1, fraction * weights[i]);
     } else if (index == -1) {
-      binned[0] += fraction * weights[i];
+      add(0, fraction * weights[i]);
     } else if (index == n - 1) {
-      binned[index] += (1.0 - fraction) * weights[i];
+      add(index, (1.0 - fraction) * weights[i]);
     }
   }
-  std::vector<std::complex<double>>& kernel = workspace.kernel;
-  kernel.resize(length);
-  for (int i = 0; i < length; ++i) {
-    const double distance = (i <= n) ? static_cast<double>(i) * delta
-                                     : -static_cast<double>(length - i) * delta;
-    const double z = distance / bandwidth;
-    kernel[i] = std::exp(-0.5 * z * z) / (bandwidth * std::sqrt(2.0 * 3.14159265358979323846));
-  }
-  fft_inplace(binned, false);
-  fft_inplace(kernel, false);
-  for (int i = 0; i < length; ++i) binned[i] *= std::conj(kernel[i]);
-  fft_inplace(binned, true);
-  int best_index = 0;
-  double best_density = -std::numeric_limits<double>::infinity();
-  for (int i = 0; i < n; ++i) {
-    const double position = position_start + position_step * static_cast<double>(i);
-    int left = static_cast<int>(std::floor(position));
-    double density = 0.0;
-    if (left < 0) density = std::max(0.0, binned[0].real());
-    else if (left >= n - 1) density = std::max(0.0, binned[n - 1].real());
-    else {
-      const double fraction = position - static_cast<double>(left);
-      density = (1.0 - fraction) * binned[left].real() + fraction * binned[left + 1].real();
-      density = std::max(0.0, density);
-    }
-    if (density > best_density) {
-      best_density = density;
-      best_index = i;
-    }
-  }
-  return from + output_step * static_cast<double>(best_index);
 }
 
+// Gaussian kernel at distance d * delta, as density() evaluates it.
+inline double mode_kernel(int d, double delta, double bandwidth) {
+  const double distance = static_cast<double>(d) * delta;
+  const double z = distance / bandwidth;
+  return std::exp(-0.5 * z * z) / (bandwidth * std::sqrt(2.0 * 3.14159265358979323846));
+}
+
+// Argmax of the interpolated density on the output grid (first maximum wins).
+// `density(cell)` returns the convolved density at a binning cell. Also
+// reports the largest density at any other output point (`second`).
+template <typename Density>
+int mode_argmax(const ModeGrid& grid, Density density_at, double& best, double& second) {
+  const int n = MODE_GRID_SIZE;
+  int best_index = 0;
+  best = -std::numeric_limits<double>::infinity();
+  second = best;
+  for (int i = 0; i < n; ++i) {
+    const double position = grid.position_start + grid.position_step * static_cast<double>(i);
+    const int left = static_cast<int>(std::floor(position));
+    double density = 0.0;
+    if (left < 0) density = std::max(0.0, density_at(0));
+    else if (left >= n - 1) density = std::max(0.0, density_at(n - 1));
+    else {
+      const double fraction = position - static_cast<double>(left);
+      density = (1.0 - fraction) * density_at(left) + fraction * density_at(left + 1);
+      density = std::max(0.0, density);
+    }
+    if (density > best) {
+      second = best;
+      best = density;
+      best_index = i;
+    } else if (density > second) {
+      second = density;
+    }
+  }
+  return best_index;
+}
+
+// FFT path: zero-padded circular convolution (length 2n) of the bins with the
+// kernel, as density() computes it. Returns the argmax output-grid index.
+int mode_index_fft(const double* values, const double* weights, std::size_t count,
+                   const ModeGrid& grid) {
+  const int n = MODE_GRID_SIZE;
+  const int length = 2 * n;
+  ModeDensityWorkspace& workspace = mode_workspace();
+  std::vector<std::complex<double>>& binned = workspace.binned;
+  binned.assign(length, std::complex<double>(0.0, 0.0));
+  mode_bin(values, weights, count, grid, [&](int cell, double amount) { binned[cell] += amount; });
+  std::vector<std::complex<double>>& kernel = workspace.kernel;
+  kernel.resize(length);
+  // The kernel is even: kernel[length - i] == kernel[i] bit for bit (the
+  // distance only changes sign), so evaluate exp() once per distance.
+  for (int i = 0; i <= n; ++i) kernel[i] = mode_kernel(i, grid.delta, grid.bandwidth);
+  for (int i = n + 1; i < length; ++i) kernel[i] = kernel[length - i];
+  fft_inplace(binned, false);
+  fft_inplace(kernel, false);
+  for (int i = 0; i < length; ++i) binned[i] = cmul(binned[i], std::conj(kernel[i]));
+  fft_inplace(binned, true);
+  double best = 0.0, second = 0.0;
+  return mode_argmax(grid, [&](int cell) { return binned[cell].real(); }, best, second);
+}
+
+// FFT path for two weight vectors on the same ratios (one kernel transform).
+std::pair<int, int> mode_index_fft_pair(const double* values, const double* simple_weights,
+                                        const double* weighted_weights, std::size_t count,
+                                        const ModeGrid& grid) {
+  const int n = MODE_GRID_SIZE;
+  const int length = 2 * n;
+  ModeDensityWorkspace& workspace = mode_workspace();
+  std::vector<std::complex<double>>& simple = workspace.simple;
+  std::vector<std::complex<double>>& weighted = workspace.weighted;
+  simple.assign(length, std::complex<double>(0.0, 0.0));
+  weighted.assign(length, std::complex<double>(0.0, 0.0));
+  mode_bin(values, simple_weights, count, grid, [&](int cell, double amount) { simple[cell] += amount; });
+  mode_bin(values, weighted_weights, count, grid, [&](int cell, double amount) { weighted[cell] += amount; });
+  std::vector<std::complex<double>>& kernel = workspace.kernel;
+  kernel.resize(length);
+  for (int i = 0; i <= n; ++i) kernel[i] = mode_kernel(i, grid.delta, grid.bandwidth);
+  for (int i = n + 1; i < length; ++i) kernel[i] = kernel[length - i];
+  fft_inplace(simple, false);
+  fft_inplace(weighted, false);
+  fft_inplace(kernel, false);
+  for (int i = 0; i < length; ++i) {
+    simple[i] = cmul(simple[i], std::conj(kernel[i]));
+    weighted[i] = cmul(weighted[i], std::conj(kernel[i]));
+  }
+  fft_inplace(simple, true);
+  fft_inplace(weighted, true);
+  double best = 0.0, second = 0.0;
+  const int simple_index = mode_argmax(grid, [&](int cell) { return simple[cell].real(); }, best, second);
+  const int weighted_index = mode_argmax(grid, [&](int cell) { return weighted[cell].real(); }, best, second);
+  return std::make_pair(simple_index, weighted_index);
+}
+
+// ---- Direct path ---------------------------------------------------------
+// The bins have at most 2 * count non-zero cells, so for small count the
+// linear convolution y[j] = sum_m b[m] k(|j - m| delta) is far cheaper than
+// the FFT path's five 1024-point transforms (there is no wrap-around: the FFT
+// is zero-padded to 2n). Same bandwidth, grids, bins, kernel values and
+// argmax rule; the densities differ from the FFT's only by rounding, so the
+// chosen grid point can only differ on a near-tie. A guard detects every such
+// draw and recomputes it on the FFT path, so the selected mode is always the
+// FFT path's (and main's) bit for bit.
+
+// Ratios up to which the direct path is tried. Its convolution work is bounded
+// by the grid (at most n non-zero bins, kernel radius at most ~366 cells), so
+// it was faster than the FFT at every size measured: 11-13x at 3 ratios, 2-3x
+// at 1000, 1.1x at 20000 (both paths are then dominated by the shared
+// bandwidth/binning work). Above the largest size measured, keep the FFT.
+constexpr double kModeDirectMaxRatios = 20000.0;
+// The kernel is truncated beyond this many bandwidths: exp(-50) ~ 2e-22 of
+// its peak, far below the guard's tolerance (bounded explicitly below).
+constexpr double kModeKernelCutoff = 10.0;
+// Floor of the guard's relative tolerance (see mode_index_direct()).
+constexpr double kModeGuardRelative = 1e-9;
+
+std::atomic<double> mode_direct_max(kModeDirectMaxRatios);
+std::atomic<unsigned long long> mode_direct_total(0), mode_guard_total(0);
+// Per-thread draw counts, flushed into the totals once per mode fit.
+thread_local unsigned long long mode_direct_draws = 0, mode_guard_draws = 0;
+
+void flush_mode_counters() {
+  if (mode_direct_draws) mode_direct_total.fetch_add(mode_direct_draws, std::memory_order_relaxed);
+  if (mode_guard_draws) mode_guard_total.fetch_add(mode_guard_draws, std::memory_order_relaxed);
+  mode_direct_draws = 0;
+  mode_guard_draws = 0;
+}
+
+#ifdef _OPENMP
+#define FASTMR_SIMD _Pragma("omp simd")
+#else
+#define FASTMR_SIMD
+#endif
+
+// Direct densities for `vectors` (1 or 2) weight vectors; stores each argmax
+// output-grid index in index[]. Returns false, leaving the draw to the FFT
+// path, unless every argmax is certain to equal the FFT path's.
+//
+// The guard. For each density, |d_fft(i) - d_direct(i)| <= D at every output
+// point i, so if best - second > 2 D the FFT has the same unique argmax. With
+// b the bins, W = sum(b) and k the FFT path's length-2n kernel vector, the
+// error analysis of an FFT convolution (forward transforms of b and k, one
+// complex product, inverse transform; each transform within relative 2-norm
+// error tau, Higham Thm 24.2, from the plan's measured twiddle error) gives
+//   ||y_fft - y||_inf <= E_fft = tau (2 ||b||_2 ||k||_1 + W ||k||_2)
+//                                + 3 u ||b||_2 ||k||_1   (+ O(tau^2)),
+// while the direct sums of at most `nonzero` non-negative terms give
+//   ||y_direct - y||_inf <= E_direct = (nonzero + 2) u max(y) + truncation,
+// truncation <= W k(cutoff) (zero when nothing is truncated). The linear
+// interpolation adds at most 8 u max(y). D = 2 E_fft + E_direct + 8 u max(y)
+// (E_fft doubled to absorb the second-order terms), and the guard falls back
+// when best - second <= max(2 D, 1e-9 best). The 1e-9 floor is a fixed margin
+// on top of the bound: measured over 135k random draws (3-1000 ratios), D was
+// 1e-11 to 8e-11 of best and the actual discrepancy at most 3.8e-14 of best
+// (at most 1.3% of D), so the floor is what binds, ~2.6e4 times the largest
+// discrepancy; gaps that small occurred in ~1e-5 of those draws, so the
+// fallback costs nothing measurable.
+bool mode_index_direct(const double* values, const double* const* weights, int vectors,
+                       std::size_t count, const ModeGrid& grid, int* index) {
+  const int n = MODE_GRID_SIZE;
+  const double delta = grid.delta;
+  const double bandwidth = grid.bandwidth;
+  const double radius_cells = kModeKernelCutoff * bandwidth / delta;
+  if (!std::isfinite(radius_cells) || !(delta > 0.0) || !(bandwidth > 0.0)) return false;
+  ModeDensityWorkspace& workspace = mode_workspace();
+  int touched_lo = n, touched_hi = -1;
+  for (int v = 0; v < vectors; ++v) {
+    std::vector<double>& bins = workspace.direct_bins[v];
+    bins.assign(n, 0.0);
+    mode_bin(values, weights[v], count, grid, [&](int cell, double amount) {
+      bins[cell] += amount;
+      touched_lo = std::min(touched_lo, cell);
+      touched_hi = std::max(touched_hi, cell);
+    });
+  }
+  // Truncated symmetric kernel: kernel[radius + d] = kernel[radius - d] = k(d).
+  const int radius = radius_cells < static_cast<double>(n - 2)
+    ? static_cast<int>(radius_cells) + 1 : n - 1;
+  std::vector<double>& kernel = workspace.direct_kernel;
+  kernel.resize(2 * static_cast<std::size_t>(radius) + 1);
+  double kernel_l1 = 0.0, kernel_l2 = 0.0;  // norms of the FFT path's kernel vector
+  for (int d = 0; d <= radius; ++d) {
+    const double value = mode_kernel(d, delta, bandwidth);
+    kernel[radius + d] = value;
+    kernel[radius - d] = value;
+    const double copies = d == 0 ? 1.0 : 2.0;  // entries d and 2n - d
+    kernel_l1 += copies * value;
+    kernel_l2 += copies * value * value;
+  }
+  // Entries the direct path does not use: distances radius+1..n (n once).
+  // Beyond the cutoff each is at most k(cutoff); with no truncation only
+  // distance n remains, which no output cell needs (|j - m| <= n - 1).
+  const double tail_value = radius < n - 1
+    ? mode_kernel(0, delta, bandwidth) * std::exp(-0.5 * kModeKernelCutoff * kModeKernelCutoff)
+    : mode_kernel(n, delta, bandwidth);
+  const double tail_count = static_cast<double>(2 * n - (2 * radius + 1));
+  kernel_l1 += tail_count * tail_value;
+  kernel_l2 += tail_count * tail_value * tail_value;
+  // Cells the output grid reads (positions are increasing in i).
+  const double first_position = grid.position_start;
+  const double last_position = grid.position_start + grid.position_step * static_cast<double>(n - 1);
+  const int cell_lo = static_cast<int>(std::max(0.0, std::min(static_cast<double>(n - 1), std::floor(first_position))));
+  const int cell_hi = static_cast<int>(std::max(0.0, std::min(static_cast<double>(n - 1), std::floor(last_position) + 1.0)));
+  double weight_sum[2] = {0.0, 0.0}, weight_ss[2] = {0.0, 0.0};
+  int nonzero = 0;
+  for (int v = 0; v < vectors; ++v) workspace.direct_density[v].assign(n, 0.0);
+  double* const y0 = workspace.direct_density[0].data();
+  double* const y1 = workspace.direct_density[vectors > 1 ? 1 : 0].data();
+  const double* const b0 = workspace.direct_bins[0].data();
+  const double* const b1 = workspace.direct_bins[vectors > 1 ? 1 : 0].data();
+  for (int m = touched_lo; m <= touched_hi; ++m) {
+    const double c0 = b0[m];
+    const double c1 = vectors > 1 ? b1[m] : 0.0;
+    if (c0 == 0.0 && c1 == 0.0) continue;
+    ++nonzero;
+    weight_sum[0] += c0;
+    weight_ss[0] += c0 * c0;
+    weight_sum[1] += c1;
+    weight_ss[1] += c1 * c1;
+    const int first = std::max(cell_lo, m - radius);
+    const int last = std::min(cell_hi, m + radius);
+    if (first > last) continue;
+    const double* const k = kernel.data() + (first - m + radius);
+    const int width = last - first + 1;
+    double* const t0 = y0 + first;
+    if (vectors == 1) {
+      FASTMR_SIMD
+      for (int t = 0; t < width; ++t) t0[t] += c0 * k[t];
+    } else {
+      double* const t1 = y1 + first;
+      FASTMR_SIMD
+      for (int t = 0; t < width; ++t) {
+        t0[t] += c0 * k[t];
+        t1[t] += c1 * k[t];
+      }
+    }
+  }
+  static const double tau = fft_relative_error_bound(fft_plan(2 * static_cast<std::size_t>(n)));
+  const double u = DBL_EPSILON / 2.0;
+  for (int v = 0; v < vectors; ++v) {
+    const double* const y = workspace.direct_density[v].data();
+    double best = 0.0, second = 0.0;
+    const int best_index = mode_argmax(grid, [&](int cell) { return y[cell]; }, best, second);
+    double max_y = 0.0;
+    for (int j = cell_lo; j <= cell_hi; ++j) max_y = std::max(max_y, y[j]);
+    const double b_l2 = std::sqrt(weight_ss[v]);
+    const double s1 = b_l2 * kernel_l1;
+    const double s2 = weight_sum[v] * std::sqrt(kernel_l2);
+    const double fft_error = tau * (2.0 * s1 + s2) + 3.0 * u * s1;
+    const double truncation = radius < n - 1 ? weight_sum[v] * tail_value : 0.0;
+    const double direct_error = static_cast<double>(nonzero + 2) * u * max_y + truncation;
+    const double discrepancy = 2.0 * fft_error + direct_error + 8.0 * u * max_y;
+    const double tolerance = std::max(2.0 * discrepancy, kModeGuardRelative * best);
+    if (!(best - second > tolerance)) return false;
+    index[v] = best_index;
+  }
+  return true;
+}
+
+bool mode_try_direct(std::size_t count) {
+  return static_cast<double>(count) <= mode_direct_max.load(std::memory_order_relaxed);
+}
+
+double mode_point_r_density(const double* values, const double* weights,
+                            std::size_t count, double phi) {
+  if (count == 0) return NA_VALUE;
+  for (std::size_t i = 0; i < count; ++i) {
+    if (!std::isfinite(values[i]) || !std::isfinite(weights[i]) || weights[i] < 0.0) return NA_VALUE;
+  }
+  const ModeGrid grid = mode_grid(values, count, phi, mode_workspace().scratch);
+  int index = 0;
+  bool done = false;
+  if (mode_try_direct(count)) {
+    ++mode_direct_draws;
+    done = mode_index_direct(values, &weights, 1, count, grid, &index);
+    if (!done) ++mode_guard_draws;
+  }
+  if (!done) index = mode_index_fft(values, weights, count, grid);
+  return grid.from + grid.output_step * static_cast<double>(index);
+}
 
 std::pair<double, double> mode_point_r_density_pair(const double* values,
                                                       const double* simple_weights,
@@ -336,103 +644,22 @@ std::pair<double, double> mode_point_r_density_pair(const double* values,
         !std::isfinite(weighted_weights[i]) || simple_weights[i] < 0.0 ||
         weighted_weights[i] < 0.0) return std::make_pair(NA_VALUE, NA_VALUE);
   }
-  ModeDensityWorkspace& workspace = mode_workspace();
-  std::vector<double>& scratch = workspace.scratch;
-  scratch.clear();
-  scratch.reserve(count);
-  const double raw_bandwidth = 0.9 * std::min(sample_std_ptr(values, count),
-                                                mad_ptr(values, count, scratch)) /
-                               std::pow(static_cast<double>(count), 0.2);
-  double bandwidth = std::isfinite(raw_bandwidth) ? std::max(1e-8, raw_bandwidth) : 1e-8;
-  bandwidth *= phi;
-  double minimum = values[0], maximum = values[0];
-  for (std::size_t i = 1; i < count; ++i) {
-    minimum = std::min(minimum, values[i]);
-    maximum = std::max(maximum, values[i]);
+  const ModeGrid grid = mode_grid(values, count, phi, mode_workspace().scratch);
+  int index[2] = {0, 0};
+  bool done = false;
+  if (mode_try_direct(count)) {
+    const double* const weights[2] = {simple_weights, weighted_weights};
+    ++mode_direct_draws;
+    done = mode_index_direct(values, weights, 2, count, grid, index);
+    if (!done) ++mode_guard_draws;
   }
-  const double from = minimum - 3.0 * bandwidth;
-  const double to = maximum + 3.0 * bandwidth;
-  const int n = MODE_GRID_SIZE;
-  const int length = 2 * n;
-  const double lo = from - 4.0 * bandwidth;
-  const double up = to + 4.0 * bandwidth;
-  const double delta = (up - lo) / static_cast<double>(n - 1);
-  const double output_step = (to - from) / static_cast<double>(n - 1);
-  const double position_start = (from - lo) / delta;
-  const double position_step = output_step / delta;
-  std::vector<std::complex<double>>& simple = workspace.simple;
-  std::vector<std::complex<double>>& weighted = workspace.weighted;
-  simple.assign(length, std::complex<double>(0.0, 0.0));
-  weighted.assign(length, std::complex<double>(0.0, 0.0));
-  auto bin = [&](std::vector<std::complex<double>>& target, const double* source) {
-    for (std::size_t i = 0; i < count; ++i) {
-      const double xpos = (values[i] - lo) / delta;
-      if (!std::isfinite(xpos) || xpos > static_cast<double>(std::numeric_limits<int>::max()) ||
-          xpos < static_cast<double>(std::numeric_limits<int>::min())) continue;
-      const int index = static_cast<int>(std::floor(xpos));
-      const double fraction = xpos - static_cast<double>(index);
-      if (0 <= index && index <= n - 2) {
-        target[index] += (1.0 - fraction) * source[i];
-        target[index + 1] += fraction * source[i];
-      } else if (index == -1) {
-        target[0] += fraction * source[i];
-      } else if (index == n - 1) {
-        target[index] += (1.0 - fraction) * source[i];
-      }
-    }
-  };
-  bin(simple, simple_weights);
-  bin(weighted, weighted_weights);
-  std::vector<std::complex<double>>& kernel = workspace.kernel;
-  kernel.resize(length);
-  for (int i = 0; i < length; ++i) {
-    const double distance = (i <= n) ? static_cast<double>(i) * delta
-                                     : -static_cast<double>(length - i) * delta;
-    const double z = distance / bandwidth;
-    kernel[i] = std::exp(-0.5 * z * z) / (bandwidth * std::sqrt(2.0 * 3.14159265358979323846));
+  if (!done) {
+    const std::pair<int, int> fft = mode_index_fft_pair(values, simple_weights, weighted_weights, count, grid);
+    index[0] = fft.first;
+    index[1] = fft.second;
   }
-  fft_inplace(simple, false);
-  fft_inplace(weighted, false);
-  fft_inplace(kernel, false);
-  for (int i = 0; i < length; ++i) {
-    simple[i] *= std::conj(kernel[i]);
-    weighted[i] *= std::conj(kernel[i]);
-  }
-  fft_inplace(simple, true);
-  fft_inplace(weighted, true);
-  int simple_index = 0;
-  int weighted_index = 0;
-  double simple_best = -std::numeric_limits<double>::infinity();
-  double weighted_best = -std::numeric_limits<double>::infinity();
-  for (int i = 0; i < n; ++i) {
-    const double position = position_start + position_step * static_cast<double>(i);
-    const int left = static_cast<int>(std::floor(position));
-    double simple_density = 0.0;
-    double weighted_density = 0.0;
-    if (left < 0) {
-      simple_density = std::max(0.0, simple[0].real());
-      weighted_density = std::max(0.0, weighted[0].real());
-    } else if (left >= n - 1) {
-      simple_density = std::max(0.0, simple[n - 1].real());
-      weighted_density = std::max(0.0, weighted[n - 1].real());
-    } else {
-      const double fraction = position - static_cast<double>(left);
-      simple_density = std::max(0.0,
-        (1.0 - fraction) * simple[left].real() + fraction * simple[left + 1].real());
-      weighted_density = std::max(0.0,
-        (1.0 - fraction) * weighted[left].real() + fraction * weighted[left + 1].real());
-    }
-    if (simple_density > simple_best) {
-      simple_best = simple_density;
-      simple_index = i;
-    }
-    if (weighted_density > weighted_best) {
-      weighted_best = weighted_density;
-      weighted_index = i;
-    }
-  }
-  return std::make_pair(from + output_step * static_cast<double>(simple_index),
-                        from + output_step * static_cast<double>(weighted_index));
+  return std::make_pair(grid.from + grid.output_step * static_cast<double>(index[0]),
+                        grid.from + grid.output_step * static_cast<double>(index[1]));
 }
 
 struct Result {
@@ -909,6 +1136,7 @@ Result compute_mode(const Prepared& p, const std::string& method, int nboot, dou
     }
     se = mad(estimates);
   }
+  flush_mode_counters();
   Result result = empty_result(method, n);
   result.beta = beta;
   result.se = se;
@@ -949,6 +1177,7 @@ void compute_both_modes(const Prepared& p, int nboot, double phi,
     simple_se = mad(simple_estimates);
     weighted_se = mad(weighted_estimates);
   }
+  flush_mode_counters();
   simple = empty_result("simple_mode", n);
   simple.beta = simple_beta;
   simple.se = simple_se;
@@ -1007,6 +1236,23 @@ double bootstrap_draw_count(std::size_t snps, std::size_t ratios, int nboot,
     count += static_cast<double>(nboot) * static_cast<double>(ratios);
   }
   return count;
+}
+
+// Serial cost of a mode-bootstrap normal relative to a median/Egger stream
+// normal (one density per draw vs one sort/regression): measured 12-45x at
+// 3-30 ratios with the direct density.
+constexpr double kModeDrawCost = 16.0;
+
+// bootstrap_draw_count() with mode normals weighted by kModeDrawCost: the
+// work estimate the thread cap uses for bootstrap batches.
+double bootstrap_draw_work(std::size_t snps, std::size_t ratios, int nboot,
+                           bool needs_median, bool needs_egger,
+                           bool needs_penalised, bool needs_mode) {
+  const double stream = bootstrap_draw_count(snps, ratios, nboot, needs_median,
+                                             needs_egger, needs_penalised, false);
+  const double mode = bootstrap_draw_count(snps, ratios, nboot, false, false,
+                                           false, needs_mode);
+  return stream + kModeDrawCost * mode;
 }
 
 template <typename Draw>
@@ -2207,19 +2453,22 @@ int bounded_threads(int requested, std::size_t jobs) {
   return bounded;
 }
 
-// Minimum work per worker before an extra thread pays for its spawn/join cost.
-// Work is counted in SNP rows (RNG-free group fits, grid pairs x SNPs) or
-// bootstrap draws (bootstrap batches). Medians, modes and bootstrap methods
-// cost ~1 us per row, so a few hundred rows per worker pay for a thread; the
-// closed-form methods (ivw, egger, ...) cost ~10-100 ns per row and are
+// Minimum work per worker before an extra thread pays for its spawn/join and
+// serial overheads. Work is counted in SNP rows (RNG-free group fits, grid
+// pairs x SNPs) or, for bootstrap batches, in median/Egger stream normals
+// (~20 ns each) plus kModeDrawCost per mode normal (bootstrap_draw_work()).
+// The closed-form methods (ivw, egger, ...) cost ~10-100 ns per row and are
 // dominated by serial p-value work, so they need ~100k rows per worker.
-// Calibrated on a Mac mini (std::thread fallback, no OpenMP) as the smallest
-// work at which 2/4/8 threads stopped being slower than 1; the fallback spawns
-// threads on every call, so these are conservative for OpenMP builds, whose
-// team is reused.
-constexpr double kMinRowsPerWorkerHeavy = 100.0;
+// Calibrated (scripts in the mode-density PR) as the smallest work at which
+// 2/4/8 threads stopped being slower than 1, on a Mac mini (std::thread
+// fallback, spawns threads on every call) and on 8 Slurm CPUs (4 cores x 2
+// hyperthreads, OpenMP): stream-only bootstraps (weighted median, Egger
+// bootstrap) broke even at 16-32k normals per worker on the Mac and 32-64k on
+// the cluster; mode bootstraps at < 1000 units; RNG-free mode fits at
+// 200-500 rows.
+constexpr double kMinRowsPerWorkerHeavy = 512.0;
 constexpr double kMinRowsPerWorkerCheap = 100000.0;
-constexpr double kMinDrawsPerWorker = 1000.0;
+constexpr double kMinDrawsPerWorker = 65536.0;
 
 // Test hook: scales the minimum work per worker (0 forces the parallel paths
 // on tiny inputs so the thread-equivalence tests still exercise them).
@@ -2250,6 +2499,29 @@ double min_rows_per_worker(const BootstrapNeeds& needs) {
 double fastmr_set_work_scale_native(double scale) {
   if (!std::isfinite(scale) || scale < 0.0) Rcpp::stop("scale must be non-negative and finite");
   return min_work_scale.exchange(scale);
+}
+
+// Internal test hooks for the mode-density paths. Set the largest ratio count
+// that tries the direct path (0 = always FFT, Inf = always direct) and return
+// the previous value; results are identical for every setting.
+// [[Rcpp::export]]
+double fastmr_set_mode_direct_max_native(double ratios) {
+  if (std::isnan(ratios) || ratios < 0.0) Rcpp::stop("ratios must be non-negative");
+  return mode_direct_max.exchange(ratios);
+}
+
+// Mode-density draws that tried the direct path, and those of them the guard
+// sent to the FFT path, since the last reset.
+// [[Rcpp::export]]
+Rcpp::NumericVector fastmr_mode_path_counts_native(bool reset = false) {
+  Rcpp::NumericVector out = Rcpp::NumericVector::create(
+    Rcpp::_["direct"] = static_cast<double>(mode_direct_total.load()),
+    Rcpp::_["guard"] = static_cast<double>(mode_guard_total.load()));
+  if (reset) {
+    mode_direct_total.store(0);
+    mode_guard_total.store(0);
+  }
+  return out;
 }
 
 // [[Rcpp::export]]
@@ -2322,15 +2594,20 @@ Rcpp::List fastmr_grid_native(Rcpp::NumericMatrix exposure_beta,
   }
   fill_grid_bootstrap_layout(grid, nboot, seed, needs_median, needs_mode, needs_egger, needs_penalised);
   std::vector<Result> results(pair_count * parsed_methods.size());
-  // Resampling methods cost ~nboot times a plain fit per pair.
-  const double grid_boot_factor =
-    (needs_median || needs_penalised || needs_mode || needs_egger) && nboot > 0
-      ? static_cast<double>(nboot) : 1.0;
-  const int thread_count = worthwhile_threads(
-    threads, pair_count,
-    static_cast<double>(pair_count) * static_cast<double>(grid.snp_count) *
-      grid_boot_factor,
-    min_rows_per_worker(BootstrapNeeds{needs_median, needs_penalised, needs_mode, needs_egger}));
+  // Resampling pairs cost what the same bootstrap costs in a batch fit
+  // (bootstrap_draw_work() per pair); otherwise count rows.
+  const bool resampling =
+    (needs_median || needs_penalised || needs_mode || needs_egger) && nboot > 0;
+  const std::size_t grid_snps = static_cast<std::size_t>(grid.snp_count);
+  const double pair_rows = static_cast<double>(pair_count) * static_cast<double>(grid_snps);
+  const int thread_count = resampling
+    ? worthwhile_threads(threads, pair_count,
+        static_cast<double>(pair_count) *
+          bootstrap_draw_work(grid_snps, grid_snps, nboot, needs_median, needs_egger,
+                              needs_penalised, needs_mode) + pair_rows,
+        kMinDrawsPerWorker)
+    : worthwhile_threads(threads, pair_count, pair_rows,
+        min_rows_per_worker(BootstrapNeeds{needs_median, needs_penalised, needs_mode, needs_egger}));
   defer_r_math.store(true, std::memory_order_relaxed);
 
 #ifdef _OPENMP
@@ -2782,6 +3059,49 @@ Rcpp::NumericVector fastmr_group_mean_native(Rcpp::IntegerVector offsets,
   return out;
 }
 
+namespace {
+
+// True when R's normal generator is "Inversion" (the default), whose norm_rand()
+// is (R 4.5 src/nmath/snorm.c, unchanged since R 1.7.0):
+//   u = unif_rand(); u = (int)(BIG * u) + unif_rand();
+//   return qnorm5(u / BIG, 0.0, 1.0, 1, 0);      with BIG = 134217728 (2^27)
+// and rnorm(0, 1) returns 0.0 + 1.0 * norm_rand().
+bool normal_kind_is_inversion() {
+  Rcpp::Function rng_kind("RNGkind", R_BaseNamespace);
+  const Rcpp::CharacterVector kinds = rng_kind();
+  return kinds.size() >= 2 && Rcpp::as<std::string>(kinds[1]) == "Inversion";
+}
+
+// Main-thread part of R::rnorm(0, 1) under "Inversion": draws the two uniforms
+// per normal in stream order (consuming the RNG exactly as R::rnorm() would)
+// and stores u = (int)(BIG * u1) + u2. inversion_normals_finish() completes
+// them; together they produce R::rnorm(0, 1)'s values bit for bit.
+void inversion_normals_rng_part(double* out, std::size_t count) {
+  for (std::size_t j = 0; j < count; ++j) {
+    const double u = unif_rand();
+    out[j] = static_cast<int>(134217728.0 * u) + unif_rand();
+  }
+}
+
+// out[j] = 0 + 1 * qnorm(out[j] / BIG, 0, 1), as rnorm(0, 1) and norm_rand()
+// compute it, in parallel. R::qnorm() is Rf_qnorm5() from nmath, the function
+// norm_rand() calls: it is pure arithmetic on its arguments (no globals, no
+// allocation; its only warning path, ML_WARN_return_NAN with ME_DOMAIN, never
+// calls warning(), and p is in (0, 1) here anyway), so it is safe off the main
+// thread.
+void inversion_normals_finish(double* data, std::size_t count, int workers) {
+  const std::size_t chunk = 65536;
+  const std::size_t chunks = (count + chunk - 1) / chunk;
+  run_parallel(chunks, workers, [&](std::size_t c) {
+    const std::size_t end = std::min(count, (c + 1) * chunk);
+    for (std::size_t j = c * chunk; j < end; ++j) {
+      data[j] = 0.0 + 1.0 * R::qnorm(data[j] / 134217728.0, 0.0, 1.0, 1, 0);
+    }
+  });
+}
+
+} // namespace
+
 // Equivalent of calling fastmr_run_native() once per group with bootstrap
 // methods, threaded across groups with bit-identical results. All of R's RNG
 // is consumed on the main thread in exactly the serial order: one continuous
@@ -2821,7 +3141,7 @@ Rcpp::List fastmr_run_groups_boot_native(Rcpp::IntegerVector offsets,
   const std::size_t method_count = parsed_methods.size();
   const BootstrapNeeds needs = bootstrap_needs(parsed_methods);
   // Per-group draw counts (the number of normals compute_pair() consumes).
-  std::vector<double> counts(groups);
+  std::vector<double> counts(groups), work(groups);
   for (std::size_t g = 0; g < groups; ++g) {
     const R_xlen_t begin = in.offsets[g], end = in.offsets[g + 1];
     std::size_t snps = 0, ratios = 0;
@@ -2834,6 +3154,8 @@ Rcpp::List fastmr_run_groups_boot_native(Rcpp::IntegerVector offsets,
     }
     counts[g] = bootstrap_draw_count(snps, ratios, nboot, needs.median,
                                      needs.egger, needs.penalised, needs.mode);
+    work[g] = bootstrap_draw_work(snps, ratios, nboot, needs.median,
+                                  needs.egger, needs.penalised, needs.mode);
   }
   auto start_stream = [&](std::size_t g) {
     if (Rf_isNull(reseed) || counts[g] <= 0.0) return;
@@ -2847,19 +3169,24 @@ Rcpp::List fastmr_run_groups_boot_native(Rcpp::IntegerVector offsets,
   };
   std::vector<double> buffer;
   std::vector<std::size_t> draw_start;
+  // Under normal.kind = "Inversion" (R's default) a normal is qnorm() of two
+  // uniforms, and only the uniforms touch the RNG state; see
+  // inversion_normals_rng_part().
+  int inversion = -1;  // unknown until the first multi-worker batch
   std::size_t first = 0;
   while (first < groups) {
     // Greedy batch: at least one group, then add groups while within budget.
-    double batch_total = counts[first];
+    double batch_total = counts[first], batch_work = work[first];
     std::size_t last = first + 1;
     while (last < groups && batch_total + counts[last] <= batch_draws) {
       batch_total += counts[last];
+      batch_work += work[last];
       ++last;
     }
     const std::size_t batch_groups = last - first;
     const double batch_rows = static_cast<double>(in.offsets[last] - in.offsets[first]);
     const int workers = batch_total > 0.0
-      ? worthwhile_threads(threads, batch_groups, batch_total + batch_rows, kMinDrawsPerWorker)
+      ? worthwhile_threads(threads, batch_groups, batch_work + batch_rows, kMinDrawsPerWorker)
       : worthwhile_threads(threads, batch_groups, batch_rows, min_rows_per_worker(needs));
     if (workers == 1) {
       for (std::size_t g = first; g < last; ++g) {
@@ -2878,9 +3205,15 @@ Rcpp::List fastmr_run_groups_boot_native(Rcpp::IntegerVector offsets,
         start_stream(g);
         const std::size_t k = static_cast<std::size_t>(counts[g]);
         double* out = buffer.data() + pos;
-        for (std::size_t j = 0; j < k; ++j) out[j] = R::rnorm(0.0, 1.0);
+        if (inversion < 0) inversion = normal_kind_is_inversion() ? 1 : 0;
+        if (inversion) {
+          inversion_normals_rng_part(out, k);
+        } else {
+          for (std::size_t j = 0; j < k; ++j) out[j] = R::rnorm(0.0, 1.0);
+        }
         pos += k;
       }
+      if (inversion) inversion_normals_finish(buffer.data(), pos, workers);
       const double* draw_data = buffer.data();
       {
         DeferRMath deferred;
