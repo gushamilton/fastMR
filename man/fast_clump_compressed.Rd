@@ -10,7 +10,7 @@ fast_clump_compressed(
   candidate_source = c("pvalue_flag", "full"),
   pvalue_order = c("reconstructed", "require_exact"),
   output = NULL,
-  partition = c("global", "chromosome", "lead_row", "graph"),
+  partition = c("auto", "graph", "per_exposure", "global", "chromosome", "lead_row"),
   ...
 )
 }
@@ -27,14 +27,18 @@ installed CompreSSoR and each store provide it, and errors otherwise.}
 
 \item{output}{Optional Parquet path for the clumped candidate table.}
 
-\item{partition}{\code{"global"} (default), \code{"chromosome"}, \code{"lead_row"}, or
-\code{"graph"} (recommended for large exposure sets: one PLINK2 all-pairs LD
-call per chromosome plus a C++ greedy pass; falls back to lead-row mode
-above \code{max_graph_pairs}, see \code{\link[=fast_clump_data_graph]{fast_clump_data_graph()}}; instruments are
-identical to the other partitions).
-Chromosome partitioning avoids an unnecessarily large cross-chromosome
-target union; lead-row mode shares only the LD row relevant to each
-current lead and is preferable when exposures overlap substantially.}
+\item{partition}{\code{"auto"} (default), \code{"graph"}, \code{"per_exposure"},
+\code{"global"}, \code{"chromosome"}, or \code{"lead_row"}.  All return identical
+instruments.  \code{"auto"} (\code{\link[=fast_clump_data_auto]{fast_clump_data_auto()}}) picks \code{"graph"} or
+\code{"per_exposure"} from the estimated number of candidate pairs within
+\code{clump_kb}, the number of exposures and \code{threads}, and records the choice
+in \code{diagnostics$auto}.  \code{"graph"} makes one PLINK2 all-pairs LD call over
+the candidate union plus a C++ greedy pass (lead-row fallback above
+\code{max_graph_pairs}, see \code{\link[=fast_clump_data_graph]{fast_clump_data_graph()}}); \code{"per_exposure"} runs
+one PLINK2 \code{--clump} per exposure on a candidate-only reference, which is
+much faster when the pair graph is dense (permissive \code{clump_r2} and wide
+\code{clump_kb}), see \code{\link[=fast_clump_data_per_exposure]{fast_clump_data_per_exposure()}}.  \code{"global"},
+\code{"chromosome"} and \code{"lead_row"} are the earlier frontier strategies.}
 
 \item{...}{Arguments forwarded to the selected batched clumping function.}
 }
@@ -42,9 +46,9 @@ current lead and is preferable when exposures overlap substantially.}
 A list with \code{data}, named \code{instruments}, and \code{diagnostics}.
 }
 \description{
-Candidate variants are extracted from every exposure store, then one
-exposure-grouped PLINK2 frontier is used to clump them.  The default
-p-value flag path reads only the rows marked by CompreSSoR's aligned flag
-domain; p-values are still reconstructed from stored Z values until the
-exact ordering domain in CompreSSoR#45 is available.
+Candidate variants are extracted from every exposure store and clumped
+exactly with the strategy chosen by \code{partition}.  The default p-value flag
+path reads only the rows marked by CompreSSoR's aligned flag domain (one
+batched pass, including only those rows' exact ranks when
+\code{pvalue_order = "require_exact"}), then keeps p <= \code{pvalue_threshold}.
 }
