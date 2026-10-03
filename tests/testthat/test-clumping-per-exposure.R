@@ -63,7 +63,7 @@ pe_emulate_clump <- function(snps, ref, kb_arg, r2_arg) {
 
 with_pe_oracle <- function(ref, code) {
   calls <- new.env()
-  calls$graph <- 0L; calls$frontier <- 0L; calls$subset <- 0L; calls$clump <- 0L
+  calls$graph <- 0L; calls$frontier <- 0L; calls$subset <- 0L; calls$clump <- 0L; calls$cert <- 0L
   calls$extract <- logical()
   testthat::local_mocked_bindings(
     fastmr_clump_run_graph = function(snps, reference_args, plink2_bin, clump_kb,
@@ -94,6 +94,12 @@ with_pe_oracle <- function(ref, code) {
       list(ids = pe_emulate_clump(snps, ref, kb_arg, r2_arg),
            pvar = if (extract) data.frame(id = hit$SNP, chr = hit$chr, pos = hit$bp,
                                           stringsAsFactors = FALSE) else NULL)
+    },
+    fastmr_clump_run_lead_graph = function(leads, snps, reference_args, plink2_bin, clump_kb,
+                                           clump_r2, threads, workdir) {
+      calls$cert <- calls$cert + 1L
+      p <- pe_pairs(unique(leads), unique(snps), ref, clump_kb, clump_r2)
+      list(lead = match(p$lead, snps), target = match(p$target, snps), invalid_r2 = 0, invalid_example = "")
     },
     fastmr_clump_plink_version = function(plink2_bin) "PLINK v2.0.0-mock",
     .package = "fastMR", .env = parent.frame()
@@ -244,6 +250,32 @@ test_that("per-exposure delegates to the graph when it cannot be exact", {
   expect_identical(r$instruments, g$instruments)
 })
 
+test_that("a --clump result that disagrees with the graph's LD is caught by the certificate", {
+  skip_on_os("windows")
+  ref <- pe_ref()
+  dat <- pe_make_dat(10L, 21L, ref)
+  calls <- with_pe_oracle(ref)
+  g <- fast_clump_data_graph(dat, clump_kb = 5, clump_r2 = 0.5, bfile = "mock", plink2_bin = "/bin/true")
+  ok <- fast_clump_data_per_exposure(dat, clump_kb = 5, clump_r2 = 0.5, bfile = "mock", plink2_bin = "/bin/true",
+                                     subset = "always")
+  expect_true(ok$diagnostics$certificate$verified)
+  expect_gt(ok$diagnostics$certificate$leads, 0L)
+  expect_gt(calls$cert, 0L)
+  # --clump that sees one spurious LD pair (as PLINK2 2.00a6.8 does for some |D'| = 1 pairs)
+  testthat::local_mocked_bindings(
+    fastmr_clump_run_clump = function(snps, reference_args, plink2_bin, kb_arg, r2_arg, stem, extract = FALSE) {
+      ids <- pe_emulate_clump(snps, ref, kb_arg, r2_arg)
+      if (length(ids) > 1L) ids <- ids[-length(ids)]   # the last lead "clumped" by a bogus pair
+      hit <- ref[ref$SNP %in% snps, , drop = FALSE]
+      list(ids = ids, pvar = if (extract) data.frame(id = hit$SNP, chr = hit$chr, pos = hit$bp) else NULL)
+    }, .package = "fastMR")
+  bad <- fast_clump_data_per_exposure(dat, clump_kb = 5, clump_r2 = 0.5, bfile = "mock", plink2_bin = "/bin/true",
+                                      subset = "always")
+  expect_match(bad$diagnostics$delegated, "certificate_mismatch")
+  expect_identical(bad$diagnostics$partition, "graph")
+  expect_identical(bad$data, g$data)
+})
+
 test_that("auto dispatch follows the cost model and records it", {
   skip_on_os("windows")
   ref <- pe_ref()
@@ -282,7 +314,9 @@ test_that("per-exposure runs through the PLINK2 argument surface", {
     "#!/bin/sh", "out=''", "clump=0", "pvar=0",
     sprintf("echo \"$@\" >> %s", log),
     "case \"$*\" in *--version*) echo 'PLINK v2.0.0-stub'; exit 0;; esac",
-    "while [ \"$#\" -gt 0 ]; do case \"$1\" in --out) out=\"$2\"; shift 2;; --clump) clump=1; shift 2;; --make-pgen|--make-just-pvar) pvar=1; shift;; *) shift;; esac; done",
+    "cert=0",
+    "while [ \"$#\" -gt 0 ]; do case \"$1\" in --out) out=\"$2\"; shift 2;; --clump) clump=1; shift 2;; --ld-snp-list) cert=1; shift 2;; --make-pgen|--make-just-pvar) pvar=1; shift;; *) shift;; esac; done",
+    "if [ $cert = 1 ]; then printf '#ID_A\\tID_B\\tPHASED_R2\\nA\\tB\\t0.9\\n' > \"${out}.vcor\"; exit 0; fi",
     "if [ $pvar = 1 ]; then printf '##fileformat\\n#CHROM\\tPOS\\tID\\tREF\\tALT\\n1\\t1000\\tA\\tC\\tG\\n1\\t2000\\tB\\tC\\tG\\n1\\t90000\\tC\\tC\\tG\\n' > \"${out}.pvar\"; fi",
     "if [ $clump = 1 ]; then printf '#CHROM\\tPOS\\tID\\tP\\tTOTAL\\n1\\t1000\\tA\\t0.25\\t1\\n1\\t90000\\tC\\t0.75\\t0\\n' > \"${out}.clumps\"; fi"
   ), plink2)
@@ -295,6 +329,8 @@ test_that("per-exposure runs through the PLINK2 argument surface", {
                                         plink2_bin = plink2, subset = sub)
     expect_identical(res$instruments$E, c("A", "C", "D"))   # D is absent from the reference
     args <- readLines(log)
+    expect_length(args[grepl("--ld-snp-list", args)], 1L)   # the certificate query
+    expect_match(args[grepl("--ld-snp-list", args)], "--r2-phased cols=id --ld-snp-list", fixed = TRUE)
     call <- args[grepl("--clump ", args)]
     expect_length(call, 1L)
     expect_match(call, "--clump-id-field SNP --clump-p-field P --clump-p1 1 --clump-p2 1", fixed = TRUE)

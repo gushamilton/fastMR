@@ -60,12 +60,17 @@ given to PLINK2 is each candidate's exact rank in the greedy order used by
 present, then p, then SNP ID), and the \code{--clump-kb}/\code{--clump-r2} arguments
 are translated so that PLINK2's window and r2 comparisons match the graph
 partition's inclusive ones.  Candidates absent from the reference are
-retained.  Retained instruments are identical to \code{\link[=fast_clump_data_graph]{fast_clump_data_graph()}}
-and \code{\link[=fast_clump_data_lead_rows]{fast_clump_data_lead_rows()}}.
+retained.  The leads are then certified with one \code{--r2-phased --ld-snp-list} query (the graph partition's own LD statistic and flags,
+restricted to pairs involving a lead): the greedy pass over that
+lead-incident graph must keep exactly the \code{--clump} leads, which proves the
+result equals \code{\link[=fast_clump_data_graph]{fast_clump_data_graph()}} (and \code{\link[=fast_clump_data_lead_rows]{fast_clump_data_lead_rows()}}).
+This matters because \code{--clump} computes r2 in a separate code path: PLINK2
+2.00a6.8's \code{--clump} mis-estimates some rare-variant pairs with |D'| = 1.
+Pairs reported with r2 > 1 are warned about as in the graph partition.
 }
 \details{
 The call is delegated to \code{\link[=fast_clump_data_graph]{fast_clump_data_graph()}} (reason in
-\code{diagnostics$delegated}) when candidate positions are incomplete or differ
-from the reference, when the reference has duplicate candidate IDs, or when
-\code{clump_r2 <= 0}.
+\code{diagnostics$delegated}) when the certificate fails, when candidate
+positions are incomplete or differ from the reference, when the reference
+has duplicate candidate IDs, or when \code{clump_r2 <= 0}.
 }

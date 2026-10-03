@@ -23,9 +23,9 @@
 #   on the data positions, --clump on the reference); otherwise, or when the
 #   reference has duplicate candidate IDs, the call is delegated to the graph.
 #
-# The r2 itself is PLINK2's phased (EM) r2 in both paths.  The PLINK2 2.00a6.8
-# r2 > 1 bug therefore affects both identically (such pairs are in LD); the
-# per-exposure path cannot count those pairs, so it warns from the version.
+# --clump and the graph's --r2-phased are separate PLINK2 code paths, so the
+# per-exposure leads are certified against the graph's own LD statistic with
+# one lead-restricted --r2-phased query (see fast_clump_data_per_exposure()).
 
 # PLINK2's kSmallEpsilon (2^-44), used when it parses --clump-kb/--clump-r2 and
 # --ld-window-kb/--ld-window-r2.
@@ -165,6 +165,27 @@ fastmr_clump_run_clump <- function(snps, reference_args, plink2_bin, kb_arg, r2_
   list(ids = ids, pvar = pvar)
 }
 
+# Internal (mockable): the graph partition's LD query (same --r2-phased flags
+# as fastmr_clump_run_graph()) restricted to pairs with one variant in
+# `leads`.  Returns 1-based vertex ids into `snps` plus the r2 > 1 count.
+fastmr_clump_run_lead_graph <- function(leads, snps, reference_args, plink2_bin, clump_kb,
+                                        clump_r2, threads, workdir) {
+  stem <- file.path(workdir, "cert")
+  lead_file <- paste0(stem, ".leads.txt")
+  writeLines(as.character(leads), lead_file)
+  on.exit(unlink(c(lead_file, paste0(stem, ".vcor"))), add = TRUE)
+  output <- fastmr_clump_system2(plink2_bin, c(
+    reference_args, "--r2-phased", "cols=id", "--ld-snp-list", fastmr_clump_quote(lead_file),
+    "--ld-window-kb", format(clump_kb, trim = TRUE, scientific = FALSE),
+    "--ld-window", "1000000000", "--ld-window-r2", format(clump_r2, trim = TRUE),
+    "--threads", as.integer(threads), "--out", fastmr_clump_quote(stem)))
+  path <- paste0(stem, ".vcor")
+  if (attr(output, "status") != 0L || !file.exists(path)) {
+    fastmr_clump_plink_failed(output, "lead LD certificate query")
+  }
+  .fastmr_vcor_read(path, as.character(snps))
+}
+
 # Checks that the reference describes the candidates exactly as the data does:
 # unique IDs, equal positions and a one-to-one chromosome-label mapping.
 # Returns NULL when consistent, else a reason string.
@@ -179,11 +200,6 @@ fastmr_clump_reference_mismatch <- function(pvar, snp, chr, bp) {
   NULL
 }
 
-fastmr_clump_r2_bug_version <- function(version) {
-  is.character(version) && length(version) == 1L && !is.na(version) &&
-    grepl("v2\\.0\\.0-a\\.6\\.8|2\\.00a6\\.8", version)
-}
-
 #' Exact per-exposure clumping on a candidate-only reference
 #'
 #' Extracts the union of candidate SNPs from the reference once
@@ -194,13 +210,19 @@ fastmr_clump_r2_bug_version <- function(version) {
 #' present, then p, then SNP ID), and the `--clump-kb`/`--clump-r2` arguments
 #' are translated so that PLINK2's window and r2 comparisons match the graph
 #' partition's inclusive ones.  Candidates absent from the reference are
-#' retained.  Retained instruments are identical to [fast_clump_data_graph()]
-#' and [fast_clump_data_lead_rows()].
+#' retained.  The leads are then certified with one `--r2-phased
+#' --ld-snp-list` query (the graph partition's own LD statistic and flags,
+#' restricted to pairs involving a lead): the greedy pass over that
+#' lead-incident graph must keep exactly the `--clump` leads, which proves the
+#' result equals [fast_clump_data_graph()] (and [fast_clump_data_lead_rows()]).
+#' This matters because `--clump` computes r2 in a separate code path: PLINK2
+#' 2.00a6.8's `--clump` mis-estimates some rare-variant pairs with |D'| = 1.
+#' Pairs reported with r2 > 1 are warned about as in the graph partition.
 #'
 #' The call is delegated to [fast_clump_data_graph()] (reason in
-#' `diagnostics$delegated`) when candidate positions are incomplete or differ
-#' from the reference, when the reference has duplicate candidate IDs, or when
-#' `clump_r2 <= 0`.
+#' `diagnostics$delegated`) when the certificate fails, when candidate
+#' positions are incomplete or differ from the reference, when the reference
+#' has duplicate candidate IDs, or when `clump_r2 <= 0`.
 #'
 #' @inheritParams fast_clump_data_graph
 #' @param subset `"auto"` (extract a candidate subset when there is more than
@@ -283,6 +305,7 @@ fast_clump_data_per_exposure <- function(
   subset_variants <- NA_integer_
   retained_key <- character()
   absent <- 0L
+  certificate <- list(leads = 0L, lead_edges = 0L, verified = TRUE)
   if (length(elig)) {
     usnp <- unique(snp[elig])
     clump_reference <- reference_args
@@ -341,6 +364,7 @@ fast_clump_data_per_exposure <- function(
            call. = FALSE)
     }
     kept <- vector("list", length(groups))
+    ordered_present <- vector("list", length(groups))
     for (k in seq_along(groups)) {
       r <- groups[[k]]
       s <- snp[r]
@@ -358,16 +382,45 @@ fast_clump_data_per_exposure <- function(
       absent <- absent + sum(!in_ref)
       keep <- !in_ref | s %in% out[[k]]$ids
       kept[[k]] <- paste(e_ids[[k]], s[keep], sep = "\r")
+      ordered_present[[k]] <- s[in_ref]
     }
     retained_key <- unlist(kept, use.names = FALSE)
+    # Certificate: the graph partition's own LD statistic (--r2-phased with
+    # the graph's flags) for every pair involving a --clump lead.  The greedy
+    # pass only ever consults edges to kept SNPs, so if the C++ greedy over
+    # this lead-incident graph keeps exactly the --clump leads in every
+    # exposure, the result equals the all-pairs graph result.  --clump and
+    # --r2-phased are separate PLINK2 code paths (2.00a6.8's --clump
+    # mis-estimates r2 for some |D'| = 1 rare-variant pairs that --r2-phased
+    # gets right), so this is checked rather than assumed.
+    leads <- unique(unlist(lapply(out, function(x) x$ids), use.names = FALSE))
+    if (length(leads)) {
+      vertices <- unique(unlist(ordered_present, use.names = FALSE))
+      cert_reference <- if (use_subset) clump_reference else
+        c(clump_reference, "--extract", fastmr_clump_quote(file.path(workdir, "cert.extract.txt")))
+      if (!use_subset) writeLines(vertices, file.path(workdir, "cert.extract.txt"))
+      plink_calls <- plink_calls + 1L
+      ld <- fastmr_clump_run_lead_graph(leads, vertices, cert_reference, plink2_bin, clump_kb, clump_r2,
+                                        threads, workdir)
+      vbp <- position$bp[elig][match(vertices, snp[elig])]
+      a <- ld$lead; b <- ld$target
+      ok <- a != b & abs(vbp[a] - vbp[b]) <= clump_kb * 1000
+      a <- a[ok]; b <- b[ok]
+      vtx <- match(unlist(ordered_present, use.names = FALSE), vertices)
+      starts <- c(0L, cumsum(lengths(ordered_present)))
+      gkeep <- .fastmr_graph_clump(length(vertices), a - 1L, b - 1L, vtx - 1L, as.integer(starts))
+      gk <- split(gkeep, rep(seq_along(ordered_present), lengths(ordered_present)))
+      for (k in which(lengths(ordered_present) > 0L)) {
+        g_leads <- ordered_present[[k]][gk[[as.character(k)]]]
+        if (!setequal(g_leads, out[[k]]$ids)) {
+          return(delegate(sprintf("per_exposure_certificate_mismatch (exposure %s)", e_ids[[k]])))
+        }
+      }
+      certificate <- list(leads = length(leads), lead_edges = length(a), verified = TRUE)
+      fastmr_clump_warn_invalid_r2(ld$invalid_r2, ld$invalid_example)
+    }
   }
   version <- fastmr_clump_plink_version(plink2_bin)
-  if (plink_calls > 0L && fastmr_clump_r2_bug_version(version)) {
-    warning(sprintf(paste0("%s has the --r2-phased/--clump r2 > 1 bug (PLINK2 2.00a6.8): pairs it reports ",
-                           "with r2 > 1 are treated as in LD, exactly as partition = 'graph' and PLINK2 --clump do, ",
-                           "but per-exposure clumping cannot count them; use partition = 'graph' to count them or ",
-                           "a PLINK2 build without the bug to match PLINK 1.9."), version), call. = FALSE)
-  }
   original_key <- paste(as.character(original$id.exposure), as.character(original$SNP), sep = "\r")
   result <- original[original_key %in% retained_key, , drop = FALSE]
   instruments <- lapply(split(result$SNP, result$id.exposure, drop = TRUE), as.character)
@@ -387,6 +440,7 @@ fast_clump_data_per_exposure <- function(
          candidate_rows = nrow(dat), retained = length(retained_key),
          rounds = 0L, plink_calls = plink_calls, subset = use_subset,
          subset_variants = subset_variants, absent_from_reference = absent,
+         certificate = certificate,
          workers = if (length(elig)) min(threads, max(1L, length(e_ids))) else 0L,
          exact = TRUE, fallback = FALSE, fallbacks = list(),
          partition = "per_exposure",
