@@ -175,7 +175,27 @@ beta/SE rows are passed directly to the compiled FastMR estimator: sparse MR
 does not reconstruct p-values and does not load a whole GWAS. The canonical key is
 `chromosome:position:REF:ALT`; beta, Z, and frequency in every CompreSSoR file
 refer to ALT, so matching keys are
-already aligned and no rsID dictionary is involved. Instrument discovery,
+already aligned and no rsID dictionary is involved.
+
+Steiger filtering can run in the same read. Stores carry no sample size, so
+supply one per store label (binary traits can instead be given case/control
+counts and prevalence through `steiger_binary`):
+
+```r
+result <- fast_mr_compressed(
+  exposure_files = c(bmi = "bmi.cpr", crp = "crp.cpr"),
+  outcome_files = c(cad = "cad.cpr", stroke = "stroke.cpr"),
+  instruments = instruments,
+  steiger = TRUE,
+  samplesize_exposure = c(bmi = 450000, crp = 400000),
+  samplesize_outcome = c(cad = 1e6, stroke = 1.5e6)
+)
+steiger <- attr(result, "steiger")   # per-SNP fast_mr_steiger_filtering() output
+```
+
+`effect_allele_frequency` and `p_value` are then read alongside beta/SE, and the
+Steiger rows are exactly the rows MR used. The default (`steiger = FALSE`) reads
+and returns the same as before. Instrument discovery,
 association-threshold selection, and LD clumping remain explicit upstream
 steps. For many exposures, the opt-in `fast_clump_compressed()` helper reads
 Pcodec candidate rows and shares one exposure-grouped PLINK2 LD frontier across
