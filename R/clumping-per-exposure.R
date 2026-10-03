@@ -408,7 +408,9 @@ fastmr_clump_auto_model <- list(
 fastmr_clump_auto_plan <- function(dat, clump_kb, clump_p1, threads,
                                    model = fastmr_clump_auto_model) {
   pcol <- if ("pval.exposure" %in% names(dat)) "pval.exposure" else if ("pval.outcome" %in% names(dat)) "pval.outcome" else NULL
-  p <- if (is.null(pcol)) rep(0.99, nrow(dat)) else suppressWarnings(as.numeric(as.character(dat[[pcol]])))
+  # Estimate only: skip as.character() on numeric p (0.4 s per 300k rows).
+  p <- if (is.null(pcol)) rep(0.99, nrow(dat)) else if (is.numeric(dat[[pcol]])) dat[[pcol]]
+       else suppressWarnings(as.numeric(as.character(dat[[pcol]])))
   elig <- which(is.finite(p) & p <= clump_p1)
   expo <- if ("id.exposure" %in% names(dat)) as.character(dat$id.exposure) else rep("exposure", nrow(dat))
   E <- length(unique(expo[elig]))
