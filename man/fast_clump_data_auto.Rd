@@ -49,13 +49,13 @@ A list with \code{data}, named \code{instruments}, and \code{diagnostics}.
 \description{
 Chooses between \code{\link[=fast_clump_data_graph]{fast_clump_data_graph()}} (one all-pairs LD call over the
 candidate union) and \code{\link[=fast_clump_data_per_exposure]{fast_clump_data_per_exposure()}} (one PLINK2 \code{--clump}
-per exposure on a candidate-only reference) from a measured cost model:
-graph about \verb{1.1 s + 1 us x} estimated candidate pairs within \code{clump_kb}
-(from \code{\link[=fast_clump_data_graph]{fast_clump_data_graph()}}'s position-based estimate), per-exposure
-about \verb{1.0 s + 16 ms x E / w}, with \code{w = max(1, min(threads, E) / 2)}
-concurrent workers.  Per-exposure is chosen when it is predicted cheaper,
-i.e. when the estimated pairs exceed roughly \verb{16000 x E / w - 1e5}.  Both
-strategies return identical instruments; the choice and the model inputs
+per exposure on a candidate-only reference) from a cost model measured on
+a 9M-variant reference: graph about \verb{1.1 s + 0.75 us x P + 2 us x rows},
+with \code{P} the estimated candidate pairs within \code{clump_kb} (from sorted
+positions) and \code{rows} the eligible candidate rows; per-exposure about
+\verb{0.95 s + 15.5 ms x E / w}, with \code{w = max(1, min(threads, E) / 3.5)}
+concurrent workers.  The cheaper prediction wins.  Both strategies return
+identical instruments; the choice and the model inputs
 are recorded in \code{diagnostics$auto}.  If the per-exposure run fails, the
 graph strategy is used and the error is recorded in
 \code{diagnostics$auto$per_exposure_error}.

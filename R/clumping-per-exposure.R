@@ -393,13 +393,15 @@ fast_clump_data_per_exposure <- function(
          reference_manifest_md5 = reference_md5, ld_provenance = ld_provenance))
 }
 
-# Measured cost model (BluePebble, 9M-variant 1000G EUR reference; see the
-# PR introducing partition = "auto").  Seconds.
+# Measured cost model (BluePebble Cascade Lake nodes, 9M-variant 1000G EUR
+# reference, clump-suite E = 1..1000 and the 10 x 10 showcase; seconds).
 fastmr_clump_auto_model <- list(
   graph_fixed = 1.1,          # PLINK2 start + reference .pvar parse
-  graph_per_pair = 1e-6,      # all-pairs LD + .vcor parse + R, per estimated pair
-  per_exposure_fixed = 1.0,   # candidate subset (or one full-reference --clump)
-  per_exposure_each = 0.016   # one single-threaded --clump on the subset
+  graph_per_pair = 0.75e-6,   # all-pairs LD + .vcor parse + R, per estimated pair
+  graph_per_row = 2e-6,       # per eligible candidate row (R bookkeeping)
+  per_exposure_fixed = 0.95,  # candidate subset (or one full-reference --clump)
+  per_exposure_each = 0.0155, # one single-threaded --clump on the subset
+  worker_divisor = 3.5        # concurrent --clump processes scale ~ threads / 3.5
 )
 
 # Chooses "graph" or "per_exposure" from the estimated candidate pair count.
@@ -426,22 +428,20 @@ fastmr_clump_auto_plan <- function(dat, clump_kb, clump_p1, threads,
   u <- !duplicated(snp)
   est <- sum(vapply(split(position$bp[elig][u], position$chr[elig][u]),
                     fastmr_graph_pair_estimate, numeric(1), window = clump_kb * 1000))
-  # Hyper-threaded nodes: concurrent single-threaded PLINK2 processes scale at
-  # about half the requested thread count.
-  w <- max(1, min(threads, E) / 2)
+  # Concurrent single-threaded PLINK2 processes scaled at about threads / 3.5
+  # on 8-thread (4-core, hyper-threaded) allocations.
+  w <- max(1, min(threads, E) / model$worker_divisor)
   plan$estimated_pairs <- est
   plan$effective_workers <- w
-  plan$cost_graph <- model$graph_fixed + model$graph_per_pair * est
+  plan$cost_graph <- model$graph_fixed + model$graph_per_pair * est + model$graph_per_row * length(elig)
   plan$cost_per_exposure <- model$per_exposure_fixed + model$per_exposure_each * E / w
   if (plan$cost_per_exposure < plan$cost_graph) {
     plan$strategy <- "per_exposure"
-    plan$reason <- sprintf("estimated pairs %.3g > %.3g (per-exposure cost %.2f s < graph %.2f s)",
-                           est, (plan$cost_per_exposure - model$graph_fixed) / model$graph_per_pair,
-                           plan$cost_per_exposure, plan$cost_graph)
+    plan$reason <- sprintf("estimated pairs %.3g: per-exposure cost %.2f s < graph %.2f s",
+                           est, plan$cost_per_exposure, plan$cost_graph)
   } else {
-    plan$reason <- sprintf("estimated pairs %.3g <= %.3g (graph cost %.2f s <= per-exposure %.2f s)",
-                           est, (plan$cost_per_exposure - model$graph_fixed) / model$graph_per_pair,
-                           plan$cost_graph, plan$cost_per_exposure)
+    plan$reason <- sprintf("estimated pairs %.3g: graph cost %.2f s <= per-exposure %.2f s",
+                           est, plan$cost_graph, plan$cost_per_exposure)
   }
   plan
 }
@@ -450,13 +450,13 @@ fastmr_clump_auto_plan <- function(dat, clump_kb, clump_p1, threads,
 #'
 #' Chooses between [fast_clump_data_graph()] (one all-pairs LD call over the
 #' candidate union) and [fast_clump_data_per_exposure()] (one PLINK2 `--clump`
-#' per exposure on a candidate-only reference) from a measured cost model:
-#' graph about `1.1 s + 1 us x` estimated candidate pairs within `clump_kb`
-#' (from [fast_clump_data_graph()]'s position-based estimate), per-exposure
-#' about `1.0 s + 16 ms x E / w`, with `w = max(1, min(threads, E) / 2)`
-#' concurrent workers.  Per-exposure is chosen when it is predicted cheaper,
-#' i.e. when the estimated pairs exceed roughly `16000 x E / w - 1e5`.  Both
-#' strategies return identical instruments; the choice and the model inputs
+#' per exposure on a candidate-only reference) from a cost model measured on
+#' a 9M-variant reference: graph about `1.1 s + 0.75 us x P + 2 us x rows`,
+#' with `P` the estimated candidate pairs within `clump_kb` (from sorted
+#' positions) and `rows` the eligible candidate rows; per-exposure about
+#' `0.95 s + 15.5 ms x E / w`, with `w = max(1, min(threads, E) / 3.5)`
+#' concurrent workers.  The cheaper prediction wins.  Both strategies return
+#' identical instruments; the choice and the model inputs
 #' are recorded in `diagnostics$auto`.  If the per-exposure run fails, the
 #' graph strategy is used and the error is recorded in
 #' `diagnostics$auto$per_exposure_error`.

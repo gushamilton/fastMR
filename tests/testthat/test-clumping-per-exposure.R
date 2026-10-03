@@ -256,13 +256,15 @@ test_that("auto dispatch follows the cost model and records it", {
   big <- data.frame(SNP = paste0("s", 1:2000), id.exposure = rep(sprintf("e%02d", 1:10), 200),
                     pval.exposure = 1e-9, chr_name = "1", chrom_start = seq_len(2000) * 10)
   expect_identical(plan(big, 10000, 1, 8L)$strategy, "per_exposure")   # ~2e6 pairs
-  sparse <- transform(big, chrom_start = seq_len(2000) * 1e7)
+  sparse <- transform(big, chrom_start = seq_len(2000) * 1e7, id.exposure = sprintf("e%03d", rep(1:100, 20)))
   expect_identical(plan(sparse, 10, 1, 1L)$strategy, "graph")          # no pairs at all
   expect_identical(plan(sparse, 10, 1, 1L)$estimated_pairs, 0)
-  # the threshold is 16000 * E / w - 1e5 pairs, w = max(1, min(threads, E) / 2)
+  # w = max(1, min(threads, E) / 3.5); costs follow fastmr_clump_auto_model
   p <- plan(big, 10000, 1, 8L)
-  expect_identical(p$effective_workers, 4)
-  expect_equal(p$cost_per_exposure, 1.0 + 0.016 * 10 / 4)
+  m <- fastMR:::fastmr_clump_auto_model
+  expect_equal(p$effective_workers, 8 / 3.5)
+  expect_equal(p$cost_per_exposure, m$per_exposure_fixed + m$per_exposure_each * 10 / (8 / 3.5))
+  expect_equal(p$cost_graph, m$graph_fixed + m$graph_per_pair * p$estimated_pairs + m$graph_per_row * 2000)
   # a per-exposure failure falls back to the graph with the error recorded
   testthat::local_mocked_bindings(fastmr_clump_run_clump = function(...) stop("boom"), .package = "fastMR")
   a2 <- fast_clump_data_auto(one, clump_kb = 5, clump_r2 = 0.5, bfile = "mock", plink2_bin = "/bin/true")

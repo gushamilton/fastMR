@@ -242,9 +242,10 @@ exposures and `threads`, and records the choice in `diagnostics$auto`:
   (r2 0.001, 10 Mb) the pair graph is nearly complete and this is several
   times faster.
 
-Auto picks per-exposure when its predicted cost (about 1.0 s + 16 ms per
-exposure divided by `max(1, min(threads, E) / 2)`) is below the graph's (about
-1.1 s + 1 us per estimated pair). `"graph"`, `"per_exposure"`, `"global"`,
+Auto picks per-exposure when its predicted cost (about 0.95 s + 15.5 ms per
+exposure divided by `max(1, min(threads, E) / 3.5)`) is below the graph's
+(about 1.1 s + 0.75 us per estimated pair + 2 us per candidate row).
+`"graph"`, `"per_exposure"`, `"global"`,
 `"chromosome"` and `"lead_row"` can also be requested explicitly; all return
 identical instruments. `diagnostics$ld_provenance` records the PLINK2 version,
 LD flags, reference and manifest MD5. With `pvalue_order = "require_exact"`
