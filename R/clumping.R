@@ -552,6 +552,52 @@ fastmr_have_flag_candidates_batch <- function() {
     "pvalue_flag" %in% eval(formals(CompreSSoR::read_candidates_batch)$strategy)
 }
 
+# Indirection over CompreSSoR::read_candidates_batch() (lets tests substitute a
+# faulty batch reader).
+fastmr_read_candidates_batch <- function(...) CompreSSoR::read_candidates_batch(...)
+
+# CompreSSoR whose read_candidates_batch() is known to return the per-store
+# result for every batch composition and to stop rather than drop rows.  The
+# full-store batch path has no manifest count to check against, so it is used
+# only with such a build; otherwise the per-store reader runs.
+fastmr_have_checked_candidates_batch <- function() {
+  fastmr_have_compressor_fn("compressor_capabilities") &&
+    "candidates_batch_rows_checked" %in% CompreSSoR::compressor_capabilities()
+}
+
+# Number of rows flagged in a store's p-value flag domain: the manifest's
+# recorded count, or (when the manifest lacks it) the flag stream itself.
+fastmr_store_flag_count <- function(store, io_threads = 1L) {
+  domain <- fastmr_clump_default(store$manifest$domains, list())$pvalue_flag
+  n <- suppressWarnings(as.numeric(domain$hit_rows))
+  if (length(n) == 1L && is.finite(n) && n >= 0) return(n)
+  length(CompreSSoR::read_pvalue_flag(store, as = "row_ids", threads = io_threads))
+}
+
+# NULL when a read_candidates_batch(strategy = "pvalue_flag") result has, for
+# every store, exactly the store's flagged rows (read at the flag's own
+# threshold, so before the user threshold is applied); otherwise a short
+# description of the first mismatch.
+fastmr_flag_batch_problem <- function(got, stores, labels, io_threads = 1L) {
+  if (!is.list(got) || length(got) != length(stores)) {
+    return(paste0("returned ", if (is.list(got)) length(got) else 0L,
+                  " tables for ", length(stores), " stores"))
+  }
+  if (!is.null(names(got)) && !identical(names(got), labels)) {
+    return("store names out of order")
+  }
+  for (i in seq_along(stores)) {
+    x <- got[[i]]
+    if (!is.data.frame(x)) return(paste0("store '", labels[[i]], "' returned no table"))
+    expected <- fastmr_store_flag_count(stores[[i]], io_threads)
+    if (nrow(x) != expected || ("row" %in% names(x) && anyDuplicated(x[["row"]]))) {
+      return(paste0("store '", labels[[i]], "' returned ", nrow(x), " of ", expected,
+                    " flagged rows"))
+    }
+  }
+  NULL
+}
+
 # Candidate table from a read_candidates_batch() result: native row order,
 # p <= pvalue_threshold, and the exact rank when requested.
 fastmr_candidates_from_batch <- function(got, labels, pvalue_threshold, exact_order) {
@@ -633,14 +679,24 @@ fastmr_compressed_candidate_data <- function(paths, labels, pvalue_threshold,
     # applied afterwards, as in the fallback, so membership stays the flag's.
     if (fastmr_have_flag_candidates_batch()) {
       got <- tryCatch(
-        CompreSSoR::read_candidates_batch(
+        fastmr_read_candidates_batch(
           as.list(stats::setNames(paths, labels)), pvalue_threshold = unname(flag_thresholds),
           columns = c("key", "p_value", "chromosome", "base_pair_location"),
           order = if (exact_order) "exact" else "none", threads = io_threads,
           strategy = "pvalue_flag"),
-        error = function(e) NULL)
-      if (is.list(got) && length(got) == length(paths)) {
+        error = function(e) e)
+      # Trust the batch only if every store returned exactly its flagged
+      # rows (CompreSSoR 0.7.0 could silently drop rows in mixed batches).
+      problem <- if (inherits(got, "error")) {
+        paste("read_candidates_batch() failed:", conditionMessage(got))
+      } else {
+        fastmr_flag_batch_problem(got, stores, labels, io_threads)
+      }
+      if (is.null(problem)) {
         data <- fastmr_candidates_from_batch(got, labels, pvalue_threshold, exact_order)
+      } else {
+        warning("batched p-value flag candidate read rejected (", problem,
+                "); falling back to the per-store reader", call. = FALSE)
       }
     }
     if (is.null(data)) {
@@ -696,13 +752,14 @@ fastmr_compressed_candidate_data <- function(paths, labels, pvalue_threshold,
     }, error = function(e) stop("failed to read candidates from ", paths[[i]], ": ",
                                conditionMessage(e), call. = FALSE))
   }
-  if (is.null(data) && is.null(flag_thresholds) && fastmr_have_one_pass_candidates()) {
+  if (is.null(data) && is.null(flag_thresholds) && fastmr_have_one_pass_candidates() &&
+      fastmr_have_checked_candidates_batch()) {
     # One read_candidates_batch() per exposure batch: candidate rows, key, p and
     # (for exact ordering) the exact rank in one block-selective pass per store,
     # with same-panel identity decoded once.  No p slack is needed because p is
     # bit-identical to the full read.
     got <- tryCatch(
-      CompreSSoR::read_candidates_batch(
+      fastmr_read_candidates_batch(
         as.list(stats::setNames(paths, labels)), pvalue_threshold = pvalue_threshold,
         columns = c("key", "p_value", "chromosome", "base_pair_location"),
         order = if (exact_order) "exact" else "none", threads = io_threads),
