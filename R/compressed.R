@@ -355,16 +355,30 @@ fastmr_compressed_pair_index <- function(exposure_data, outcome_data, instrument
   )
 }
 
+# Every decoded store must carry `column` with one value per row: unlist()
+# silently drops a NULL (absent) column, which would misalign the gather.
+fastmr_compressed_check_column <- function(data_list, values, column, side) {
+  bad <- vapply(values, is.null, logical(1)) |
+    lengths(values) != vapply(data_list, NROW, integer(1))
+  if (any(bad)) {
+    stop("compressed ", side, " store(s) lack a complete '", column, "' column: ",
+         paste(names(data_list)[bad], collapse = ", "), call. = FALSE)
+  }
+}
+
 # One column of the exposure stores, per instrument of a pair index.
 fastmr_compressed_instrument_column <- function(exposure_data, index, column) {
-  unlist(lapply(seq_along(exposure_data), function(e) {
-    exposure_data[[e]][[column]][index$rows[[e]]]
+  values <- lapply(exposure_data, `[[`, column)
+  fastmr_compressed_check_column(exposure_data, values, column, "exposure")
+  unlist(lapply(seq_along(values), function(e) {
+    values[[e]][index$rows[[e]]]
   }), use.names = FALSE)
 }
 
 # One column of the outcome stores at (outcome, row) positions.
 fastmr_compressed_outcome_column <- function(outcome_data, column, outcome, row) {
   values <- lapply(outcome_data, `[[`, column)
+  fastmr_compressed_check_column(outcome_data, values, column, "outcome")
   offset <- c(0, cumsum(as.numeric(lengths(values))))
   unlist(values, use.names = FALSE)[offset[outcome] + row]
 }
@@ -546,7 +560,7 @@ fastmr_compressed_pairwise_data <- function(exposure_data, outcome_data,
     id.outcome = rows$id.outcome,
     stringsAsFactors = FALSE
   )
-  list(data = data, counts = counts)
+  list(data = data, counts = counts, index = index)
 }
 
 # Harmonised rows of the selected entries.  `columns` names the store columns
@@ -842,9 +856,13 @@ fastmr_compressed_steiger_options <- function(steiger, samplesize_exposure,
 # standard error (the rows MR uses), in instrument order; pairs with fewer than
 # `minimum_snps` such rows are dropped, as MR drops them. Rows are
 # exposure-major, outcomes in store order.
+# `index` may be the pair index the pairwise path already built for the same
+# stores and instruments; otherwise it is built here.
 fastmr_compressed_steiger <- function(exposure_data, outcome_data, instrument_sets,
-                                      minimum_snps, options) {
-  index <- fastmr_compressed_pair_index(exposure_data, outcome_data, instrument_sets)
+                                      minimum_snps, options, index = NULL) {
+  if (is.null(index)) {
+    index <- fastmr_compressed_pair_index(exposure_data, outcome_data, instrument_sets)
+  }
   selected <- (index$matched >= minimum_snps)[index$entry_pair]
   if (!any(selected)) return(data.frame())
   rows <- fastmr_compressed_entry_table(
@@ -1039,11 +1057,12 @@ fast_mr_compressed <- function(
   # Attach Steiger (when requested) after estimation, so it never runs on a
   # study that strict mode or minimum_snps rejected.
   # The Parquet copy is written before the `steiger` attribute is attached.
-  finish <- function(result) {
+  finish <- function(result, index = NULL) {
     if (is.null(steiger_options)) return(fastmr_write_result(result, output))
     steiger_started <- unname(proc.time()[["elapsed"]])
     steiger_result <- fastmr_compressed_steiger(
-      exposure_data, outcome_data, instrument_sets, minimum_snps, steiger_options
+      exposure_data, outcome_data, instrument_sets, minimum_snps, steiger_options,
+      index = index
     )
     metadata <- attr(result, "compressed_input")
     metadata$timing$steiger_seconds <- unname(proc.time()[["elapsed"]]) - steiger_started
@@ -1142,5 +1161,5 @@ fast_mr_compressed <- function(
       source_bytes_read = source_bytes_read
     )
   )
-  finish(result)
+  finish(result, index = pairwise$index)
 }

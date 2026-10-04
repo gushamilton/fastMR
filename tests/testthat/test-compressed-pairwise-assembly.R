@@ -72,6 +72,7 @@ test_that("pairwise assembly is identical to the per-pair loop", {
           ))
           old <- run(old_compressed_pairwise_data)
           new <- run(fastMR:::fastmr_compressed_pairwise_data)
+          if (!inherits(new$value, "captured_error")) new$value$index <- NULL
           expect_identical(new, old, info = paste(seed, problems, strict, minimum_snps))
         }
       }
@@ -155,13 +156,43 @@ test_that("compressed Steiger assembly is identical to the per-pair loop", {
     )
     if (!is.null(options$binary)) options$samplesize_outcome[["out02"]] <- NA_real_
     for (minimum_snps in c(1L, 4L, 50L)) {
-      run <- function(f) f(study$exposure_data, study$outcome_data,
-                           study$instruments, minimum_snps, options)
-      expect_identical(run(fastMR:::fastmr_compressed_steiger),
-                       run(old_compressed_steiger),
+      run <- function(f, ...) f(study$exposure_data, study$outcome_data,
+                                study$instruments, minimum_snps, options, ...)
+      expected <- run(old_compressed_steiger)
+      expect_identical(run(fastMR:::fastmr_compressed_steiger), expected,
                        info = paste(seed, minimum_snps))
+      index <- fastMR:::fastmr_compressed_pair_index(
+        study$exposure_data, study$outcome_data, study$instruments
+      )
+      expect_identical(run(fastMR:::fastmr_compressed_steiger, index = index),
+                       expected, info = paste(seed, minimum_snps, "index"))
     }
   }
+})
+
+test_that("a store missing a gathered column is an error, not a misaligned table", {
+  study <- pairwise_assembly_study(seed = 2L, problems = FALSE)
+  broken <- study
+  broken$outcome_data$out03$standard_error <- NULL
+  expect_error(
+    fastMR:::fastmr_compressed_pairwise_data(
+      broken$exposure_data, broken$outcome_data, broken$instruments, 1L, FALSE
+    ),
+    "outcome store\\(s\\) lack a complete 'standard_error' column: out03"
+  )
+  broken <- study
+  broken$exposure_data$exp02$effect_allele_frequency <- NULL
+  options <- list(
+    samplesize_exposure = stats::setNames(rep(1e5, 6), names(study$exposure_data)),
+    samplesize_outcome = stats::setNames(rep(5e4, 5), names(study$outcome_data)),
+    binary = NULL
+  )
+  expect_error(
+    fastMR:::fastmr_compressed_steiger(
+      broken$exposure_data, broken$outcome_data, broken$instruments, 1L, options
+    ),
+    "exposure store\\(s\\) lack a complete 'effect_allele_frequency' column: exp02"
+  )
 })
 
 test_that("long omission warnings are truncated with the total count", {
@@ -170,11 +201,13 @@ test_that("long omission warnings are truncated with the total count", {
     study$exposure_data, study$outcome_data, study$instruments, 3L, FALSE
   ))
   full <- withr::with_options(list(fastMR.warning_pairs = Inf), run())
+  full$value$index <- NULL
   old <- capture_run(old_compressed_pairwise_data(
     study$exposure_data, study$outcome_data, study$instruments, 3L, FALSE
   ))
   expect_identical(full, old)
   short <- withr::with_options(list(fastMR.warning_pairs = 3), run())
+  short$value$index <- NULL
   expect_identical(short$value, full$value)
   expect_length(short$warnings, length(full$warnings))
   for (i in seq_along(full$warnings)) {
