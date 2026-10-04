@@ -7,6 +7,7 @@
 #include <cstddef>
 #include <cmath>
 #include <complex>
+#include <exception>
 #include <limits>
 #include <memory>
 #include <numeric>
@@ -32,25 +33,33 @@ constexpr int MODE_GRID_SIZE = 512;
 // TwoSampleMR.  Only ever tested with std::isfinite()/std::isnan() here.
 const double NA_VALUE = NA_REAL;
 std::atomic<bool> defer_r_math(false);
+// Per-thread deferral, for workers that run while the main thread keeps
+// computing R-backed p-values for an earlier batch (see
+// fastmr_run_groups_boot_native()).
+thread_local bool defer_r_math_here = false;
+
+bool r_math_deferred() {
+  return defer_r_math_here || defer_r_math.load(std::memory_order_relaxed);
+}
 
 double finite_or_na(double x) {
   return std::isfinite(x) ? x : NA_VALUE;
 }
 
 double z_pvalue(double statistic) {
-  if (defer_r_math.load(std::memory_order_relaxed)) return NA_VALUE;
+  if (r_math_deferred()) return NA_VALUE;
   if (!std::isfinite(statistic)) return NA_VALUE;
   return 2.0 * R::pnorm5(std::abs(statistic), 0.0, 1.0, false, false);
 }
 
 double t_pvalue(double statistic, int df) {
-  if (defer_r_math.load(std::memory_order_relaxed)) return NA_VALUE;
+  if (r_math_deferred()) return NA_VALUE;
   if (!std::isfinite(statistic) || df <= 0) return NA_VALUE;
   return 2.0 * R::pt(std::abs(statistic), static_cast<double>(df), false, false);
 }
 
 double chi_square_pvalue(double q, int df) {
-  if (defer_r_math.load(std::memory_order_relaxed)) return NA_VALUE;
+  if (r_math_deferred()) return NA_VALUE;
   if (!std::isfinite(q) || df <= 0) return NA_VALUE;
   return R::pchisq(q, static_cast<double>(df), false, false);
 }
@@ -281,6 +290,11 @@ struct ModeDensityWorkspace {
   std::vector<double> direct_bins[2];
   std::vector<double> direct_density[2];
   std::vector<double> direct_kernel;
+  // Hull path: bins are kept all-zero between calls (only the occupied cells
+  // are cleared after use); densities are only written and read on the hull.
+  std::vector<double> hull_bins[2];
+  std::vector<double> hull_density[2];
+  std::vector<double> hull_kernel;
 };
 
 ModeDensityWorkspace& mode_workspace() {
@@ -473,14 +487,22 @@ constexpr double kModeGuardRelative = 1e-9;
 
 std::atomic<double> mode_direct_max(kModeDirectMaxRatios);
 std::atomic<unsigned long long> mode_direct_total(0), mode_guard_total(0);
+std::atomic<unsigned long long> mode_hull_total(0), mode_hull_fallback_total(0);
 // Per-thread draw counts, flushed into the totals once per mode fit.
 thread_local unsigned long long mode_direct_draws = 0, mode_guard_draws = 0;
+thread_local unsigned long long mode_hull_draws = 0, mode_hull_fallback_draws = 0;
 
 void flush_mode_counters() {
   if (mode_direct_draws) mode_direct_total.fetch_add(mode_direct_draws, std::memory_order_relaxed);
   if (mode_guard_draws) mode_guard_total.fetch_add(mode_guard_draws, std::memory_order_relaxed);
+  if (mode_hull_draws) mode_hull_total.fetch_add(mode_hull_draws, std::memory_order_relaxed);
+  if (mode_hull_fallback_draws) {
+    mode_hull_fallback_total.fetch_add(mode_hull_fallback_draws, std::memory_order_relaxed);
+  }
   mode_direct_draws = 0;
   mode_guard_draws = 0;
+  mode_hull_draws = 0;
+  mode_hull_fallback_draws = 0;
 }
 
 #ifdef _OPENMP
@@ -614,8 +636,255 @@ bool mode_index_direct(const double* values, const double* const* weights, int v
   return true;
 }
 
+// ---- Hull path -------------------------------------------------------------
+// For small pairs the direct path's cost is the 512-cell grid, not the data:
+// it evaluates ~10 bandwidths of kernel (one exp() per distance, up to ~366),
+// convolves every occupied bin over that whole radius and scans all 512 output
+// points. The hull path restricts all three to the cells spanning the occupied
+// bins, and (optionally) evaluates the kernel by a recurrence with an exact
+// exp() every 16th distance. It returns false whenever it cannot certify the
+// FFT path's argmax; the caller then runs mode_index_direct() (and, failing
+// that, the FFT), so every selected mode is still the FFT path's bit for bit.
+//
+// Why the hull suffices. Let [A, B] be the occupied bins (every bin outside is
+// exactly 0) and y*(j) = sum_m b[m] g(|j - m|) the exact density with the true
+// Gaussian g. For j < j' <= A every term has |j' - m| < |j - m|, so y* is
+// non-decreasing on cells [0, A]; likewise non-increasing on [B, n - 1]. The
+// output point at position p interpolates cells floor(p) and floor(p) + 1, so
+// its exact density is non-decreasing in p on [0, A] and non-increasing on
+// [B, n - 1]. We scan exactly the output points whose left cell lies in
+// [A - 1, B] (positions [A - 1, B + 1)), which read cells [A - 1, B + 1] only.
+// The first scanned point (position < A) bounds every earlier point and the
+// last (position >= B) every later one. If the best scanned point is strictly
+// inside the scanned range, both boundary points are counted in `second`, so
+// the guard below also separates best from every unscanned point. The FFT and
+// this path use the floating-point kernel K_f, not g; for distances within
+// 11 bandwidths |log(K_f / g)| <= 309 u (see the recurrence bound below) and
+// beyond 10 bandwidths K_f <= 2 tail with tail = g(0) exp(-50). Hence for an
+// unscanned point o and its boundary point q,
+//   y_K(o) <= (1 + 310 u) / (1 - 310 u) y_K(q) + 4 W tail,
+// so the guard adds hull_term = 1024 u max(y) + 4 W tail (generous; it also
+// absorbs the FFT's 8 u interpolation rounding at o) to D before doubling.
+//
+// The FFT kernel-vector norms the guard needs are replaced by upper bounds
+// (g is unimodal, so sum_d g(d delta) <= 1/delta + g(0) and
+// sum_d g(d delta)^2 <= 1/(2 h sqrt(pi) delta) + g(0)^2), inflated by 1e-12
+// relative for K_f vs g and by 2n entries of 2 tail for the far tail.
+//
+// The recurrence kernel. With a = delta / h, g(d + 1) = g(d) q(d) where
+// q(d) = exp(-a^2 (2d + 1) / 2) and q(d + 1) = q(d) r, r = exp(-a^2). In each
+// block of 16 distances d0..d0+15, K_rec(d0) = K_f(d0) exactly (mode_kernel())
+// and K_rec(d0 + t) = fl(K_rec(d0 + t - 1) q^(t - 1)), with q^0 = fl(exp(-aa
+// (2 d0 + 1) / 2)), q^j = fl(q^(j - 1) r^), aa = fl(a^ a^), a^ = fl(delta / h),
+// r^ = fl(exp(-aa)). It is used only when a <= 1 and 1e-250 <= g(0) <= 1e300,
+// so every distance used has z = d a <= 10 + a <= 11 and every intermediate
+// is a normal double (no underflow, so fl(x op y) = (x op y)(1 + e), |e| <= u,
+// u = 2^-53). Assume exp() is within 2 ulps (relative error <= 4 u; glibc,
+// Apple libm and the UCRT are all within 1 ulp). Then, to first order (the
+// constants below already include a 1% margin for higher-order terms):
+//  * K_f(d) = fl(fl(exp(-0.5 fl(z^ z^))) / c), z^ = fl(fl(d delta) / h): the
+//    exponent has relative error <= 5 u, i.e. absolute <= 5 u z^2 / 2 <= 303 u
+//    at z <= 11, plus 4 u (exp) and u (division): |log(K_f / g)| <= 309 u.
+//  * |log(q^0 / q(d0))| <= 4 u * 11.5 + 4 u = 50.3 u (exponent a^2 (2 d0 + 1)/2
+//    <= a z + a^2 / 2 <= 11.5, four roundings), |log(r^ / r)| <= 3 u a^2 + 4 u
+//    <= 7.1 u, so |log(q^j / q(d0 + j))| <= 50.3 u + j (7.1 u + 1.01 u).
+//  * Summing j = 0..t-1 for t <= 15 gives <= 754.5 u + 851.6 u = 1606.1 u;
+//    the t products add <= 15.2 u and K_f(d0) itself 309 u, so
+//    |log(K_rec / g)| <= 1930.3 u and |log(K_rec / K_f)| <= 2239.3 u.
+// So |K_rec(d) - K_f(d)| <= 2240 u K_f(d) for every distance, and the direct
+// sums over the hull differ from the same sums with K_f by at most
+// 2240 u y_K <= 2240 u max(y) (+ second order). The guard uses
+// kernel_rel = 4096 u (about 9.1e-13), added to the direct-path error term.
+// Every quantity in D remains a proven upper bound, as before, and the 1e-9
+// relative floor stays on top.
+
+// Ratios up to which the hull path is tried first (finding: it wins at small
+// k, where the 512-cell grid dominates; above this the direct path's
+// per-bin work dominates and the hull saves little). 0 disables it.
+constexpr double kModeHullMaxRatios = 64.0;
+// Kernel blocks: one exact exp() per this many distances.
+constexpr int kModeRecurrenceBlock = 16;
+std::atomic<double> mode_hull_max(kModeHullMaxRatios);
+std::atomic<bool> mode_hull_recurrence(true);
+
+bool mode_index_hull(const double* values, const double* const* weights, int vectors,
+                     std::size_t count, const ModeGrid& grid, int* index) {
+  const int n = MODE_GRID_SIZE;
+  const double delta = grid.delta;
+  const double bandwidth = grid.bandwidth;
+  const double radius_cells = kModeKernelCutoff * bandwidth / delta;
+  if (!std::isfinite(radius_cells) || !(delta > 0.0) || !(bandwidth > 0.0)) return false;
+  ModeDensityWorkspace& workspace = mode_workspace();
+  int touched_lo = n, touched_hi = -1;
+  for (int v = 0; v < vectors; ++v) {
+    std::vector<double>& bins = workspace.hull_bins[v];
+    if (bins.size() != static_cast<std::size_t>(n)) bins.assign(n, 0.0);
+    double* const b = bins.data();
+    mode_bin(values, weights[v], count, grid, [&](int cell, double amount) {
+      b[cell] += amount;
+      touched_lo = std::min(touched_lo, cell);
+      touched_hi = std::max(touched_hi, cell);
+    });
+  }
+  // Restore the all-zero invariant on every exit.
+  struct ClearBins {
+    ModeDensityWorkspace& ws; int vectors; const int& lo; const int& hi;
+    ~ClearBins() {
+      for (int v = 0; v < vectors; ++v) {
+        double* const b = ws.hull_bins[v].data();
+        for (int m = lo; m <= hi; ++m) b[m] = 0.0;
+      }
+    }
+  } clear_bins{workspace, vectors, touched_lo, touched_hi};
+  if (touched_hi < 0) return false;
+  const int A = touched_lo, B = touched_hi;
+  const int lo = A - 1, hi = B + 1;
+  // Cells the full output grid reads; the hull must sit strictly inside, so
+  // every scanned point interpolates two in-range cells and has unscanned
+  // neighbours handled by the monotonicity argument.
+  const double first_position = grid.position_start;
+  const double last_position = grid.position_start + grid.position_step * static_cast<double>(n - 1);
+  const int cell_lo = static_cast<int>(std::max(0.0, std::min(static_cast<double>(n - 1), std::floor(first_position))));
+  const int cell_hi = static_cast<int>(std::max(0.0, std::min(static_cast<double>(n - 1), std::floor(last_position) + 1.0)));
+  if (lo < cell_lo + 1 || hi > cell_hi - 1) return false;
+  const int span = hi - lo;  // >= every |j - m| needed (j in [lo, hi], m in [A, B])
+  const int full_radius = radius_cells < static_cast<double>(n - 2)
+    ? static_cast<int>(radius_cells) + 1 : n - 1;
+  const int radius = std::min(span, full_radius);
+  const bool truncated = radius < span;
+  const double k0 = mode_kernel(0, delta, bandwidth);
+  if (!std::isfinite(k0) || !(k0 > 0.0)) return false;
+  const double tail_value = k0 * std::exp(-0.5 * kModeKernelCutoff * kModeKernelCutoff);
+  std::vector<double>& kernel = workspace.hull_kernel;
+  kernel.resize(2 * static_cast<std::size_t>(radius) + 1);
+  double* const kc = kernel.data() + radius;  // kc[d] = kc[-d] = K(d)
+  double kernel_rel = 0.0;
+  const double a = delta / bandwidth;
+  const bool recurrence = mode_hull_recurrence.load(std::memory_order_relaxed) &&
+    a <= 1.0 && k0 >= 1e-250 && k0 <= 1e300 && radius >= kModeRecurrenceBlock;
+  if (recurrence) {
+    const double aa = a * a;
+    const double r = std::exp(-aa);
+    for (int d0 = 0; d0 <= radius; d0 += kModeRecurrenceBlock) {
+      double value = mode_kernel(d0, delta, bandwidth);
+      double q = std::exp(-0.5 * aa * (2.0 * static_cast<double>(d0) + 1.0));
+      const int end = std::min(radius, d0 + kModeRecurrenceBlock - 1);
+      for (int d = d0; d <= end; ++d) {
+        kc[d] = value;
+        kc[-d] = value;
+        value *= q;
+        q *= r;
+      }
+    }
+    kernel_rel = 4096.0 * (DBL_EPSILON / 2.0);
+  } else {
+    for (int d = 0; d <= radius; ++d) {
+      const double value = mode_kernel(d, delta, bandwidth);
+      kc[d] = value;
+      kc[-d] = value;
+    }
+  }
+  // Upper bounds of the FFT path's length-2n kernel-vector norms (see above).
+  const double far = 4.0 * static_cast<double>(n) * tail_value;
+  const double kernel_l1 = (1.0 / delta + k0) * (1.0 + 1e-12) + far;
+  const double kernel_l2 = std::sqrt(
+    (1.0 / (2.0 * bandwidth * std::sqrt(3.14159265358979323846) * delta) + k0 * k0) * (1.0 + 1e-12) +
+    2.0 * far * tail_value);
+  double weight_sum[2] = {0.0, 0.0}, weight_ss[2] = {0.0, 0.0};
+  int nonzero = 0;
+  for (int v = 0; v < vectors; ++v) {
+    std::vector<double>& density = workspace.hull_density[v];
+    if (density.size() != static_cast<std::size_t>(n)) density.assign(n, 0.0);
+    std::fill(density.begin() + lo, density.begin() + hi + 1, 0.0);
+  }
+  double* const y0 = workspace.hull_density[0].data();
+  double* const y1 = workspace.hull_density[vectors > 1 ? 1 : 0].data();
+  const double* const b0 = workspace.hull_bins[0].data();
+  const double* const b1 = workspace.hull_bins[vectors > 1 ? 1 : 0].data();
+  for (int m = A; m <= B; ++m) {
+    const double c0 = b0[m];
+    const double c1 = vectors > 1 ? b1[m] : 0.0;
+    if (c0 == 0.0 && c1 == 0.0) continue;
+    ++nonzero;
+    weight_sum[0] += c0;
+    weight_ss[0] += c0 * c0;
+    weight_sum[1] += c1;
+    weight_ss[1] += c1 * c1;
+    const int first = std::max(lo, m - radius);
+    const int last = std::min(hi, m + radius);
+    const double* const k = kc + (first - m);
+    const int width = last - first + 1;
+    double* const t0 = y0 + first;
+    if (vectors == 1) {
+      FASTMR_SIMD
+      for (int t = 0; t < width; ++t) t0[t] += c0 * k[t];
+    } else {
+      double* const t1 = y1 + first;
+      FASTMR_SIMD
+      for (int t = 0; t < width; ++t) {
+        t0[t] += c0 * k[t];
+        t1[t] += c1 * k[t];
+      }
+    }
+  }
+  // Output points with left cell in [lo, B], computed exactly as mode_argmax().
+  const double ps = grid.position_start, step = grid.position_step;
+  auto left_of = [&](int i) {
+    return static_cast<int>(std::floor(ps + step * static_cast<double>(i)));
+  };
+  int i_first = static_cast<int>(std::max(0.0, std::min(static_cast<double>(n - 1),
+    std::ceil((static_cast<double>(lo) - ps) / step) - 2.0)));
+  while (i_first > 0 && left_of(i_first) >= lo) --i_first;
+  while (i_first < n && left_of(i_first) < lo) ++i_first;
+  if (i_first >= n || left_of(i_first) > B) return false;
+  int i_last = i_first;
+  while (i_last + 1 < n && left_of(i_last + 1) <= B) ++i_last;
+  if (i_last - i_first < 2) return false;
+  static const double tau = fft_relative_error_bound(fft_plan(2 * static_cast<std::size_t>(n)));
+  const double u = DBL_EPSILON / 2.0;
+  for (int v = 0; v < vectors; ++v) {
+    const double* const y = workspace.hull_density[v].data();
+    int best_index = i_first;
+    double best = -std::numeric_limits<double>::infinity();
+    double second = best;
+    for (int i = i_first; i <= i_last; ++i) {
+      const double position = ps + step * static_cast<double>(i);
+      const int left = static_cast<int>(std::floor(position));
+      const double fraction = position - static_cast<double>(left);
+      double density = (1.0 - fraction) * y[left] + fraction * y[left + 1];
+      density = std::max(0.0, density);
+      if (density > best) {
+        second = best;
+        best = density;
+        best_index = i;
+      } else if (density > second) {
+        second = density;
+      }
+    }
+    if (best_index == i_first || best_index == i_last) return false;
+    double max_y = 0.0;
+    for (int j = lo; j <= hi; ++j) max_y = std::max(max_y, y[j]);
+    const double s1 = std::sqrt(weight_ss[v]) * kernel_l1;
+    const double s2 = weight_sum[v] * kernel_l2;
+    const double fft_error = tau * (2.0 * s1 + s2) + 3.0 * u * s1;
+    const double truncation = truncated ? 2.0 * weight_sum[v] * tail_value : 0.0;
+    const double direct_error = static_cast<double>(nonzero + 2) * u * max_y + truncation +
+                                kernel_rel * max_y;
+    const double hull_term = 1024.0 * u * max_y + 4.0 * weight_sum[v] * tail_value;
+    const double discrepancy = 2.0 * fft_error + direct_error + 8.0 * u * max_y + hull_term;
+    const double tolerance = std::max(2.0 * discrepancy, kModeGuardRelative * best);
+    if (!(best - second > tolerance)) return false;
+    index[v] = best_index;
+  }
+  return true;
+}
+
 bool mode_try_direct(std::size_t count) {
   return static_cast<double>(count) <= mode_direct_max.load(std::memory_order_relaxed);
+}
+
+bool mode_try_hull(std::size_t count) {
+  return static_cast<double>(count) <= mode_hull_max.load(std::memory_order_relaxed);
 }
 
 double mode_point_r_density(const double* values, const double* weights,
@@ -629,7 +898,12 @@ double mode_point_r_density(const double* values, const double* weights,
   bool done = false;
   if (mode_try_direct(count)) {
     ++mode_direct_draws;
-    done = mode_index_direct(values, &weights, 1, count, grid, &index);
+    if (mode_try_hull(count)) {
+      ++mode_hull_draws;
+      done = mode_index_hull(values, &weights, 1, count, grid, &index);
+      if (!done) ++mode_hull_fallback_draws;
+    }
+    if (!done) done = mode_index_direct(values, &weights, 1, count, grid, &index);
     if (!done) ++mode_guard_draws;
   }
   if (!done) index = mode_index_fft(values, weights, count, grid);
@@ -653,7 +927,12 @@ std::pair<double, double> mode_point_r_density_pair(const double* values,
   if (mode_try_direct(count)) {
     const double* const weights[2] = {simple_weights, weighted_weights};
     ++mode_direct_draws;
-    done = mode_index_direct(values, weights, 2, count, grid, index);
+    if (mode_try_hull(count)) {
+      ++mode_hull_draws;
+      done = mode_index_hull(values, weights, 2, count, grid, index);
+      if (!done) ++mode_hull_fallback_draws;
+    }
+    if (!done) done = mode_index_direct(values, weights, 2, count, grid, index);
     if (!done) ++mode_guard_draws;
   }
   if (!done) {
@@ -895,7 +1174,7 @@ Result compute_sign(const Prepared& p) {
   if (n < 6) return empty_result("sign", n);
   const double beta = (2.0 * static_cast<double>(concordant) / static_cast<double>(n)) - 1.0;
   const int lower = std::min(concordant, n - concordant);
-  double pval = defer_r_math.load(std::memory_order_relaxed)
+  double pval = r_math_deferred()
     ? NA_VALUE
     : 2.0 * R::pbinom(static_cast<double>(lower), static_cast<double>(n), 0.5, true, false);
   if (std::isfinite(pval)) pval = std::min(1.0, pval);
@@ -2643,12 +2922,28 @@ double fastmr_set_mode_direct_max_native(double ratios) {
 Rcpp::NumericVector fastmr_mode_path_counts_native(bool reset = false) {
   Rcpp::NumericVector out = Rcpp::NumericVector::create(
     Rcpp::_["direct"] = static_cast<double>(mode_direct_total.load()),
-    Rcpp::_["guard"] = static_cast<double>(mode_guard_total.load()));
+    Rcpp::_["guard"] = static_cast<double>(mode_guard_total.load()),
+    Rcpp::_["hull"] = static_cast<double>(mode_hull_total.load()),
+    Rcpp::_["hull_fallback"] = static_cast<double>(mode_hull_fallback_total.load()));
   if (reset) {
     mode_direct_total.store(0);
     mode_guard_total.store(0);
+    mode_hull_total.store(0);
+    mode_hull_fallback_total.store(0);
   }
   return out;
+}
+
+// Internal test hook for the hull path: set the largest ratio count that
+// tries it first (0 disables it) and whether its kernel uses the recurrence;
+// returns the previous settings. Results are identical for every setting.
+// [[Rcpp::export]]
+Rcpp::NumericVector fastmr_set_mode_hull_native(double ratios, bool recurrence = true) {
+  if (std::isnan(ratios) || ratios < 0.0) Rcpp::stop("ratios must be non-negative");
+  const double previous_max = mode_hull_max.exchange(ratios);
+  const bool previous_recurrence = mode_hull_recurrence.exchange(recurrence);
+  return Rcpp::NumericVector::create(Rcpp::_["ratios"] = previous_max,
+                                     Rcpp::_["recurrence"] = previous_recurrence ? 1.0 : 0.0);
 }
 
 // [[Rcpp::export]]
@@ -3241,11 +3536,12 @@ void inversion_normals_finish(double* data, std::size_t count, int workers) {
 //    e.g. one group larger than the budget) streams R::rnorm() straight into
 //    the bootstrap layouts with inline p-values, exactly as the per-group
 //    calls did, so it needs no draw buffer at all;
-//  * otherwise the batch's normals are drawn into one reused native buffer,
-//    workers rebuild the identical layouts from it (PredrawnNormals) with
-//    R-backed p-values deferred, and those p-values are filled serially.
-// The buffer therefore never exceeds `batch_draws` doubles. Batching never
-// changes any result. Returns flat group-major, method-minor vectors.
+//  * otherwise the batch's normals are drawn into one of two reused native
+//    buffers, workers rebuild the identical layouts from it (PredrawnNormals)
+//    with R-backed p-values deferred, and those p-values are filled serially.
+//    Drawing batch b + 1 (main thread) overlaps computing batch b (workers).
+// Each buffer never exceeds `batch_draws` doubles. Batching never changes any
+// result. Returns flat group-major, method-minor vectors.
 // [[Rcpp::export]]
 Rcpp::List fastmr_run_groups_boot_native(Rcpp::IntegerVector offsets,
                                          Rcpp::NumericVector exposure_beta,
@@ -3295,18 +3591,64 @@ Rcpp::List fastmr_run_groups_boot_native(Rcpp::IntegerVector offsets,
     std::move(results.begin(), results.end(),
               all.begin() + static_cast<std::ptrdiff_t>(g * method_count));
   };
-  std::vector<double> buffer;
-  std::vector<std::size_t> draw_start;
   // Under normal.kind = "Inversion" (R's default) a normal is qnorm() of two
   // uniforms, and only the uniforms touch the RNG state; see
   // inversion_normals_rng_part().
   int inversion = -1;  // unknown until the first multi-worker batch
+  // Multi-worker batches are double-buffered: while workers compute batch b
+  // (on a coordinator thread, from buffer b % 2), the main thread draws batch
+  // b + 1's normals into the other buffer, then fills batch b - 1's p-values.
+  // R's RNG is still consumed only on the main thread, in group order, so the
+  // draws, every result and the final RNG state are exactly the serial ones.
+  // Workers never touch R: they read pre-drawn normals, run R::qnorm() (pure
+  // nmath, see inversion_normals_finish()) and defer R-backed p-values through
+  // the thread-local flag, which leaves the main thread free to compute p-values
+  // for the previous batch meanwhile.
+  struct DrawBuffer {
+    std::vector<double> draws;
+    std::vector<std::size_t> start;
+  };
+  DrawBuffer buffers[2];
+  struct InFlight {
+    std::thread thread;
+    std::exception_ptr error;
+    std::size_t first = 0, last = 0;
+    ~InFlight() { if (thread.joinable()) thread.join(); }  // on unwind only
+  } in_flight;
+  bool has_in_flight = false;
+  // Groups [pending_first, pending_last) are computed but still need their
+  // R-backed p-values, which only the main thread fills.
+  std::size_t pending_first = 0, pending_last = 0;
+  auto join_in_flight = [&]() {
+    if (!has_in_flight) return;
+    in_flight.thread.join();
+    has_in_flight = false;
+    if (in_flight.error) std::rethrow_exception(in_flight.error);
+    pending_first = in_flight.first;
+    pending_last = in_flight.last;
+  };
+  auto fill_pending = [&]() {
+    for (std::size_t k = pending_first * method_count; k < pending_last * method_count; ++k) {
+      populate_result_pvalues(all[k]);
+    }
+    pending_first = pending_last = 0;
+  };
+  // Batch budget: never above batch_draws, and small enough that a large run
+  // has several batches to overlap (batching never changes any result).
+  double total_draws = 0.0;
+  for (std::size_t g = 0; g < groups; ++g) total_draws += counts[g];
+  const double mean_draws = groups > 0 ? total_draws / static_cast<double>(groups) : 0.0;
+  const double budget = threads > 1
+    ? std::min(batch_draws, std::max({total_draws / 8.0, 1048576.0,
+                                      32.0 * static_cast<double>(threads) * mean_draws}))
+    : batch_draws;
+  std::size_t parity = 0;
   std::size_t first = 0;
   while (first < groups) {
     // Greedy batch: at least one group, then add groups while within budget.
     double batch_total = counts[first], batch_work = work[first];
     std::size_t last = first + 1;
-    while (last < groups && batch_total + counts[last] <= batch_draws) {
+    while (last < groups && batch_total + counts[last] <= budget) {
       batch_total += counts[last];
       batch_work += work[last];
       ++last;
@@ -3317,6 +3659,8 @@ Rcpp::List fastmr_run_groups_boot_native(Rcpp::IntegerVector offsets,
       ? worthwhile_threads(threads, batch_groups, batch_work + batch_rows, kMinDrawsPerWorker)
       : worthwhile_threads(threads, batch_groups, batch_rows, min_rows_per_worker(needs));
     if (workers == 1) {
+      join_in_flight();
+      fill_pending();
       for (std::size_t g = first; g < last; ++g) {
         start_stream(g);
         std::vector<Result> results = compute_pair(
@@ -3325,14 +3669,16 @@ Rcpp::List fastmr_run_groups_boot_native(Rcpp::IntegerVector offsets,
         store(g, results);
       }
     } else {
-      buffer.resize(static_cast<std::size_t>(batch_total));
-      draw_start.resize(batch_groups);
+      DrawBuffer& buffer = buffers[parity];
+      parity ^= 1;
+      buffer.draws.resize(static_cast<std::size_t>(batch_total));
+      buffer.start.resize(batch_groups);
       std::size_t pos = 0;
       for (std::size_t g = first; g < last; ++g) {
-        draw_start[g - first] = pos;
+        buffer.start[g - first] = pos;
         start_stream(g);
         const std::size_t k = static_cast<std::size_t>(counts[g]);
-        double* out = buffer.data() + pos;
+        double* out = buffer.draws.data() + pos;
         if (inversion < 0) inversion = normal_kind_is_inversion() ? 1 : 0;
         if (inversion) {
           inversion_normals_rng_part(out, k);
@@ -3341,23 +3687,40 @@ Rcpp::List fastmr_run_groups_boot_native(Rcpp::IntegerVector offsets,
         }
         pos += k;
       }
-      if (inversion) inversion_normals_finish(buffer.data(), pos, workers);
-      const double* draw_data = buffer.data();
-      {
-        DeferRMath deferred;
-        run_parallel(batch_groups, workers, [&](std::size_t index) {
-          const std::size_t g = first + index;
-          std::vector<Result> results = compute_pair(
-            group_prepared(in, static_cast<R_xlen_t>(g)), parsed_methods, nboot,
-            R_NilValue, true, phi, penk, draw_data + draw_start[index]);
-          store(g, results);
-        });
-      }
-      for (std::size_t k = first * method_count; k < last * method_count; ++k) {
-        populate_result_pvalues(all[k]);
-      }
+      // At most one batch computes at a time: the previous one must finish
+      // before this one starts (its buffer is reused by the next batch).
+      join_in_flight();
+      in_flight.first = first;
+      in_flight.last = last;
+      in_flight.error = nullptr;
+      const bool finish_normals = inversion == 1;
+      DrawBuffer* const data = &buffer;
+      in_flight.thread = std::thread([&, data, first, pos, workers, batch_groups, finish_normals]() {
+        try {
+          if (finish_normals) inversion_normals_finish(data->draws.data(), pos, workers);
+          const double* draw_data = data->draws.data();
+          run_parallel(batch_groups, workers, [&](std::size_t index) {
+            struct DeferHere {
+              bool previous = defer_r_math_here;
+              DeferHere() { defer_r_math_here = true; }
+              ~DeferHere() { defer_r_math_here = previous; }
+            } deferred;
+            const std::size_t g = first + index;
+            std::vector<Result> results = compute_pair(
+              group_prepared(in, static_cast<R_xlen_t>(g)), parsed_methods, nboot,
+              R_NilValue, true, phi, penk, draw_data + data->start[index]);
+            store(g, results);
+          });
+        } catch (...) {
+          in_flight.error = std::current_exception();
+        }
+      });
+      has_in_flight = true;
+      fill_pending();  // the previous batch's p-values, while this one runs
     }
     first = last;
   }
+  join_in_flight();
+  fill_pending();
   return group_results_to_flat(all);
 }

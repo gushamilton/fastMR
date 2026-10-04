@@ -21,6 +21,10 @@ fastmr_mode_path_counts_native <- function(reset = FALSE) {
     .Call(`_fastMR_fastmr_mode_path_counts_native`, reset)
 }
 
+fastmr_set_mode_hull_native <- function(ratios, recurrence = TRUE) {
+    .Call(`_fastMR_fastmr_set_mode_hull_native`, ratios, recurrence)
+}
+
 fastmr_run_native <- function(exposure_beta, outcome_beta, exposure_se, outcome_se, methods, nboot = 1000L, seed = NULL, threads = 1L, phi = 1.0, penk = 20.0) {
     .Call(`_fastMR_fastmr_run_native`, exposure_beta, outcome_beta, exposure_se, outcome_se, methods, nboot, seed, threads, phi, penk)
 }

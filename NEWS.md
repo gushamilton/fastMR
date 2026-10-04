@@ -1,5 +1,17 @@
 # fastMR (development)
 
+- Faster mode bootstraps and threaded bootstrap batches, with every result
+  (and the final `.Random.seed`) identical to before:
+  - Mode densities for pairs with up to 64 ratios first try a "hull" path that
+    convolves and scans only the grid cells spanning the occupied bins, with a
+    Gaussian-recurrence kernel (one exact `exp()` per 16 distances). Its guard
+    carries a written error bound (see `src/fastmr.cpp`); any draw it cannot
+    certify falls back to the existing direct/FFT paths.
+  - Threaded bootstrap batches are double-buffered: the main thread draws the
+    next batch's normals while the workers compute the current batch, and
+    fills the previous batch's p-values meanwhile. R's RNG is still consumed
+    only on the main thread, in the serial order.
+
 - Single-instrument pairs (`nsnp = 1`): the IVW estimators (`"ivw"`,
   `"ivw_fe"`, `"ivw_mre"`) return the Wald ratio, `b = by / bx` and
   `se = se_y / |bx|`, exactly as TwoSampleMR's `mr()` reports it through

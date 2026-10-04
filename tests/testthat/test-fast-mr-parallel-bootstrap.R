@@ -124,3 +124,20 @@ test_that("streamed and buffered batches mix without changing results or RNG sta
     options(old)
   }
 })
+
+test_that("double-buffered batches keep the serial draws, results and RNG state", {
+  # Tiny budgets give many buffered batches, so drawing batch b + 1 overlaps
+  # computing batch b throughout; every RNG kind takes the same pipeline.
+  d <- boot_fixture()
+  d <- rbind(d, transform(d, id.outcome = paste0(id.outcome, "b")))
+  old_kind <- RNGkind()
+  on.exit(RNGkind(old_kind[1], old_kind[2], old_kind[3]), add = TRUE)
+  for (kind in c("Inversion", "Box-Muller")) {
+    RNGkind(normal.kind = kind)
+    for (budget in c(150, 2000)) {
+      old <- options(fastMR.bootstrap_batch_draws = budget)
+      expect_boot_identical(d, threads = c(1L, 2L, 4L, 8L), methods = boot_method_sets[[1]], nboot = 12)
+      options(old)
+    }
+  }
+})
