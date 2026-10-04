@@ -16,6 +16,7 @@ fast_clump_data_per_exposure(
   subset = c("auto", "always", "never"),
   workdir = NULL,
   reference_manifest = NULL,
+  absent = c("keep", "drop"),
   ...
 )
 }
@@ -45,6 +46,11 @@ with \code{--extract}; slower, since the reference is parsed twice).}
 \item{reference_manifest}{Optional reference-panel manifest whose MD5 is
 recorded in diagnostics.}
 
+\item{absent}{What to do with eligible candidates absent from the LD
+reference: \code{"keep"} (default; retained unclumped, the historical
+behaviour) or \code{"drop"} (removed, as TwoSampleMR local clumping does).
+Either way a warning reports how many there are.}
+
 \item{...}{Forwarded to \code{\link[=fast_clump_data_graph]{fast_clump_data_graph()}} when the call is
 delegated (for example \code{max_graph_pairs}).}
 }
@@ -60,7 +66,7 @@ given to PLINK2 is each candidate's exact rank in the greedy order used by
 present, then p, then SNP ID), and the \code{--clump-kb}/\code{--clump-r2} arguments
 are translated so that PLINK2's window and r2 comparisons match the graph
 partition's inclusive ones.  Candidates absent from the reference are
-retained.  The leads are then certified with one \code{--r2-phased --ld-snp-list} query (the graph partition's own LD statistic and flags,
+handled as \code{absent} says (retained by default, with a warning).  The leads are then certified with one \code{--r2-phased --ld-snp-list} query (the graph partition's own LD statistic and flags,
 restricted to pairs involving a lead): the greedy pass over that
 lead-incident graph must keep exactly the \code{--clump} leads, which proves the
 result equals \code{\link[=fast_clump_data_graph]{fast_clump_data_graph()}} (and \code{\link[=fast_clump_data_lead_rows]{fast_clump_data_lead_rows()}}).
@@ -72,5 +78,8 @@ Pairs reported with r2 > 1 are warned about as in the graph partition.
 The call is delegated to \code{\link[=fast_clump_data_graph]{fast_clump_data_graph()}} (reason in
 \code{diagnostics$delegated}) when the certificate fails, when candidate
 positions are incomplete or differ from the reference, when the reference
-has duplicate candidate IDs, or when \code{clump_r2 <= 0}.
+has duplicate candidate IDs, or when \code{clump_r2 <= 0}.  A position or
+chromosome-label mismatch with the reference (for example a different
+genome build) is also reported with a warning, since the graph partition
+then windows on the data positions.
 }

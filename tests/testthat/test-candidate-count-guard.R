@@ -90,3 +90,62 @@ test_that("a batched flag read that errors or loses a store also falls back", {
     expect_identical(x$data, reference$data)
   })
 })
+
+# Review finding 6: the count-only guard accepted a batch with the right number
+# of rows but the wrong rows or keys, and the per-store fallback reader did not
+# check its own row count.
+
+test_that("a batched flag read with the right count but wrong rows or keys is rejected", {
+  skip_if_compressor_unavailable()
+  skip_on_os("windows")
+  skip_if_not(fastMR:::fastmr_have_flag_candidates_batch(), "batched pvalue_flag reader unavailable")
+  paths <- guard_stores()
+  labels <- names(paths)
+  cand <- function() fastMR:::fastmr_compressed_candidate_data(paths, labels, 5e-8, "pvalue_flag",
+                                                              "reconstructed", 1L)
+  reference <- local({
+    testthat::local_mocked_bindings(fastmr_have_flag_candidates_batch = function() FALSE,
+                                    .package = "fastMR")
+    cand()
+  })
+  expect_true(".fastmr_abs_z" %in% names(reference$data))
+  expect_true(all(is.finite(reference$data$.fastmr_abs_z) & reference$data$.fastmr_abs_z > 5))
+  real <- CompreSSoR::read_candidates_batch
+  flagged_b <- fastMR:::fastmr_store_flag_rows(CompreSSoR::open_compressor(paths[["b"]]))
+  local({
+    # same count, but one row id is not a flagged row of store b
+    testthat::local_mocked_bindings(fastmr_read_candidates_batch = function(...) {
+      got <- real(...)
+      got[[2L]]$row[1L] <- setdiff(0:799, flagged_b)[1L]
+      got
+    }, .package = "fastMR")
+    expect_warning(x <- cand(), "store 'b' returned row ids that are not its flagged rows")
+    expect_identical(x$data, reference$data)
+  })
+  local({
+    # right rows, but a key decoded against another panel (position disagrees)
+    testthat::local_mocked_bindings(fastmr_read_candidates_batch = function(...) {
+      got <- real(...)
+      got[[2L]]$key[1L] <- got[[1L]]$key[1L]
+      got
+    }, .package = "fastMR")
+    expect_warning(x <- cand(), "store 'b' returned 1 key\\(s\\) whose position does not match")
+    expect_identical(x$data, reference$data)
+  })
+})
+
+test_that("the per-store flagged-row reader stops on a short read", {
+  skip_if_compressor_unavailable()
+  skip_on_os("windows")
+  paths <- guard_stores()
+  real <- CompreSSoR::read_sumstats
+  testthat::local_mocked_bindings(fastmr_have_flag_candidates_batch = function() FALSE, .package = "fastMR")
+  testthat::local_mocked_bindings(
+    read_sumstats = function(path, variants = NULL, ...) {
+      x <- real(path, variants = variants, ...)
+      if (!is.null(variants) && nrow(x) > 1L) x[-1L, , drop = FALSE] else x
+    }, .package = "CompreSSoR")
+  expect_error(fastMR:::fastmr_compressed_candidate_data(paths, names(paths), 5e-8, "pvalue_flag",
+                                                        "reconstructed", 1L),
+               "flagged-row read returned 14 of 15 rows")
+})

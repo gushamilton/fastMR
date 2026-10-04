@@ -66,6 +66,7 @@ with_pe_oracle <- function(ref, code) {
   calls$graph <- 0L; calls$frontier <- 0L; calls$subset <- 0L; calls$clump <- 0L; calls$cert <- 0L
   calls$extract <- logical()
   testthat::local_mocked_bindings(
+    fastmr_clump_reference_ids = function(snps, ...) intersect(snps, ref$SNP),
     fastmr_clump_run_graph = function(snps, reference_args, plink2_bin, clump_kb,
                                       clump_r2, threads, workdir, tag, ...) {
       calls$graph <- calls$graph + 1L
@@ -198,21 +199,28 @@ test_that("candidates absent from the reference are retained, duplicates and ine
   dat <- rbind(dat, dat[4:8, ])
   calls <- with_pe_oracle(ref)
   common <- pe_common(6, 0.3, p1 = 1e-6)
-  g <- do.call(fast_clump_data_graph, c(list(dat), common))
+  expect_warning(g <- do.call(fast_clump_data_graph, c(list(dat), common)),
+                 "absent from the LD reference and were kept unclumped")
   lr <- do.call(fast_clump_data_lead_rows, c(list(dat), common))
   for (sub in c("always", "never")) {
-    pe <- do.call(fast_clump_data_per_exposure, c(list(dat), common, list(subset = sub)))
+    expect_warning(pe <- do.call(fast_clump_data_per_exposure, c(list(dat), common, list(subset = sub))),
+                   "absent from the LD reference and were kept unclumped")
     expect_identical(pe$data, g$data)
     expect_identical(pe$data, lr$data)
     expect_gt(pe$diagnostics$absent_from_reference, 0L)
   }
-  # nothing in the reference: every eligible candidate is retained, no --clump runs
+  # nothing in the reference (usually a SNP-ID scheme mismatch): an error, and
+  # no --clump runs.  Earlier versions retained every candidate silently.
   none <- data.frame(SNP = c("9:1:A:C", "9:2:A:C"), id.exposure = c("a", "b"), pval.exposure = 1e-9,
                      chr_name = "9", chrom_start = c(1, 2))
   calls$clump <- 0L
-  pe <- fast_clump_data_per_exposure(none, clump_kb = 5, clump_r2 = 0.5, bfile = "mock", plink2_bin = "/bin/true")
-  expect_identical(pe$data, none)
+  expect_error(fast_clump_data_per_exposure(none, clump_kb = 5, clump_r2 = 0.5, bfile = "mock",
+                                            plink2_bin = "/bin/true"),
+               "none of the 2 eligible candidate rows")
   expect_identical(calls$clump, 0L)
+  expect_error(fast_clump_data_graph(none, clump_kb = 5, clump_r2 = 0.5, bfile = "mock",
+                                     plink2_bin = "/bin/true"),
+               "none of the 2 eligible candidate rows")
   # no eligible rows
   empty <- fast_clump_data_per_exposure(transform(none, pval.exposure = 0.5), clump_kb = 5, clump_r2 = 0.5,
                                         clump_p1 = 1e-3, bfile = "mock", plink2_bin = "/bin/true")
@@ -227,14 +235,18 @@ test_that("per-exposure delegates to the graph when it cannot be exact", {
   g <- fast_clump_data_graph(dat, clump_kb = 5, clump_r2 = 0.5, bfile = "mock", plink2_bin = "/bin/true")
   moved <- dat
   moved$chrom_start[moved$SNP == moved$SNP[1]] <- moved$chrom_start[1] + 1
-  r <- fast_clump_data_per_exposure(moved, clump_kb = 5, clump_r2 = 0.5, bfile = "mock", plink2_bin = "/bin/true",
-                                    subset = "always")
+  expect_warning(
+    r <- fast_clump_data_per_exposure(moved, clump_kb = 5, clump_r2 = 0.5, bfile = "mock", plink2_bin = "/bin/true",
+                                      subset = "always"),
+    "1 of .* candidate variants found in the LD reference have a different position")
   expect_identical(r$diagnostics$delegated, "reference_position_mismatch")
   expect_identical(r$diagnostics$partition, "graph")
   relabel <- dat
   relabel$chr_name[relabel$chr_name == "2"] <- "1"
-  r <- fast_clump_data_per_exposure(relabel, clump_kb = 5, clump_r2 = 0.5, bfile = "mock", plink2_bin = "/bin/true",
-                                    subset = "always")
+  expect_warning(
+    r <- fast_clump_data_per_exposure(relabel, clump_kb = 5, clump_r2 = 0.5, bfile = "mock", plink2_bin = "/bin/true",
+                                      subset = "always"),
+    "chromosome labels do not map one-to-one")
   expect_identical(r$diagnostics$delegated, "reference_chromosome_mismatch")
   r <- fast_clump_data_per_exposure(dat, clump_kb = 5, clump_r2 = 0, bfile = "mock", plink2_bin = "/bin/true")
   expect_match(r$diagnostics$delegated, "clump_r2")
@@ -325,8 +337,9 @@ test_that("per-exposure runs through the PLINK2 argument surface", {
                     chr_name = c("1", "1", "1", "5"), chrom_start = c(1000, 2000, 90000, 5))
   for (sub in c("never", "always")) {
     unlink(log)
-    res <- fast_clump_data_per_exposure(dat, clump_kb = 500, clump_r2 = 0.01, bfile = "panel",
-                                        plink2_bin = plink2, subset = sub)
+    expect_warning(res <- fast_clump_data_per_exposure(dat, clump_kb = 500, clump_r2 = 0.01, bfile = "panel",
+                                                       plink2_bin = plink2, subset = sub),
+                   "1 of 4 eligible candidate rows \\(1 variants\\) are absent")
     expect_identical(res$instruments$E, c("A", "C", "D"))   # D is absent from the reference
     args <- readLines(log)
     expect_length(args[grepl("--ld-snp-list", args)], 1L)   # the certificate query

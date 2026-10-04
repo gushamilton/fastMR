@@ -75,9 +75,32 @@ fastmr_normalize_instruments <- function(instruments, exposure_labels) {
   } else if (!is.null(names(instruments)) && any(nzchar(names(instruments)))) {
     stop("instruments must be either fully named or completely unnamed", call. = FALSE)
   }
-  out <- lapply(instruments, fastmr_normalize_variant_keys)
+  # An exposure with no instruments is kept as character() here and handled
+  # by fastmr_compressed_nonempty_instruments() according to `strict`.
+  out <- lapply(instruments, function(keys) {
+    if (is.null(keys) || (is.character(keys) && !length(keys))) character()
+    else fastmr_normalize_variant_keys(keys)
+  })
   names(out) <- exposure_labels
   out
+}
+
+# Exposures whose instrument set is non-empty.  An empty set is an error with
+# strict = TRUE; with strict = FALSE the exposure is dropped with a warning
+# (an error only when no exposure has instruments).
+fastmr_compressed_nonempty_instruments <- function(instrument_sets, strict) {
+  empty <- lengths(instrument_sets) == 0L
+  if (!any(empty)) return(names(instrument_sets))
+  labels <- names(instrument_sets)[empty]
+  shown <- paste(utils::head(labels, 20L), collapse = ", ")
+  if (length(labels) > 20L) shown <- paste0(shown, ", ... (", length(labels), " in total)")
+  if (all(empty)) stop("no exposure has any instruments", call. = FALSE)
+  if (strict) {
+    stop("instrument set is empty for exposure(s): ", shown,
+         "; use strict = FALSE to drop them", call. = FALSE)
+  }
+  warning("dropping exposure(s) with an empty instrument set: ", shown, call. = FALSE)
+  names(instrument_sets)[!empty]
 }
 
 fastmr_validate_compressed_store <- function(store) {
@@ -272,7 +295,8 @@ fastmr_compressed_sparse_ivw <- function(
       exposure_count, outcome_count, snp_count, 1e8, 2048, sparse = TRUE
     )
     TRUE
-  }, error = function(e) FALSE)
+  }, error = function(e) FALSE) &&
+    fastmr_sparse_ivw_fits(exposure_count, outcome_count, snp_count)
   if (!bounds_ok) return(NULL)
   valid_values <- function(data) {
     is.finite(data$beta) & is.finite(data$standard_error) &
@@ -455,7 +479,8 @@ fastmr_compressed_sparse_ivw <- function(
   usable <- has_fit & is.finite(se) & se != 0
   pval <- rep(NA_real_, length(b))
   pval[usable] <- 2 * stats::pnorm(abs(b[usable] / se[usable]), lower.tail = FALSE)
-  q_df <- ifelse(has_fit, n - 1, NA_real_)
+  # One instrument: the native Wald ratio, with Q undefined (as fast_mr()).
+  q_df <- ifelse(has_fit & n >= 2, n - 1, NA_real_)
   q_pval <- rep(NA_real_, length(b))
   ok_q <- has_fit & is.finite(q)
   q_pval[ok_q] <- stats::pchisq(q[ok_q], q_df[ok_q], lower.tail = FALSE)
@@ -715,6 +740,17 @@ fast_read_compressed <- function(
 #' directly comparable without rsID lookup or another allele-harmonisation
 #' pass.
 #'
+#' When every exposure has the same instrument set, no requested method uses
+#' bootstrap draws and every pair has all instruments with valid values, the
+#' run uses the shared-grid kernel [fast_mr_grid()] whatever `estimator` says
+#' (`estimator = "pairwise"` does not disable it; `estimator_path` in the
+#' `compressed_input` attribute is then `"shared_instrument_grid"`).  The
+#' sparse IVW path is used only when its estimated memory (native results,
+#' the outcome-by-union-instrument matrices it builds and its per-pair count
+#' matrices) fits `getOption("fastMR.sparse_ivw_max_memory_mb", 8192)` MiB.
+#' An exposure with an empty instrument set is an error with `strict = TRUE`
+#' and is dropped with a warning with `strict = FALSE`.
+#'
 #' @param exposure_files Named character vector of Pcodec CompreSSoR stores.
 #' @param outcome_files Named character vector of Pcodec CompreSSoR stores.
 #' @param instruments A canonical-key character vector shared by every exposure,
@@ -805,6 +841,9 @@ fast_mr_compressed <- function(
   )
   dots <- list(...)
   instrument_sets <- fastmr_normalize_instruments(instruments, names(exposure_files))
+  with_instruments <- fastmr_compressed_nonempty_instruments(instrument_sets, strict)
+  exposure_files <- exposure_files[with_instruments]
+  instrument_sets <- instrument_sets[with_instruments]
   union_keys <- unique(unlist(instrument_sets, use.names = FALSE))
   columns <- c("chromosome", "base_pair_location", "effect_allele", "other_allele",
                "beta", "standard_error")

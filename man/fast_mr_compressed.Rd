@@ -65,5 +65,20 @@ in the \code{compressed_input} attribute. With \code{steiger = TRUE}, the
 \code{\link{fast_mr_steiger_filtering}} output (exposure-major, instruments in
 supplied order) and \code{compressed_input$timing$steiger_seconds} its compute
 time. The \code{steiger} attribute is not written to \code{output}.}
+\details{When every exposure has the same instrument set, no requested method
+uses bootstrap draws and every pair has all instruments with valid values, the
+run uses the shared-grid kernel \code{\link{fast_mr_grid}} whatever
+\code{estimator} says (\code{estimator = "pairwise"} does not disable it;
+\code{estimator_path} in the \code{compressed_input} attribute is then
+\code{"shared_instrument_grid"}). The sparse IVW path is used only when its
+estimated memory (native results, the outcome-by-union-instrument matrices it
+builds and its per-pair count matrices) fits
+\code{getOption("fastMR.sparse_ivw_max_memory_mb", 8192)} MiB; otherwise the
+pairwise path runs.
+
+An exposure with an empty instrument set is an error with \code{strict = TRUE}
+and is dropped with a warning with \code{strict = FALSE}. A pair with one
+matched instrument gets the Wald ratio from the IVW method on every path, as
+TwoSampleMR's \code{mr()} reports through \code{mr_wald_ratio()}.}
 \seealso{\code{\link{fast_mr}}, \code{\link{fast_read_compressed}},
 \code{\link{fast_mr_steiger_filtering}}}
