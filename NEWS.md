@@ -2,7 +2,7 @@
 
 - Faster mode bootstraps and threaded bootstrap batches, with every result
   (and the final `.Random.seed`) identical to before:
-  - Mode densities for pairs with up to 64 ratios first try a "hull" path that
+  - Mode densities for pairs with up to 1000 ratios first try a "hull" path that
     convolves and scans only the grid cells spanning the occupied bins, with a
     Gaussian-recurrence kernel (one exact `exp()` per 16 distances). Its guard
     carries a written error bound (see `src/fastmr.cpp`); any draw it cannot

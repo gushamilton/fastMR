@@ -698,10 +698,14 @@ bool mode_index_direct(const double* values, const double* const* weights, int v
 // Every quantity in D remains a proven upper bound, as before, and the 1e-9
 // relative floor stays on top.
 
-// Ratios up to which the hull path is tried first (finding: it wins at small
-// k, where the 512-cell grid dominates; above this the direct path's
-// per-bin work dominates and the hull saves little). 0 disables it.
-constexpr double kModeHullMaxRatios = 64.0;
+// Ratios up to which the hull path is tried first; 0 disables it. Its work is
+// a subset of the direct path's, so it gains most at small k, where the
+// 512-cell grid dominates. Measured per density draw (BluePebble, Xeon Gold
+// 6226R, one pair of weight vectors, hull with recurrence vs direct): 2.7x at
+// 3 ratios, 1.9x at 10, 1.6x at 30, 1.25x at 100, 1.1x at 300, 1.02x at 1000,
+// break-even at 2000 and 2-3% slower at 5000 (the occupied hull is then the
+// whole grid and only the bookkeeping differs).
+constexpr double kModeHullMaxRatios = 1000.0;
 // Kernel blocks: one exact exp() per this many distances.
 constexpr int kModeRecurrenceBlock = 16;
 std::atomic<double> mode_hull_max(kModeHullMaxRatios);
