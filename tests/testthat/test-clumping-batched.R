@@ -161,7 +161,9 @@ test_that("compressed candidate extraction records reconstructed p-value provena
   plink2 <- tempfile("fastMR_plink2_empty_stub-")
   writeLines(c(
     "#!/bin/sh", "out=''",
-    "while [ \"$#\" -gt 0 ]; do case \"$1\" in --out) out=\"$2\"; shift 2;; *) shift;; esac; done",
+    "ex=''",
+    "while [ \"$#\" -gt 0 ]; do case \"$1\" in --out) out=\"$2\"; shift 2;; --extract) ex=\"$2\"; shift 2;; *) shift;; esac; done",
+    "[ -n \"$ex\" ] && cp \"$ex\" \"${out}.snplist\"",
     "printf '' > \"${out}.vcor\"",
     "zstd -q -f \"${out}.vcor\" -o \"${out}.vcor.zst\""
   ), plink2)

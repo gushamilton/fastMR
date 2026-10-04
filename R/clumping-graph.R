@@ -54,6 +54,23 @@ fastmr_clump_run_graph <- function(snps, reference_args, plink2_bin, clump_kb,
   ld
 }
 
+# Internal (mockable): the subset of `snps` present in the reference, from one
+# PLINK2 --extract --write-snplist query.  character() when none is present.
+fastmr_clump_reference_ids <- function(snps, reference_args, plink2_bin, threads, stem) {
+  extract_file <- paste0(stem, ".extract.txt")
+  writeLines(unique(as.character(snps)), extract_file)
+  on.exit(unlink(c(extract_file, paste0(stem, c(".snplist", ".log")))), add = TRUE)
+  output <- fastmr_clump_system2(plink2_bin, c(
+    reference_args, "--extract", fastmr_clump_quote(extract_file), "--write-snplist", "allow-dups",
+    "--threads", as.integer(threads), "--out", fastmr_clump_quote(stem)))
+  if (fastmr_clump_no_variants(output)) return(character())
+  path <- paste0(stem, ".snplist")
+  if (attr(output, "status") != 0L || !file.exists(path)) {
+    fastmr_clump_plink_failed(output, "reference membership query (--write-snplist)")
+  }
+  unique(readLines(path))
+}
+
 # PLINK2 2.00a6.8 (Jan 2025) --r2-phased (and its --clump) reports impossible
 # values (r2 ~ 96, D' ~ -220) for some pairs whose true |D'| is 1; 2.00a6
 # (Oct 2024) and PLINK 1.9 give the correct small r2.  Such a pair passes any
@@ -98,19 +115,37 @@ fastmr_graph_pair_estimate <- function(bp, window) {
 #' [fast_clump_data_lead_rows()] instead, and the reason is recorded in
 #' `diagnostics$fallbacks`.
 #'
+#' Within an exposure, candidates are taken in order of p (exact rank first
+#' when a `pvalue_rank` column is present); equal p, including p = 0 from
+#' underflow at |z| above about 38, is broken by larger |z| (from
+#' `beta.exposure / se.exposure` when present) and then by SNP ID.  When an
+#' (exposure, SNP) pair appears in several rows, the smallest p orders it, and
+#' every row of a retained pair is returned.
+#'
+#' Candidate membership in the reference is checked with one PLINK2
+#' `--write-snplist` query.  Candidates absent from the reference have no LD
+#' edges; see `absent`.  If no eligible candidate is in the reference, the call
+#' stops (a SNP-ID scheme mismatch is the usual cause).
+#'
 #' @inheritParams fast_clump_data_lead_rows
 #' @param max_graph_pairs Cap on the estimated number of candidate pairs
 #'   within the window per PLINK2 call; a chromosome above it falls back to
 #'   lead-row mode.
+#' @param absent What to do with eligible candidates absent from the LD
+#'   reference: `"keep"` (default; retained unclumped, the historical
+#'   behaviour) or `"drop"` (removed, as TwoSampleMR local clumping does).
+#'   Either way a warning reports how many there are.
 #' @return A list with `data`, named `instruments`, and `diagnostics`
-#'   (including `ld_provenance`).
+#'   (including `ld_provenance` and `absent_from_reference`).
 #' @export
 fast_clump_data_graph <- function(
     dat, clump_kb = 10000, clump_r2 = 0.001, clump_p1 = 1,
     bfile = NULL, pfile = NULL, plink2_bin = NULL, threads = 1L,
     max_graph_pairs = 5e7, max_pair_requests = 2e8, max_target_variants = 2e6,
-    max_rounds = 10000L, workdir = NULL, reference_manifest = NULL) {
+    max_rounds = 10000L, workdir = NULL, reference_manifest = NULL,
+    absent = c("keep", "drop")) {
   if (!is.data.frame(dat) || !"SNP" %in% names(dat)) stop("dat must contain SNP", call. = FALSE)
+  absent <- match.arg(absent)
   clump_kb <- fastmr_clump_number(clump_kb, "clump_kb", 0)
   clump_r2 <- fastmr_clump_number(clump_r2, "clump_r2", 0, 1)
   clump_p1 <- fastmr_clump_number(clump_p1, "clump_p1", 0, 1)
@@ -135,9 +170,9 @@ fast_clump_data_graph <- function(
     stop("SNP and id.exposure must be non-missing and non-empty", call. = FALSE)
   }
   original <- dat
-  dedup <- !duplicated(paste(as.character(dat$id.exposure), as.character(dat$SNP), sep = "\r"))
-  dat <- dat[dedup, , drop = FALSE]
+  dat <- dat[fastmr_clump_dedup(dat, pcol), , drop = FALSE]
   p <- suppressWarnings(as.numeric(as.character(dat[[pcol]])))
+  tiebreak <- fastmr_clump_tiebreak(dat, pcol)
   snp <- as.character(dat$SNP)
   expo <- as.character(dat$id.exposure)
   rank <- dat[["pvalue_rank"]]
@@ -174,6 +209,14 @@ fast_clump_data_graph <- function(
   }
 
   elig_rows <- which(eligible)
+  absent_rows <- integer()
+  if (length(elig_rows)) {
+    present <- fastmr_clump_reference_ids(unique(snp[elig_rows]), reference_args, plink2_bin,
+                                          threads, file.path(workdir, "reference_ids"))
+    absent_rows <- elig_rows[!snp[elig_rows] %in% present]
+    fastmr_clump_check_absent(length(absent_rows), length(elig_rows),
+                              length(unique(snp[absent_rows])), absent)
+  }
   positions_ok <- !anyNA(position$chr[elig_rows]) && all(is.finite(position$bp[elig_rows]))
   if (length(elig_rows) && !positions_ok) {
     retained_key <- lead_row_fallback(elig_rows, "missing_positions", "all")
@@ -241,14 +284,16 @@ fast_clump_data_graph <- function(
       total_edges <- total_edges + length(a)
       vtx <- match(snp[rows], usnp)
       e_id <- match(expo[rows], unique(expo[rows]))
-      ord <- if (is.null(rank)) order(e_id, p[rows], snp[rows], method = "radix")
-             else order(e_id, rank[rows], p[rows], snp[rows], method = "radix")
+      ord <- fastmr_clump_order(p[rows], snp[rows], rank[rows], tiebreak[rows], group = e_id)
       rows <- rows[ord]; vtx <- vtx[ord]; e_id <- e_id[ord]
       starts <- c(0L, cumsum(tabulate(e_id)))
       keep <- .fastmr_graph_clump(length(usnp), a - 1L, b - 1L, vtx - 1L, as.integer(starts))
       retained_key <- c(retained_key, paste(expo[rows[keep]], snp[rows[keep]], sep = "\r"))
       chromosomes[[x$cc]] <- info
     }
+  }
+  if (identical(absent, "drop") && length(absent_rows)) {
+    retained_key <- setdiff(retained_key, paste(expo[absent_rows], snp[absent_rows], sep = "\r"))
   }
   original_key <- paste(as.character(original$id.exposure), as.character(original$SNP), sep = "\r")
   result <- original[original_key %in% retained_key, , drop = FALSE]
@@ -266,11 +311,13 @@ fast_clump_data_graph <- function(
        diagnostics = list(
          exposures = length(unique(as.character(original$id.exposure))),
          candidate_rows = nrow(dat), retained = length(retained_key),
-         rounds = fallback_rounds, plink_calls = graph_calls + fallback_calls,
+         rounds = fallback_rounds,
+         plink_calls = graph_calls + fallback_calls + as.integer(length(elig_rows) > 0L),
          graph_calls = graph_calls, fallback_plink_calls = fallback_calls,
          graph_edges = total_edges, logical_pairs = total_edges + fallback_pairs,
          exact = TRUE, fallback = length(fallbacks) > 0L, fallbacks = fallbacks,
          partition = "graph", chromosomes = chromosomes,
+         absent_from_reference = length(absent_rows), absent = absent,
          max_graph_pairs = max_graph_pairs,
          reference_manifest_md5 = reference_md5, ld_provenance = ld_provenance))
 }

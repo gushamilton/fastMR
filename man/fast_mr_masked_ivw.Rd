@@ -42,4 +42,8 @@ Matrices must already share the same SNP column order. Only entries selected
 by the masks are read by the kernel. This function is intended for dense
 masked blocks; a sparse CSR exposure panel can avoid dense exposure storage
 with \link{fast_mr_sparse_ivw}.
+
+A pair with one shared instrument gets the Wald ratio
+(\code{b = outcome_beta / exposure_beta}, \code{se = outcome_se / |exposure_beta|}),
+as TwoSampleMR's \code{mr_wald_ratio()}, with \code{Q} and \code{sigma} \code{NA}.
 }

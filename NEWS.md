@@ -1,5 +1,64 @@
 # fastMR (development)
 
+- Single-instrument pairs (`nsnp = 1`): the IVW estimators (`"ivw"`,
+  `"ivw_fe"`, `"ivw_mre"`) return the Wald ratio, `b = by / bx` and
+  `se = se_y / |bx|`, exactly as TwoSampleMR's `mr()` reports it through
+  `mr_wald_ratio()`, with `Q` and `sigma` `NA`. This holds for `fast_mr()`,
+  `fast_mr_grid()` (tidy and compact), `fast_mr_sparse_ivw()`,
+  `fast_mr_masked_ivw()` and every `fast_mr_compressed()` path. They used to
+  return no estimate (NA/NaN), which left every single-instrument exposure (a
+  quarter of the UKB-PPP cis exposures) without an IVW result. Other methods stay
+  `NA` at `nsnp = 1`, as in TwoSampleMR. An exact fit with two or more
+  instruments is unaffected (it keeps the fixed-effect se).
+- Missing native results are now R's `NA` rather than `NaN`.
+
+Correctness fixes from an adversarial review:
+
+- `fast_mr()`: a `seed` for which `seed + (number of pairs) - 1` exceeds
+  `.Machine$integer.max` is rejected up front (pair i is seeded with
+  `seed + i - 1`); it used to fail part-way through the run. Every entry point
+  now rejects seeds outside `[-.Machine$integer.max, .Machine$integer.max]`.
+- `fast_clump_compressed()` candidate reads: the batched p-value flag read must
+  return exactly each store's flagged row ids (not just as many rows), and
+  every key's position must equal its `base_pair_location`; the full-store
+  batch path checks unique row ids and keys too. Any mismatch falls back to the
+  per-store reader with a warning. The per-store flagged-row reader now stops
+  when `read_sumstats()` returns fewer rows than requested.
+- Clumping (graph, per-exposure, auto, batched and lead-row partitions):
+  candidates with equal p are now ordered by larger |z| before SNP ID. p
+  underflows to 0 above |z| ~ 38 (CompreSSoR reconstructed p and many cis-pQTL
+  files), and the lead used to be the lexicographically first SNP. |z| comes
+  from `beta.exposure / se.exposure` when present, and from the stores' `z`
+  for `fast_clump_compressed()`. Results are unchanged when p has no ties.
+- Clumping: a repeated (exposure, SNP) pair is ordered by its smallest p
+  (it was the first row's p); every row of a retained pair is still returned.
+  This also applies to `fast_clump_data()`.
+- `fast_clump_data_graph()`, `fast_clump_data_per_exposure()` and
+  `fast_clump_data_auto()` count eligible candidates absent from the LD
+  reference (the graph partition with one PLINK2 `--write-snplist` query),
+  warn with the count, and stop when every candidate is absent (usually a
+  SNP-ID scheme mismatch). New argument `absent = c("keep", "drop")`: `"keep"`
+  (default) preserves the old results, `"drop"` removes them as TwoSampleMR
+  does. `diagnostics$absent_from_reference` reports the count.
+- `fast_clump_data_per_exposure()` warns when candidate positions or
+  chromosome labels disagree with the reference (e.g. a different genome
+  build) instead of delegating to the graph partition silently.
+- `fast_harmonise_data()`: an exposure with identical alleles (e.g. A/A) is
+  marked `remove` when the outcome has two alleles, and its outcome effect is
+  never flipped (the outcome beta used to be negated). This matches
+  TwoSampleMR, which also keeps (unflipped, subject to its ambiguity rules) a
+  row whose outcome has only an effect allele.
+- `fast_mr_compressed()`: an exposure with an empty instrument set is dropped
+  with a warning when `strict = FALSE` (an error with `strict = TRUE`, and
+  when every set is empty); it used to abort in both modes. The sparse IVW
+  memory check now includes the outcome-by-union-instrument matrices and
+  per-pair count matrices it builds, against
+  `getOption("fastMR.sparse_ivw_max_memory_mb", 8192)` MiB (above it the
+  pairwise path runs). The documentation now states that the shared-grid
+  fast path is used even with `estimator = "pairwise"`.
+- `fast_mr_grid()`: the OpenMP pair loop uses a 64-bit index, so grids with
+  more than 2^31 - 1 pairs no longer overflow it.
+
 - `fast_clump_compressed()` (`candidate_source = "pvalue_flag"`) checks the
   batched `read_candidates_batch(strategy = "pvalue_flag")` result against each
   store's flagged-row count (from the store manifest, or the flag stream when

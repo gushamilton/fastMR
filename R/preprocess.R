@@ -158,6 +158,10 @@ fast_harmonise_data <- function(exposure_dat, outcome_dat, action = 2,
   if (any(i22)) {
     ii <- which(i22)
     aa1 <- a1[ii]; aa2 <- a2[ii]; bb1 <- b1[ii]; bb2 <- b2[ii]
+    # An exposure whose two alleles are identical (A/A) has no defined effect
+    # allele: removed with the outcome left as supplied, as TwoSampleMR does.
+    mono <- aa1 == aa2
+    keep_b1 <- bb1; keep_b2 <- bb2; keep_beta <- beta_b[ii]; keep_eaf <- eaf_b[ii]
     nca1 <- nchar(aa1); nca2 <- nchar(aa2); ncb1 <- nchar(bb1); ncb2 <- nchar(bb2)
     indel <- nca1 > 1 | nca2 > 1 | aa1 %in% c("D", "I")
     r <- rep(TRUE, length(ii))
@@ -194,6 +198,13 @@ fast_harmonise_data <- function(exposure_dat, outcome_dat, action = 2,
       beta_b[ii[z]] <- -beta_b[ii[z]]; eaf_b[ii[z]] <- 1 - eaf_b[ii[z]]
       flipped_palindrome[ii[z]] <- TRUE
     }
+    if (any(mono)) {
+      bb1[mono] <- keep_b1[mono]; bb2[mono] <- keep_b2[mono]
+      beta_b[ii[mono]] <- keep_beta[mono]; eaf_b[ii[mono]] <- keep_eaf[mono]
+      switched[ii[mono]] <- FALSE; flipped_basic[ii[mono]] <- FALSE
+      flipped_palindrome[ii[mono]] <- FALSE
+      rem[mono] <- TRUE
+    }
     a1[ii] <- aa1; a2[ii] <- aa2; b1[ii] <- bb1; b2[ii] <- bb2
     remove[ii] <- rem; palindromic[ii] <- pal; ambiguous[ii] <- amb
   }
@@ -202,6 +213,10 @@ fast_harmonise_data <- function(exposure_dat, outcome_dat, action = 2,
   if (any(i21)) {
     ii <- which(i21)
     aa1 <- a1[ii]; aa2 <- a2[ii]; bb1 <- b1[ii]; bb2 <- rep(NA_character_, length(ii))
+    # Identical exposure alleles (A/A): TwoSampleMR keeps the row (subject to
+    # the ambiguity rules) with the outcome effect unflipped.
+    mono <- aa1 == aa2
+    keep_beta <- beta_b[ii]; keep_eaf <- eaf_b[ii]
     nca1 <- nchar(aa1); nca2 <- nchar(aa2)
     indel <- nca1 > 1 | nca2 > 1 | aa1 %in% c("D", "I")
     r <- rep(TRUE, length(ii))
@@ -230,6 +245,10 @@ fast_harmonise_data <- function(exposure_dat, outcome_dat, action = 2,
     z <- aa2 == bb1
     bb2[z] <- bb1[z]; bb1[z] <- aa1[z]
     beta_b[ii[z]] <- -beta_b[ii[z]]; eaf_b[ii[z]] <- 1 - eaf_b[ii[z]]
+    if (any(mono)) {
+      beta_b[ii[mono]] <- keep_beta[mono]; eaf_b[ii[mono]] <- keep_eaf[mono]
+      switched[ii[mono]] <- FALSE
+    }
     a1[ii] <- aa1; a2[ii] <- aa2; b1[ii] <- bb1; b2[ii] <- bb2
     remove[ii] <- rem | !r; palindromic[ii] <- pal; ambiguous[ii] <- amb | pal
   }
@@ -355,11 +374,11 @@ fast_clump_data <- function(dat, clump_kb = 10000, clump_r2 = 0.001,
     stop("SNP must contain non-missing, non-empty identifiers", call. = FALSE)
   }
   # Harmonisation and multi-outcome joins commonly repeat an exposure SNP.
-  # Clump once per exposure/SNP, then restore every original row for retained
-  # SNPs so multi-outcome data are not silently truncated.
+  # Clump once per exposure/SNP (ordered by its smallest p), then restore every
+  # original row for retained SNPs so multi-outcome data are not silently
+  # truncated.
   original_dat <- dat
-  dedup_key <- paste(as.character(dat$id.exposure), as.character(dat$SNP), sep = "\r")
-  dat <- dat[!duplicated(dedup_key), , drop = FALSE]
+  dat <- dat[fastmr_clump_dedup(dat, pval_column), , drop = FALSE]
   restore_rows <- function(retained) {
     retained_key <- unique(paste(as.character(retained$id.exposure),
                                  as.character(retained$SNP), sep = "\r"))

@@ -24,6 +24,25 @@ fastmr_batch_memory_bytes <- function(exposure_count, outcome_count, snp_count,
   }
 }
 
+# Peak memory of the compressed sparse-IVW dispatch: the native result
+# matrices (fastmr_batch_memory_bytes(sparse = TRUE)), the R-side outcome x
+# union-instrument matrices it builds (beta and se doubles, found and present
+# logicals: 24 bytes per cell), and its two integer exposure x outcome count
+# matrices (8 bytes per pair).
+fastmr_sparse_ivw_dispatch_bytes <- function(exposure_count, outcome_count, snp_count) {
+  pair_count <- as.double(exposure_count) * as.double(outcome_count)
+  fastmr_batch_memory_bytes(exposure_count, outcome_count, snp_count, sparse = TRUE) +
+    24 * as.double(outcome_count) * as.double(snp_count) + 8 * pair_count
+}
+
+# TRUE when the sparse-IVW dispatch fits getOption("fastMR.sparse_ivw_max_memory_mb",
+# 8192) MiB; otherwise fast_mr_compressed() uses its pairwise path.
+fastmr_sparse_ivw_fits <- function(exposure_count, outcome_count, snp_count) {
+  limit <- getOption("fastMR.sparse_ivw_max_memory_mb", 8192)
+  bytes <- fastmr_sparse_ivw_dispatch_bytes(exposure_count, outcome_count, snp_count)
+  is.finite(bytes) && bytes <= as.numeric(limit) * 1024^2
+}
+
 fastmr_check_batch_bounds <- function(exposure_count, outcome_count, snp_count,
                                       max_output_cells, max_memory_mb, sparse) {
   max_output_cells <- fastmr_validate_batch_limit(

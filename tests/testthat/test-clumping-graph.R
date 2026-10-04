@@ -36,8 +36,12 @@ graph_pairs <- function(a, b, ref, kb, r2) {
 
 with_ld_oracle <- function(ref, code) {
   calls <- new.env()
-  calls$graph <- 0L; calls$frontier <- 0L
+  calls$graph <- 0L; calls$frontier <- 0L; calls$ids <- 0L
   testthat::local_mocked_bindings(
+    fastmr_clump_reference_ids = function(snps, ...) {
+      calls$ids <- calls$ids + 1L
+      intersect(snps, ref$SNP)
+    },
     fastmr_clump_run_graph = function(snps, reference_args, plink2_bin, clump_kb,
                                       clump_r2, threads, workdir, tag, ...) {
       calls$graph <- calls$graph + 1L
@@ -97,7 +101,8 @@ test_that("graph clumping makes one LD call for all chromosomes", {
   expect_gt(length(unique(dat$chr_name)), 1L)
   expect_identical(calls$graph, 1L)
   expect_identical(calls$frontier, 0L)
-  expect_identical(res$diagnostics$plink_calls, calls$graph)
+  expect_identical(calls$ids, 1L)  # one reference membership query
+  expect_identical(res$diagnostics$plink_calls, calls$graph + calls$ids)
   expect_identical(res$diagnostics$partition, "graph")
   expect_identical(res$diagnostics$ld_provenance$plink2_version, "PLINK v2.0.0-mock")
   expect_true(any(grepl("--ld-window-r2 0.5", res$diagnostics$ld_provenance$flags, fixed = TRUE)))
@@ -200,6 +205,7 @@ test_that("graph partition runs through the PLINK2 argument surface", {
     sprintf("echo \"$@\" >> %s", log),
     "while [ \"$#\" -gt 0 ]; do case \"$1\" in --out) out=\"$2\"; shift 2;; *) shift;; esac; done",
     "[ -n \"$out\" ] || exit 0",
+    "printf 'A\\nB\\nC\\n' > \"${out}.snplist\"",
     "printf '#ID_A\\tID_B\\tUNPHASED_R2\\nA\\tB\\t0.9\\n' > \"${out}.vcor\""
   ), plink2)
   Sys.chmod(plink2, "0755")
@@ -208,7 +214,8 @@ test_that("graph partition runs through the PLINK2 argument surface", {
   res <- fast_clump_data_graph(dat, clump_kb = 500, clump_r2 = 0.01, bfile = "panel", plink2_bin = plink2)
   expect_identical(res$instruments$E, c("A", "C"))
   args <- readLines(log)
-  expect_length(args, 2L)  # --version + one all-pairs call
+  expect_length(args, 3L)  # --version + the membership query + one all-pairs call
+  expect_match(args[grepl("--write-snplist", args)], "--extract", fixed = TRUE)
   call <- args[grepl("--r2-phased", args)]
   expect_match(call, "--r2-phased cols=id --ld-window-kb 500 --ld-window 1000000000 --ld-window-r2 0.01", fixed = TRUE)
   expect_match(call, "--extract", fixed = TRUE)
@@ -308,6 +315,7 @@ test_that("graph clumping skips PLINK when no candidate pairs exist", {
   log <- tempfile("never_args_")
   writeLines(c("#!/bin/sh", sprintf("echo \"$@\" >> %s", log),
                "case \"$*\" in *--version*) echo 'PLINK v2.0.0-stub'; exit 0;; esac",
+               "case \"$*\" in *--write-snplist*) out=''; while [ \"$#\" -gt 0 ]; do case \"$1\" in --out) out=\"$2\"; shift 2;; *) shift;; esac; done; printf 'A\\nB\\n' > \"${out}.snplist\"; exit 0;; esac",
                "echo 'Error: No variants remaining after --extract.'", "exit 3"), plink2)
   Sys.chmod(plink2, "0755")
   dat <- data.frame(SNP = c("A", "B"), id.exposure = "E", pval.exposure = c(1e-8, 1e-7),
@@ -407,6 +415,7 @@ test_that("graph LD parse refuses an unrecognised .vcor header", {
     "#!/bin/sh", "out=''",
     "while [ \"$#\" -gt 0 ]; do case \"$1\" in --out) out=\"$2\"; shift 2;; *) shift;; esac; done",
     "[ -n \"$out\" ] || exit 0",
+    "printf 'A\\nB\\n' > \"${out}.snplist\"",
     "printf 'A\\tB\\t0.9\\n' > \"${out}.vcor\""
   ), plink2)
   Sys.chmod(plink2, "0755")
