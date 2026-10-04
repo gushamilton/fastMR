@@ -1,5 +1,16 @@
 # fastMR (development)
 
+- `fast_mr_compressed()`'s pairwise path (every non-IVW method set, or
+  `estimator = "pairwise"`) and its `steiger = TRUE` pass now assemble the
+  harmonised table with one vectorised pair index (one `match()` per store,
+  no per-pair data frames or `do.call(rbind)`), then make the same single
+  batched `fast_mr()` call. Results, counts, Steiger rows, errors and row
+  order are identical to the per-pair loop; the estimator step now scales to
+  millions of pairs. `strict = FALSE` omission warnings (pairwise and sparse
+  IVW paths) list at most `getOption("fastMR.warning_pairs", 20)` entries
+  and then the total count, instead of one string naming every pair; the
+  per-pair detail stays in `attr(result, "compressed_input")$counts`, and
+  `options(fastMR.warning_pairs = Inf)` restores the full listing.
 - Faster mode bootstraps and threaded bootstrap batches, with every result
   (and the final `.Random.seed`) identical to before:
   - Mode densities for pairs with up to 1000 ratios first try a "hull" path that
@@ -88,6 +99,7 @@ Correctness fixes from an adversarial review:
   The sparse kernel had adopted the 0-se formula in d53afb8 (0.1.10).
 
 # fastMR 0.2.0
+
 
 - `fast_clump_compressed()` now defaults to `partition = "auto"`
   (`fast_clump_data_auto()`), which picks between the all-pairs graph and the
