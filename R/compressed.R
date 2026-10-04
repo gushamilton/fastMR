@@ -122,6 +122,89 @@ fastmr_validate_compressed_store <- function(store) {
   invisible(store)
 }
 
+# Numeric variant identity from a store manifest.  Self-contained Pcodec
+# stores document their identity encoding (schema
+# compressor_variant_identity_v1): a zero-based global position (chromosome
+# offset + position - 1) and a substitution code 4 * REF + ALT over A, C, G, T,
+# combined as global_position * 16 + substitution.  Returns NULL when the
+# manifest does not declare exactly that encoding.
+fastmr_compressed_identity_codec <- function(manifest) {
+  identity <- manifest$identity
+  table <- identity$chromosome_table
+  chromosomes <- as.character(unlist(table$chromosomes))
+  offsets <- as.numeric(unlist(identity$chromosome_offsets))
+  lengths <- as.numeric(unlist(identity$chromosome_lengths))
+  ok <- is.list(identity) &&
+    identical(identity$schema, "compressor_variant_identity_v1") &&
+    identical(identity$encoding, "global_position_plus_directed_ref_alt_substitution") &&
+    identical(identity$position_encoding, "zero_based_global_position") &&
+    identical(identity$substitution_encoding, "uint8_4_times_ref_plus_alt") &&
+    length(chromosomes) > 0L && length(chromosomes) == length(offsets) &&
+    length(lengths) == length(offsets) && !anyNA(offsets) && !anyNA(lengths) &&
+    !anyDuplicated(chromosomes) && !is.unsorted(offsets, strictly = TRUE)
+  if (!isTRUE(ok)) return(NULL)
+  list(chromosomes = chromosomes, offsets = offsets, lengths = lengths)
+}
+
+fastmr_compressed_identity_bases <- c("A", "C", "G", "T")
+
+# Identity codes of canonical keys; NA for any key that is not a canonical
+# single-nucleotide key within the codec's chromosome table (such a key can never
+# be paired with a row by code, and is resolved by the string fallback).
+fastmr_compressed_key_codes <- function(keys, codec) {
+  pattern <- "^([0-9A-Za-z]+):([1-9][0-9]*):([ACGT]):([ACGT])$"
+  canonical <- grepl(pattern, keys, perl = TRUE)
+  code <- rep(NA_real_, length(keys))
+  if (!any(canonical)) return(code)
+  k <- keys[canonical]
+  chromosome <- match(sub(pattern, "\\1", k, perl = TRUE), codec$chromosomes)
+  position <- as.numeric(sub(pattern, "\\2", k, perl = TRUE))
+  ref <- match(sub(pattern, "\\3", k, perl = TRUE), fastmr_compressed_identity_bases) - 1L
+  alt <- match(sub(pattern, "\\4", k, perl = TRUE), fastmr_compressed_identity_bases) - 1L
+  global <- codec$offsets[chromosome] + position - 1
+  in_range <- !is.na(chromosome) & position <= codec$lengths[chromosome] & ref != alt
+  code[canonical] <- ifelse(in_range, global * 16 + 4 * ref + alt, NA_real_)
+  code
+}
+
+# Canonical keys of rows from their global positions and substitution codes
+# (the fallback for rows no requested key's code accounts for).
+fastmr_compressed_decode_keys <- function(global_position, substitution, codec) {
+  chromosome <- findInterval(global_position, codec$offsets)
+  position <- global_position - codec$offsets[chromosome] + 1
+  CompreSSoR::compressor_variant_key(
+    codec$chromosomes[chromosome], position,
+    fastmr_compressed_identity_bases[substitution %/% 4L + 1L],
+    fastmr_compressed_identity_bases[substitution %% 4L + 1L]
+  )
+}
+
+# Opens and validates every store (io_threads at a time, in forked workers on
+# Unix) and returns each store's identity codec (NULL when its manifest does
+# not declare the standard encoding).  The first failing store, in `paths`
+# order, raises the error the serial open/validate loop raised.
+fastmr_compressed_validate_stores <- function(paths, io_threads = 1L) {
+  check <- function(path) {
+    tryCatch({
+      store <- CompreSSoR::open_compressor(path)
+      fastmr_validate_compressed_store(store)
+      list(ok = TRUE, codec = fastmr_compressed_identity_codec(store$manifest))
+    }, error = function(error) list(ok = FALSE, message = conditionMessage(error)))
+  }
+  if (.Platform$OS.type != "windows" && io_threads > 1L && length(paths) > 1L) {
+    result <- parallel::mclapply(paths, check, mc.cores = min(io_threads, length(paths)),
+                                 mc.preschedule = TRUE)
+  } else {
+    result <- lapply(paths, check)
+  }
+  for (i in seq_along(result)) {
+    r <- result[[i]]
+    if (inherits(r, "try-error")) stop(as.character(r), call. = FALSE)
+    if (!isTRUE(r$ok)) stop(r$message, call. = FALSE)
+  }
+  stats::setNames(lapply(result, `[[`, "codec"), paths)
+}
+
 fastmr_finalize_compressed_read <- function(out, columns) {
   if (!is.data.frame(out)) {
     detail <- if (inherits(out, "condition")) conditionMessage(out) else as.character(out)
@@ -142,20 +225,118 @@ fastmr_finalize_compressed_read <- function(out, columns) {
   out[keep]
 }
 
-fastmr_io_map <- function(paths, keys, columns, io_threads) {
+# Coded counterpart of fastmr_finalize_compressed_read(): adds `variant_key`
+# from identity codes.  Codes of each distinct request (one object shared by
+# every outcome store, for example) under each distinct codec are computed
+# once.
+fastmr_finalize_coded_reads <- function(result, keys, codecs, columns) {
+  cache <- list()
+  request_codes <- function(i) {
+    codec <- codecs[[i]]
+    for (entry in cache) {
+      if (identical(entry$keys, keys[[i]]) && identical(entry$codec, codec)) {
+        return(entry$codes)
+      }
+    }
+    codes <- fastmr_compressed_key_codes(as.character(keys[[i]]), codec)
+    cache[[length(cache) + 1L]] <<- list(keys = keys[[i]], codec = codec, codes = codes)
+    codes
+  }
+  lapply(seq_along(result), function(i) {
+    out <- result[[i]]
+    if (!is.data.frame(out)) {
+      detail <- if (inherits(out, "condition")) conditionMessage(out) else as.character(out)
+      stop("compressed reader returned an invalid result: ", detail, call. = FALSE)
+    }
+    if (!nrow(out)) {
+      out$variant_key <- character()
+    } else {
+      global <- as.numeric(out$global_position)
+      substitution <- as.integer(out$substitution)
+      hit <- match(global * 16 + substitution, request_codes(i))
+      variant_key <- as.character(keys[[i]])[hit]
+      missing <- is.na(hit)
+      if (any(missing)) {
+        variant_key[missing] <- fastmr_compressed_decode_keys(
+          global[missing], substitution[missing], codecs[[i]]
+        )
+      }
+      out$variant_key <- variant_key
+    }
+    if (anyDuplicated(out$variant_key)) {
+      stop("compressed store returned duplicate canonical variant keys", call. = FALSE)
+    }
+    out[unique(c(columns, "variant_key"))]
+  })
+}
+
+# Whether the installed CompreSSoR returns numeric identity columns from key
+# reads: NULL until known, then TRUE/FALSE for this session and build.
+.fastmr_compressed_state <- new.env(parent = emptyenv())
+fastmr_coded_reads_supported <- function(value) {
+  build <- paste(utils::packageVersion("CompreSSoR"),
+                 find.package("CompreSSoR", quiet = TRUE))
+  if (!missing(value)) {
+    .fastmr_compressed_state$coded_reads <- list(build = build, value = value)
+    return(invisible(value))
+  }
+  known <- .fastmr_compressed_state$coded_reads
+  if (is.null(known) || !identical(known$build, build)) NULL else known$value
+}
+
+# Reads `keys[[i]]` from `paths[[i]]`.  `codecs` (from
+# fastmr_compressed_validate_stores()) enables the numeric identity path: the
+# reader returns global positions and substitution codes instead of decoded
+# chromosome/allele strings, and each row takes the variant key of the
+# requested key with the same identity code, so no key string is rebuilt per
+# row.  Rows no requested code accounts for (non-canonical requests) are
+# decoded to their canonical key as before.
+fastmr_io_map <- function(paths, keys, columns, io_threads, codecs = NULL) {
   exports <- getNamespaceExports("CompreSSoR")
   if ("read_sumstats_batch" %in% exports) {
     batch_reader <- getExportedValue("CompreSSoR", "read_sumstats_batch")
     identity <- c("chromosome", "base_pair_location", "effect_allele", "other_allele")
-    requested <- unique(c(columns, identity))
+    numeric_identity <- !is.null(codecs) && length(codecs) == length(paths) &&
+      !any(vapply(codecs, is.null, logical(1))) &&
+      !identical(fastmr_coded_reads_supported(), FALSE)
+    requested <- if (numeric_identity) {
+      unique(c(columns, "global_position", "substitution"))
+    } else {
+      unique(c(columns, identity))
+    }
+    # Older CompreSSoR builds do not return global_position/substitution from
+    # key reads; the first such refusal switches this session to the string
+    # path and the read is repeated there.
+    unsupported <- function(message) {
+      numeric_identity && grepl("requested columns are not present", message, fixed = TRUE)
+    }
+    retry <- FALSE
     result <- tryCatch(
       batch_reader(
         unname(paths), unname(keys), columns = requested, threads = io_threads
       ),
       error = function(error) {
+        if (unsupported(conditionMessage(error))) {
+          retry <<- TRUE
+          return(NULL)
+        }
         stop("batched compressed read failed: ", conditionMessage(error), call. = FALSE)
       }
     )
+    if (!retry && numeric_identity) {
+      details <- vapply(result, function(r) {
+        if (is.data.frame(r)) return("")
+        condition <- attr(r, "condition", exact = TRUE)
+        if (inherits(condition, "condition")) conditionMessage(condition) else
+          paste(as.character(r), collapse = " ")
+      }, character(1))
+      retry <- any(vapply(details, unsupported, logical(1)))
+    }
+    if (retry) {
+      fastmr_coded_reads_supported(FALSE)
+      return(fastmr_io_map(paths, keys, columns, io_threads, codecs = NULL))
+    }
+    if (numeric_identity) fastmr_coded_reads_supported(TRUE)
     failed <- !vapply(result, is.data.frame, logical(1))
     if (any(failed)) {
       first <- which(failed)[1L]
@@ -172,7 +353,11 @@ fastmr_io_map <- function(paths, keys, columns, io_threads) {
       )
     }
     source_bytes_read <- attr(result, "source_bytes_read", exact = TRUE)
-    result <- lapply(result, fastmr_finalize_compressed_read, columns = columns)
+    result <- if (numeric_identity) {
+      fastmr_finalize_coded_reads(result, keys, codecs, columns)
+    } else {
+      lapply(result, fastmr_finalize_compressed_read, columns = columns)
+    }
     attr(result, "source_bytes_read") <- source_bytes_read
     return(result)
   }
@@ -1088,8 +1273,8 @@ fast_mr_compressed <- function(
   exposure_files <- exposure_files[with_instruments]
   instrument_sets <- instrument_sets[with_instruments]
   union_keys <- unique(unlist(instrument_sets, use.names = FALSE))
-  columns <- c("chromosome", "base_pair_location", "effect_allele", "other_allele",
-               "beta", "standard_error")
+  # Matching uses variant_key only, so no decoded identity strings are read.
+  columns <- c("beta", "standard_error")
   if (!is.null(steiger_options)) {
     columns <- c(columns, "effect_allele_frequency", "p_value")
   }
@@ -1112,17 +1297,14 @@ fast_mr_compressed <- function(
   }
   outcome_keys <- rep(list(union_keys), length(outcome_files))
   io_started <- unname(proc.time()[["elapsed"]])
-  invisible(lapply(
-    unique(c(unname(exposure_files), unname(outcome_files))),
-    function(path) fastmr_validate_compressed_store(
-      CompreSSoR::open_compressor(path)
-    )
-  ))
+  store_paths <- c(unname(exposure_files), unname(outcome_files))
+  codecs <- fastmr_compressed_validate_stores(unique(store_paths), as.integer(io_threads))
   all_data <- fastmr_io_map(
-    c(unname(exposure_files), unname(outcome_files)),
+    store_paths,
     c(unname(instrument_sets), unname(outcome_keys)),
     columns,
-    as.integer(io_threads)
+    as.integer(io_threads),
+    codecs = unname(codecs[store_paths])
   )
   source_bytes_read <- attr(all_data, "source_bytes_read", exact = TRUE)
   source_bytes_read <- if (is.null(source_bytes_read)) {

@@ -1,5 +1,14 @@
 # fastMR (development)
 
+- `fast_mr_compressed()` extraction: stores are opened and validated
+  `io_threads` at a time instead of one by one, and the batched reader returns
+  each row's numeric identity (global position and substitution code, as
+  declared by the store manifest's `compressor_variant_identity_v1` encoding)
+  instead of decoded chromosome/allele strings. Each row then takes the
+  variant key of the requested key with the same identity code, so no key
+  string is rebuilt per row. Results, counts, errors and warnings are
+  unchanged; stores whose manifest does not declare that encoding use the
+  previous string path.
 - `fast_mr_compressed()`'s pairwise path (every non-IVW method set, or
   `estimator = "pairwise"`) and its `steiger = TRUE` pass now assemble the
   harmonised table with one vectorised pair index (one `match()` per store,
