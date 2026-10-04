@@ -175,3 +175,68 @@ test_that("a build without identity codes falls back to the string path once", {
   expect_identical(got, strings)
   expect_identical(calls, 3L)
 })
+
+test_that("CompreSSoR's request index gives the string-key extraction", {
+  skip_if_compressor_unavailable()
+  skip_if_not(fastMR:::fastmr_compressor_has("request_index"),
+              "this CompreSSoR build has no request_index")
+  stores <- extraction_stores()
+  keys <- extraction_keys()
+  absent <- c("2:200000000:A:C", "1:100:A:G")
+  exposure_keys <- list(keys[c(2L, 7L, 14L, 25L, 40L, 61L)], c(keys[c(3L, 8L)], absent[[1L]]))
+  union_keys <- unique(c(unlist(exposure_keys), absent))
+  paths <- c(stores[1:2], stores[3:5], stores[3L])
+  requests <- c(exposure_keys, rep(list(union_keys), 4L))
+  codecs <- unname(fastMR:::fastmr_compressed_validate_stores(unique(paths), 1L)[paths])
+  expect_true(fastMR:::fastmr_request_index_usable(paths, requests, codecs))
+  for (columns in list(c("beta", "standard_error"),
+                       c("beta", "standard_error", "effect_allele_frequency", "p_value"))) {
+    for (io_threads in c(1L, 2L)) {
+      strings <- fastMR:::fastmr_io_map(paths, requests, columns, io_threads)
+      coded <- fastMR:::fastmr_io_map(paths, requests, columns, io_threads, codecs = codecs,
+                                      use_request_index = FALSE)
+      indexed <- fastMR:::fastmr_io_map(paths, requests, columns, io_threads, codecs = codecs)
+      expect_identical(indexed, strings, info = paste(length(columns), io_threads))
+      expect_identical(coded, strings, info = paste(length(columns), io_threads))
+    }
+  }
+  # Requests that are not strictly canonical keep the manifest-decoding path.
+  expect_false(fastMR:::fastmr_request_index_usable(paths[1L], list(c(keys[1L], "chr1:5:A:G")),
+                                                    codecs[1L]))
+  expect_false(fastMR:::fastmr_request_index_usable(paths[1L], list(keys[1:2]), list(NULL)))
+})
+
+test_that("fast_mr_compressed results are unchanged by the request index", {
+  skip_if_compressor_unavailable()
+  skip_if_not(fastMR:::fastmr_compressor_has("request_index"),
+              "this CompreSSoR build has no request_index")
+  stores <- extraction_stores()
+  keys <- extraction_keys()
+  exposures <- setNames(stores[1:2], c("exposure_a", "exposure_b"))
+  outcomes <- setNames(stores[3:5], c("outcome_a", "outcome_b", "outcome_c"))
+  instruments <- list(exposure_a = keys[c(2L, 7L, 14L, 25L, 40L, 61L)],
+                      exposure_b = keys[c(3L, 8L, 19L)])
+  run <- function(...) {
+    out <- fast_mr_compressed(exposures, outcomes, instruments, ...)
+    meta <- attr(out, "compressed_input")
+    meta$timing <- NULL
+    attr(out, "compressed_input") <- meta
+    out
+  }
+  without_index <- function(...) {
+    testthat::with_mocked_bindings(
+      run(...),
+      fastmr_compressor_has = function(capability) FALSE,
+      .package = "fastMR"
+    )
+  }
+  args <- list(
+    list(methods = "ivw", io_threads = 2),
+    list(methods = c("wald_ratio", "egger", "weighted_median", "ivw", "weighted_mode"),
+         nboot = 50, seed = 3, steiger = TRUE,
+         samplesize_exposure = 5e4, samplesize_outcome = 1e5)
+  )
+  for (a in args) {
+    expect_identical(do.call(run, a), do.call(without_index, a))
+  }
+})

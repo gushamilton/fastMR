@@ -1,5 +1,10 @@
 # fastMR (development)
 
+- With a CompreSSoR that reports the `"request_index"` capability,
+  `fast_mr_compressed()` extraction asks `read_sumstats_batch()` for each
+  row's request index and takes the requested key directly, reading no
+  identity columns. Older builds keep the manifest-decoding path (and, before
+  that, the string path). Results are unchanged.
 - `fast_mr_compressed()` extraction: stores are opened and validated
   `io_threads` at a time instead of one by one, and the batched reader returns
   each row's numeric identity (global position and substitution code, as

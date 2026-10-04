@@ -284,6 +284,73 @@ fastmr_coded_reads_supported <- function(value) {
   if (is.null(known) || !identical(known$build, build)) NULL else known$value
 }
 
+# Whether the installed CompreSSoR reports a capability.
+fastmr_compressor_has <- function(capability) {
+  exports <- getNamespaceExports("CompreSSoR")
+  if (!"compressor_capabilities" %in% exports) return(FALSE)
+  capabilities <- tryCatch(getExportedValue("CompreSSoR", "compressor_capabilities")(),
+                           error = function(error) character())
+  capability %in% capabilities
+}
+
+# The request-index path applies when CompreSSoR offers it, every store
+# declares the standard identity encoding (`codecs` from
+# fastmr_compressed_validate_stores()), and every requested key is a strictly
+# canonical single-nucleotide key, so the requested string is exactly the key
+# the string path would rebuild for its row.
+fastmr_request_index_usable <- function(paths, keys, codecs) {
+  if (is.null(codecs) || length(codecs) != length(paths) ||
+      any(vapply(codecs, is.null, logical(1))) ||
+      !fastmr_compressor_has("request_index")) {
+    return(FALSE)
+  }
+  pattern <- "^([1-9]|1[0-9]|2[0-2]|X|Y):[1-9][0-9]*:[ACGT]:[ACGT]$"
+  checked <- list()
+  for (request in keys) {
+    if (!is.character(request)) return(FALSE)
+    if (any(vapply(checked, identical, logical(1), request))) next
+    if (!all(grepl(pattern, request, perl = TRUE))) return(FALSE)
+    checked[[length(checked) + 1L]] <- request
+  }
+  TRUE
+}
+
+# Batched read with CompreSSoR's request index: each row's variant key is the
+# requested key it answers, with no identity column read.  NULL when any row
+# lacks an index (the caller then uses the manifest-decoding path).
+fastmr_io_map_indexed <- function(batch_reader, paths, keys, columns, io_threads) {
+  result <- tryCatch(
+    batch_reader(unname(paths), unname(keys), columns = unique(columns),
+                 threads = io_threads, request_index = TRUE),
+    error = function(error) {
+      stop("batched compressed read failed: ", conditionMessage(error), call. = FALSE)
+    }
+  )
+  failed <- !vapply(result, is.data.frame, logical(1))
+  if (any(failed)) {
+    first <- which(failed)[1L]
+    condition <- attr(result[[first]], "condition", exact = TRUE)
+    detail <- if (inherits(condition, "condition")) conditionMessage(condition) else
+      as.character(result[[first]])
+    stop("batched compressed read failed for ", paths[[first]], ": ", detail, call. = FALSE)
+  }
+  source_bytes_read <- attr(result, "source_bytes_read", exact = TRUE)
+  out <- vector("list", length(result))
+  for (i in seq_along(result)) {
+    data <- result[[i]]
+    index <- data$request_index
+    if (is.null(index) || anyNA(index)) return(NULL)
+    data$request_index <- NULL
+    data$variant_key <- as.character(keys[[i]])[index]
+    if (anyDuplicated(data$variant_key)) {
+      stop("compressed store returned duplicate canonical variant keys", call. = FALSE)
+    }
+    out[[i]] <- data[unique(c(columns, "variant_key"))]
+  }
+  attr(out, "source_bytes_read") <- source_bytes_read
+  out
+}
+
 # Reads `keys[[i]]` from `paths[[i]]`.  `codecs` (from
 # fastmr_compressed_validate_stores()) enables the numeric identity path: the
 # reader returns global positions and substitution codes instead of decoded
@@ -291,10 +358,17 @@ fastmr_coded_reads_supported <- function(value) {
 # requested key with the same identity code, so no key string is rebuilt per
 # row.  Rows no requested code accounts for (non-canonical requests) are
 # decoded to their canonical key as before.
-fastmr_io_map <- function(paths, keys, columns, io_threads, codecs = NULL) {
+fastmr_io_map <- function(paths, keys, columns, io_threads, codecs = NULL,
+                          use_request_index = TRUE) {
   exports <- getNamespaceExports("CompreSSoR")
   if ("read_sumstats_batch" %in% exports) {
     batch_reader <- getExportedValue("CompreSSoR", "read_sumstats_batch")
+    if (isTRUE(use_request_index) && fastmr_request_index_usable(paths, keys, codecs)) {
+      indexed <- fastmr_io_map_indexed(batch_reader, paths, keys, columns, io_threads)
+      if (!is.null(indexed)) return(indexed)
+      return(fastmr_io_map(paths, keys, columns, io_threads, codecs = codecs,
+                           use_request_index = FALSE))
+    }
     identity <- c("chromosome", "base_pair_location", "effect_allele", "other_allele")
     numeric_identity <- !is.null(codecs) && length(codecs) == length(paths) &&
       !any(vapply(codecs, is.null, logical(1))) &&
@@ -334,7 +408,8 @@ fastmr_io_map <- function(paths, keys, columns, io_threads, codecs = NULL) {
     }
     if (retry) {
       fastmr_coded_reads_supported(FALSE)
-      return(fastmr_io_map(paths, keys, columns, io_threads, codecs = NULL))
+      return(fastmr_io_map(paths, keys, columns, io_threads, codecs = NULL,
+                           use_request_index = FALSE))
     }
     if (numeric_identity) fastmr_coded_reads_supported(TRUE)
     failed <- !vapply(result, is.data.frame, logical(1))
