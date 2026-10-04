@@ -270,6 +270,20 @@ fastmr_finalize_coded_reads <- function(result, keys, codecs, columns) {
   })
 }
 
+# Whether the installed CompreSSoR returns numeric identity columns from key
+# reads: NULL until known, then TRUE/FALSE for this session and build.
+.fastmr_compressed_state <- new.env(parent = emptyenv())
+fastmr_coded_reads_supported <- function(value) {
+  build <- paste(utils::packageVersion("CompreSSoR"),
+                 find.package("CompreSSoR", quiet = TRUE))
+  if (!missing(value)) {
+    .fastmr_compressed_state$coded_reads <- list(build = build, value = value)
+    return(invisible(value))
+  }
+  known <- .fastmr_compressed_state$coded_reads
+  if (is.null(known) || !identical(known$build, build)) NULL else known$value
+}
+
 # Reads `keys[[i]]` from `paths[[i]]`.  `codecs` (from
 # fastmr_compressed_validate_stores()) enables the numeric identity path: the
 # reader returns global positions and substitution codes instead of decoded
@@ -283,20 +297,46 @@ fastmr_io_map <- function(paths, keys, columns, io_threads, codecs = NULL) {
     batch_reader <- getExportedValue("CompreSSoR", "read_sumstats_batch")
     identity <- c("chromosome", "base_pair_location", "effect_allele", "other_allele")
     numeric_identity <- !is.null(codecs) && length(codecs) == length(paths) &&
-      !any(vapply(codecs, is.null, logical(1)))
+      !any(vapply(codecs, is.null, logical(1))) &&
+      !identical(fastmr_coded_reads_supported(), FALSE)
     requested <- if (numeric_identity) {
       unique(c(columns, "global_position", "substitution"))
     } else {
       unique(c(columns, identity))
     }
+    # Older CompreSSoR builds do not return global_position/substitution from
+    # key reads; the first such refusal switches this session to the string
+    # path and the read is repeated there.
+    unsupported <- function(message) {
+      numeric_identity && grepl("requested columns are not present", message, fixed = TRUE)
+    }
+    retry <- FALSE
     result <- tryCatch(
       batch_reader(
         unname(paths), unname(keys), columns = requested, threads = io_threads
       ),
       error = function(error) {
+        if (unsupported(conditionMessage(error))) {
+          retry <<- TRUE
+          return(NULL)
+        }
         stop("batched compressed read failed: ", conditionMessage(error), call. = FALSE)
       }
     )
+    if (!retry && numeric_identity) {
+      details <- vapply(result, function(r) {
+        if (is.data.frame(r)) return("")
+        condition <- attr(r, "condition", exact = TRUE)
+        if (inherits(condition, "condition")) conditionMessage(condition) else
+          paste(as.character(r), collapse = " ")
+      }, character(1))
+      retry <- any(vapply(details, unsupported, logical(1)))
+    }
+    if (retry) {
+      fastmr_coded_reads_supported(FALSE)
+      return(fastmr_io_map(paths, keys, columns, io_threads, codecs = NULL))
+    }
+    if (numeric_identity) fastmr_coded_reads_supported(TRUE)
     failed <- !vapply(result, is.data.frame, logical(1))
     if (any(failed)) {
       first <- which(failed)[1L]

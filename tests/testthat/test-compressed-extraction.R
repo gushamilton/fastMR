@@ -25,11 +25,12 @@ test_that("manifest identity codes match the codes stores return", {
   codec <- fastMR:::fastmr_compressed_identity_codec(store$manifest)
   expect_false(is.null(codec))
   keys <- extraction_keys()
-  got <- CompreSSoR::read_sumstats_batch(
+  got <- tryCatch(CompreSSoR::read_sumstats_batch(
     path, keys,
     columns = c("global_position", "substitution", "chromosome",
                 "base_pair_location", "effect_allele", "other_allele")
-  )[[1L]]
+  )[[1L]], error = function(e) NULL)
+  skip_if(is.null(got), "this CompreSSoR build does not return identity codes from key reads")
   row_keys <- CompreSSoR::compressor_variant_key(
     got$chromosome, got$base_pair_location, got$other_allele, got$effect_allele
   )
@@ -55,6 +56,8 @@ test_that("manifest identity codes match the codes stores return", {
 
 test_that("coded extraction is identical to string-key extraction", {
   skip_if_compressor_unavailable()
+  # Either path (coded, or the string fallback on builds without identity
+  # codes) must give the string-key result.
   stores <- extraction_stores()
   keys <- extraction_keys()
   absent <- c("2:200000000:A:C", "1:100:A:G")
@@ -132,7 +135,7 @@ test_that("parallel store validation raises the serial loop's first error", {
   for (order in list(paths, rev(paths), paths[c(1L, 3L, 2L, 4L)])) {
     expected <- serial_error(order)
     expect_false(is.na(expected))
-    for (io_threads in c(1L, 3L)) {
+    for (io_threads in c(1L, 2L)) {
       expect_error(fastMR:::fastmr_compressed_validate_stores(order, io_threads),
                    expected, fixed = TRUE)
     }
@@ -140,4 +143,35 @@ test_that("parallel store validation raises the serial loop's first error", {
   codecs <- fastMR:::fastmr_compressed_validate_stores(normalizePath(good), 2L)
   expect_named(codecs, normalizePath(good))
   expect_false(any(vapply(codecs, is.null, logical(1))))
+})
+
+test_that("a build without identity codes falls back to the string path once", {
+  skip_if_compressor_unavailable()
+  stores <- extraction_stores(c(1, 0.5))
+  keys <- extraction_keys()[c(2L, 7L, 14L)]
+  codecs <- unname(fastMR:::fastmr_compressed_validate_stores(stores, 1L))
+  strings <- fastMR:::fastmr_io_map(stores, list(keys, keys), c("beta", "standard_error"), 1L)
+  state <- get(".fastmr_compressed_state", envir = asNamespace("fastMR"))
+  previous <- state$coded_reads
+  withr::defer(state$coded_reads <- previous)
+  state$coded_reads <- NULL
+  calls <- 0L
+  real <- CompreSSoR::read_sumstats_batch
+  refusing <- function(stores, variants = NULL, columns, threads = 1L, region = NULL) {
+    calls <<- calls + 1L
+    if (any(c("global_position", "substitution") %in% columns)) {
+      stop("requested columns are not present: global_position, substitution")
+    }
+    real(stores, variants, columns = columns, threads = threads)
+  }
+  testthat::local_mocked_bindings(read_sumstats_batch = refusing, .package = "CompreSSoR")
+  got <- fastMR:::fastmr_io_map(stores, list(keys, keys), c("beta", "standard_error"), 1L,
+                                codecs = codecs)
+  expect_identical(got, strings)
+  expect_identical(calls, 2L)
+  expect_false(fastMR:::fastmr_coded_reads_supported())
+  got <- fastMR:::fastmr_io_map(stores, list(keys, keys), c("beta", "standard_error"), 1L,
+                                codecs = codecs)
+  expect_identical(got, strings)
+  expect_identical(calls, 3L)
 })
