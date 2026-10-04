@@ -25,19 +25,24 @@ fast_mr_compressed(exposure_files, outcome_files, instruments,
   CompreSSoR process.}
   \item{minimum_snps}{Minimum matched instruments required for each pair.}
   \item{strict}{Fail on invalid beta/standard-error values and on pairs below
-  \code{minimum_snps}; otherwise omit them with explicit warnings.}
+  \code{minimum_snps}; otherwise omit them with explicit warnings. Each
+  warning lists at most \code{getOption("fastMR.warning_pairs", 20)} affected
+  pairs/exposures followed by the total count; the per-pair detail is always
+  in the \code{counts} element of the \code{compressed_input} attribute. Set
+  \code{options(fastMR.warning_pairs = Inf)} for the full listing.}
   \item{output}{Optional path for a Zstandard-compressed Parquet copy of the
   result. The path must not already exist; use \code{\link{fast_write_parquet}}
   when an overwrite or another compression codec is required.}
   \item{estimator}{\code{"auto"} (default) or \code{"pairwise"}. With
   \code{"auto"}, runs requesting only \code{methods = "ivw"} (and no extra
   \code{...} options) whose instrument sets are not shared by all exposures use
-  the sparse CSR kernel \code{\link{fast_mr_sparse_ivw}} instead of an R loop
-  calling \code{fast_mr()} per pair. Counts, errors, warnings,
+  the sparse CSR kernel \code{\link{fast_mr_sparse_ivw}} instead of the
+  pairwise path, which assembles one harmonised long table for every pair and
+  makes one batched \code{fast_mr()} call. Counts, errors, warnings,
   \code{minimum_snps} handling and row order are identical, but estimates may
   differ from \code{"pairwise"} by rounding (within 1e-14 relative on beta,
   se and Q; usually bit-identical). \code{"pairwise"} and
-  every other method set always use the per-pair path. The path used is
+  every other method set always use the pairwise path. The path used is
   reported as \code{estimator_path} in the \code{compressed_input} attribute.}
   \item{steiger}{If \code{TRUE}, also run per-SNP Steiger filtering
   (\code{\link{fast_mr_steiger_filtering}}) for every retained
