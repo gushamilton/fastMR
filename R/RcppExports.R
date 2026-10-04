@@ -13,12 +13,20 @@ fastmr_set_work_scale_native <- function(scale) {
     .Call(`_fastMR_fastmr_set_work_scale_native`, scale)
 }
 
+fastmr_set_bootstrap_overlap_native <- function(overlap) {
+    .Call(`_fastMR_fastmr_set_bootstrap_overlap_native`, overlap)
+}
+
 fastmr_set_mode_direct_max_native <- function(ratios) {
     .Call(`_fastMR_fastmr_set_mode_direct_max_native`, ratios)
 }
 
 fastmr_mode_path_counts_native <- function(reset = FALSE) {
     .Call(`_fastMR_fastmr_mode_path_counts_native`, reset)
+}
+
+fastmr_set_mode_hull_native <- function(ratios, recurrence = TRUE) {
+    .Call(`_fastMR_fastmr_set_mode_hull_native`, ratios, recurrence)
 }
 
 fastmr_run_native <- function(exposure_beta, outcome_beta, exposure_se, outcome_se, methods, nboot = 1000L, seed = NULL, threads = 1L, phi = 1.0, penk = 20.0) {
