@@ -55,7 +55,10 @@ test_that("batched IVW preserves an exact zero-residual fit", {
 
   expect_equal(batched$b, 1, tolerance = 1e-15)
   expect_equal(batched$Q, 0, tolerance = 0)
-  expect_equal(batched$se, 0, tolerance = 0)
+  # An exact fit has sigma = 0; the IVW se is its fixed-effect limit (as
+  # TwoSampleMR's se / min(1, sigma)), not 0.
+  expect_equal(batched$se, sqrt(1 / sum(exposure_beta^2 / outcome_se^2)),
+               tolerance = 1e-14)
   expect_equal(batched[c("b", "se", "Q")], scalar[c("b", "se", "Q")],
                tolerance = 0)
 })
