@@ -71,4 +71,8 @@ order. For exposure \code{e}, only columns from \code{row_ptr[e] + 1} through
 therefore vary by exposure/outcome pair without allocating an
 exposure-by-outcome-by-SNP array. The returned \code{nsnp} is the count after
 both \code{outcome_present} and \code{pair_snp_keep} are applied.
+
+A pair with one retained instrument gets the Wald ratio
+(\code{b = outcome_beta / exposure_beta}, \code{se = outcome_se / |exposure_beta|}),
+as TwoSampleMR's \code{mr_wald_ratio()}, with \code{Q} and \code{sigma} \code{NA}.
 }

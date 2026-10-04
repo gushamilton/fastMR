@@ -4,6 +4,7 @@
 #include <algorithm>
 #include <atomic>
 #include <cfloat>
+#include <cstddef>
 #include <cmath>
 #include <complex>
 #include <limits>
@@ -27,7 +28,9 @@
 namespace {
 
 constexpr int MODE_GRID_SIZE = 512;
-const double NA_VALUE = std::numeric_limits<double>::quiet_NaN();
+// R's NA_real_ (not a bare NaN), so missing results reach R as NA as in
+// TwoSampleMR.  Only ever tested with std::isfinite()/std::isnan() here.
+const double NA_VALUE = NA_REAL;
 std::atomic<bool> defer_r_math(false);
 
 double finite_or_na(double x) {
@@ -771,8 +774,43 @@ inline double ivw_fe_se(double base_se, double residual_se, double sigma) {
   return sigma > 0.0 ? residual_se / sigma : base_se;
 }
 
+// One instrument (k = 1).  TwoSampleMR::mr() then reports only
+// mr_wald_ratio: b = b_out / b_exp, se = se_out / |b_exp| (first order), with
+// every other method NA.  The IVW estimators (ivw, ivw_fe, ivw_mre) return
+// exactly that Wald ratio; Q and sigma are undefined (0 degrees of freedom)
+// and stay NA.  This is distinct from an exact fit with k >= 2 (sigma == 0),
+// which keeps the fixed-effect se (ivw_mre_se()/ivw_fe_se()).  NA when the
+// exposure effect is 0 or a value is not finite.
+inline bool single_snp_wald(double x, double y, double sy, double& beta, double& se) {
+  beta = NA_VALUE;
+  se = NA_VALUE;
+  if (!std::isfinite(x) || x == 0.0 || !std::isfinite(y) || !std::isfinite(sy) || !(sy > 0.0)) {
+    return false;
+  }
+  beta = y / x;
+  se = sy / std::abs(x);
+  if (!std::isfinite(beta) || !std::isfinite(se)) {
+    beta = NA_VALUE;
+    se = NA_VALUE;
+    return false;
+  }
+  return true;
+}
+
+Result single_snp_ivw_result(const std::string& method, double x, double y, double sy) {
+  Result result = empty_result(method, 1);
+  double beta = NA_VALUE;
+  double se = NA_VALUE;
+  if (!single_snp_wald(x, y, sy, beta, se)) return result;
+  result.beta = beta;
+  result.se = se;
+  result.pval = z_pvalue(safe_statistic(beta, se));
+  return result;
+}
+
 Result compute_ivw(const Prepared& p, const std::string& method) {
   const int n = static_cast<int>(p.x.size());
+  if (n == 1) return single_snp_ivw_result(method, p.x[0], p.y[0], p.sy[0]);
   if (n < 2) return empty_result(method, n);
   double denominator = 0.0;
   double numerator = 0.0;
@@ -1579,6 +1617,21 @@ std::vector<Result> compute_ivw_grid_blas(
                                  static_cast<std::size_t>(outcome_count);
   const std::size_t method_count = methods.size();
   std::vector<Result> results(pair_count * method_count);
+  if (snp_count == 1) {
+    // One instrument: the Wald ratio (see single_snp_wald()).
+    for (int exposure = 0; exposure < exposure_count; ++exposure) {
+      for (int outcome = 0; outcome < outcome_count; ++outcome) {
+        const std::size_t pair = static_cast<std::size_t>(exposure) * outcome_count + outcome;
+        for (std::size_t i = 0; i < methods.size(); ++i) {
+          results[pair * method_count + i] = single_snp_ivw_result(
+            methods[i], grid.exp_beta[static_cast<std::size_t>(exposure)],
+            grid.out_beta[static_cast<std::size_t>(outcome)],
+            grid.out_se[static_cast<std::size_t>(outcome)]);
+        }
+      }
+    }
+    return results;
+  }
   if (snp_count < 2) {
     for (std::size_t pair = 0; pair < pair_count; ++pair) {
       for (std::size_t i = 0; i < methods.size(); ++i) {
@@ -1720,6 +1773,26 @@ Rcpp::List compute_ivw_grid_compact(const GridData& grid,
   std::fill(q_df.begin(), q_df.end(), NA_VALUE);
   std::fill(q_pval.begin(), q_pval.end(), NA_VALUE);
   std::fill(sigma.begin(), sigma.end(), NA_VALUE);
+
+  if (snp_count == 1) {
+    // One instrument: the Wald ratio (see single_snp_wald()); Q and sigma NA.
+    for (int exposure = 0; exposure < exposure_count; ++exposure) {
+      for (int outcome = 0; outcome < outcome_count; ++outcome) {
+        const std::size_t pair = static_cast<std::size_t>(exposure) * outcome_count + outcome;
+        double beta_value = NA_VALUE;
+        double se_value = NA_VALUE;
+        single_snp_wald(grid.exp_beta[static_cast<std::size_t>(exposure)],
+                        grid.out_beta[static_cast<std::size_t>(outcome)],
+                        grid.out_se[static_cast<std::size_t>(outcome)], beta_value, se_value);
+        const double p_value = z_pvalue(safe_statistic(beta_value, se_value));
+        for (int method_index = 0; method_index < method_count; ++method_index) {
+          beta(method_index, pair) = beta_value;
+          se(method_index, pair) = se_value;
+          pval(method_index, pair) = p_value;
+        }
+      }
+    }
+  }
 
   if (snp_count >= 2) {
     const std::size_t exp_size = static_cast<std::size_t>(snp_count) * exposure_count;
@@ -1923,12 +1996,40 @@ Rcpp::List compute_masked_ivw_grid(
   std::fill(result_q.begin(), result_q.end(), NA_VALUE);
   std::fill(result_sigma.begin(), result_sigma.end(), NA_VALUE);
   std::fill(result_nsnp.begin(), result_nsnp.end(), 0.0);
+  // Present SNPs per exposure, built only if some pair has one instrument.
+  std::vector<std::vector<int>> exposure_snps;
   for (int exposure = 0; exposure < exposure_count; ++exposure) {
     for (int outcome = 0; outcome < outcome_count; ++outcome) {
       const std::size_t index = static_cast<std::size_t>(exposure) +
                                 static_cast<std::size_t>(exposure_count) * outcome;
       const double count = nsnp[index];
       result_nsnp(exposure, outcome) = count;
+      if (count == 1.0) {
+        // One instrument: the Wald ratio (see single_snp_wald()); Q, sigma NA.
+        if (exposure_snps.empty()) {
+          exposure_snps.resize(static_cast<std::size_t>(exposure_count));
+          for (int e = 0; e < exposure_count; ++e) {
+            for (int snp = 0; snp < snp_count; ++snp) {
+              if (exp_presence[static_cast<std::size_t>(e) * snp_count + snp] != 0.0) {
+                exposure_snps[static_cast<std::size_t>(e)].push_back(snp);
+              }
+            }
+          }
+        }
+        for (int snp : exposure_snps[static_cast<std::size_t>(exposure)]) {
+          const std::size_t out_index = static_cast<std::size_t>(outcome) * snp_count + snp;
+          if (out_valid[out_index] == 0.0) continue;
+          double beta_value = NA_VALUE;
+          double se_value = NA_VALUE;
+          if (single_snp_wald(exp_values[static_cast<std::size_t>(exposure) * snp_count + snp],
+                              out_beta(outcome, snp), out_se(outcome, snp), beta_value, se_value)) {
+            result_beta(exposure, outcome) = beta_value;
+            result_se(exposure, outcome) = se_value;
+          }
+          break;
+        }
+        continue;
+      }
       if (count < 2.0 || !std::isfinite(denominator[index]) || denominator[index] <= 0.0) continue;
       const double beta_value = numerator[index] / denominator[index];
       if (!std::isfinite(beta_value)) continue;
@@ -2106,6 +2207,9 @@ Rcpp::List compute_sparse_ivw_grid(
       double denominator = 0.0;
       double count = 0.0;
       double prefilter = 0.0;
+      double single_x = NA_VALUE;
+      double single_y = NA_VALUE;
+      double single_se = NA_VALUE;
       const int* drop_it = nullptr;
       const int* drop_end = nullptr;
       if (has_drop) {
@@ -2139,11 +2243,24 @@ Rcpp::List compute_sparse_ivw_grid(
         denominator += weight * x * x;
         numerator += weight * x * y;
         count += 1.0;
+        single_x = x;
+        single_y = y;
+        single_se = se;
       }
       const std::size_t result_index = static_cast<std::size_t>(exposure) +
                                        static_cast<std::size_t>(exposure_count) * outcome;
       result_nsnp[ result_index ] = count;
       if (report_prefilter) result_prefilter[ result_index ] = prefilter;
+      if (count == 1.0) {
+        // One instrument: the Wald ratio (see single_snp_wald()); Q, sigma NA.
+        double beta_value = NA_VALUE;
+        double se_value = NA_VALUE;
+        if (single_snp_wald(single_x, single_y, single_se, beta_value, se_value)) {
+          result_beta[ result_index ] = beta_value;
+          result_se[ result_index ] = se_value;
+        }
+        continue;
+      }
       if (count < 2.0 || !std::isfinite(denominator) || denominator <= 0.0) continue;
       const double beta_value = numerator / denominator;
       if (!std::isfinite(beta_value)) continue;
@@ -2622,10 +2739,11 @@ Rcpp::List fastmr_grid_native(Rcpp::NumericMatrix exposure_beta,
 
 #ifdef _OPENMP
 #pragma omp parallel for schedule(static) num_threads(thread_count)
-  for (int index = 0; index < static_cast<int>(pair_count); ++index) {
-    const int exposure = index / grid.outcome_count;
-    const int outcome = index % grid.outcome_count;
+  // Signed 64-bit index: pair_count = exposures x outcomes can exceed INT_MAX.
+  for (std::ptrdiff_t index = 0; index < static_cast<std::ptrdiff_t>(pair_count); ++index) {
     const std::size_t pair = static_cast<std::size_t>(index);
+    const int exposure = static_cast<int>(pair / static_cast<std::size_t>(grid.outcome_count));
+    const int outcome = static_cast<int>(pair % static_cast<std::size_t>(grid.outcome_count));
     std::vector<Result> other_results = compute_pair(
       pair_from_grid(grid, exposure, outcome, nboot), other_methods, nboot,
       R_NilValue, false, phi, penk);

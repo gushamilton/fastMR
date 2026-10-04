@@ -18,7 +18,8 @@ fast_clump_data_graph(
   max_target_variants = 2e+06,
   max_rounds = 10000L,
   workdir = NULL,
-  reference_manifest = NULL
+  reference_manifest = NULL,
+  absent = c("keep", "drop")
 )
 }
 \arguments{
@@ -52,10 +53,15 @@ lead-row mode.}
 
 \item{reference_manifest}{Optional reference-panel manifest whose MD5 is
 recorded in diagnostics.}
+
+\item{absent}{What to do with eligible candidates absent from the LD
+reference: \code{"keep"} (default; retained unclumped, the historical
+behaviour) or \code{"drop"} (removed, as TwoSampleMR local clumping does).
+Either way a warning reports how many there are.}
 }
 \value{
 A list with \code{data}, named \code{instruments}, and \code{diagnostics}
-(including \code{ld_provenance}).
+(including \code{ld_provenance} and \code{absent_from_reference}).
 }
 \description{
 Clump every exposure with a single PLINK2 all-pairs LD call over the union
@@ -72,4 +78,16 @@ within \code{max_graph_pairs}.  A chromosome whose own estimate exceeds it (or
 any data set lacking complete positions) is clumped with
 \code{\link[=fast_clump_data_lead_rows]{fast_clump_data_lead_rows()}} instead, and the reason is recorded in
 \code{diagnostics$fallbacks}.
+
+Within an exposure, candidates are taken in order of p (exact rank first
+when a \code{pvalue_rank} column is present); equal p, including p = 0 from
+underflow at |z| above about 38, is broken by larger |z| (from
+\code{beta.exposure / se.exposure} when present) and then by SNP ID.  When an
+(exposure, SNP) pair appears in several rows, the smallest p orders it, and
+every row of a retained pair is returned.
+
+Candidate membership in the reference is checked with one PLINK2
+\code{--write-snplist} query.  Candidates absent from the reference have no LD
+edges; see \code{absent}.  If no eligible candidate is in the reference, the call
+stops (a SNP-ID scheme mismatch is the usual cause).
 }

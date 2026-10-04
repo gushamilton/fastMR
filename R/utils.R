@@ -94,6 +94,9 @@ fastmr_validate_controls <- function(nboot, seed, threads) {
     if (length(seed) != 1L || is.na(seed) || !is.finite(seed) || seed != floor(seed)) {
       stop("seed must be NULL or one finite integer", call. = FALSE)
     }
+    if (abs(seed) > .Machine$integer.max) {
+      stop("seed must lie in [-", .Machine$integer.max, ", ", .Machine$integer.max, "]", call. = FALSE)
+    }
   }
   invisible(list(nboot = as.integer(nboot), seed = if (is.null(seed)) NULL else as.numeric(seed),
                  threads = as.integer(threads)))
