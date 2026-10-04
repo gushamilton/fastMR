@@ -1,5 +1,16 @@
 # fastMR (development)
 
+- `fast_mr_compressed()`'s pairwise path (every non-IVW method set, or
+  `estimator = "pairwise"`) and its `steiger = TRUE` pass now assemble the
+  harmonised table with one vectorised pair index (one `match()` per store,
+  no per-pair data frames or `do.call(rbind)`), then make the same single
+  batched `fast_mr()` call. Results, counts, Steiger rows, errors and row
+  order are identical to the per-pair loop; the estimator step now scales to
+  millions of pairs. `strict = FALSE` omission warnings (pairwise and sparse
+  IVW paths) list at most `getOption("fastMR.warning_pairs", 20)` entries
+  and then the total count, instead of one string naming every pair; the
+  per-pair detail stays in `attr(result, "compressed_input")$counts`, and
+  `options(fastMR.warning_pairs = Inf)` restores the full listing.
 - `fast_clump_compressed()` (`candidate_source = "pvalue_flag"`) checks the
   batched `read_candidates_batch(strategy = "pvalue_flag")` result against each
   store's flagged-row count (from the store manifest, or the flag stream when
@@ -18,17 +29,6 @@
 
 # fastMR 0.2.0
 
-- `fast_mr_compressed()`'s pairwise path (every non-IVW method set, or
-  `estimator = "pairwise"`) and its `steiger = TRUE` pass now assemble the
-  harmonised table with one vectorised pair index (one `match()` per store,
-  no per-pair data frames or `do.call(rbind)`), then make the same single
-  batched `fast_mr()` call. Results, counts, Steiger rows, errors and row
-  order are identical to the per-pair loop; the estimator step now scales to
-  millions of pairs. `strict = FALSE` omission warnings (pairwise and sparse
-  IVW paths) list at most `getOption("fastMR.warning_pairs", 20)` entries
-  and then the total count, instead of one string naming every pair; the
-  per-pair detail stays in `attr(result, "compressed_input")$counts`, and
-  `options(fastMR.warning_pairs = Inf)` restores the full listing.
 
 - `fast_clump_compressed()` now defaults to `partition = "auto"`
   (`fast_clump_data_auto()`), which picks between the all-pairs graph and the
