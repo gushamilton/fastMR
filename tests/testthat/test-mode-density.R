@@ -83,3 +83,37 @@ test_that("threaded bootstrap normals match for every normal.kind", {
     }
   }
 })
+
+with_hull <- function(ratios, recurrence, f) {
+  previous <- fastMR:::fastmr_set_mode_hull_native(ratios, recurrence)
+  on.exit(fastMR:::fastmr_set_mode_hull_native(previous[["ratios"]], previous[["recurrence"]] == 1),
+          add = TRUE)
+  f()
+}
+
+test_that("the hull path, with and without the recurrence kernel, matches the FFT", {
+  sizes <- c(2L, 3L, 4L, 5L, 7L, 10L, 16L, 17L, 33L, 64L, 65L, 100L)
+  clean <- mode_pairs(sizes, seed = 8L)
+  outliers <- clean
+  hit <- seq(1L, nrow(outliers), by = 3L)
+  outliers$beta.outcome[hit] <- outliers$beta.outcome[hit] + 0.3
+  for (d in list(clean, outliers, mode_ties(12L, 1e-9), mode_ties(7L, 1e-6))) {
+    run <- function() fast_mr(d, methods = modes, nboot = 40, seed = 6, phi = 0.8)
+    fft <- with_direct_max(0, run)
+    fastMR:::fastmr_mode_path_counts_native(TRUE)
+    for (recurrence in c(TRUE, FALSE)) {
+      expect_identical(with_hull(Inf, recurrence, run), fft)
+      expect_identical(with_hull(0, recurrence, run), fft)
+    }
+    expect_identical(run(), fft)
+    expect_gt(fastMR:::fastmr_mode_path_counts_native(TRUE)[["hull"]], 0)
+  }
+})
+
+test_that("the hull hook validates and round-trips", {
+  previous <- fastMR:::fastmr_set_mode_hull_native(9, FALSE)
+  restored <- fastMR:::fastmr_set_mode_hull_native(previous[["ratios"]], previous[["recurrence"]] == 1)
+  expect_identical(unname(restored), c(9, 0))
+  expect_error(fastMR:::fastmr_set_mode_hull_native(-1))
+  expect_error(fastMR:::fastmr_set_mode_hull_native(NA_real_))
+})

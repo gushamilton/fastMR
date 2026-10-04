@@ -105,8 +105,9 @@ fast_mr <- function(data,
 # i (the caller's RNG state is then restored). With one worker, draws stream
 # straight into each group's bootstrap layout as before; with several, groups
 # run in batches whose normals (at most getOption("fastMR.bootstrap_batch_draws"),
-# default 2^23 = 64 MB, or a single group streamed serially) are drawn into a
-# reused native buffer. Batching does not change any result.
+# default 2^23 = 64 MB, or a single group streamed serially) are drawn into one
+# of two reused native buffers: the main thread draws the next batch while the
+# workers compute the current one. Batching does not change any result.
 # Group i reseeds with set.seed(seed + i - 1), so the last group's seed must
 # still be a valid R integer. Check before any group runs rather than failing
 # part-way through the native loop.
