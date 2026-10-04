@@ -1,0 +1,6 @@
+"label","workload","pairs","threads","wall_s","wall_s_median"
+"hull-sync","k3",12000,8,10.943,10.9535
+"hull-sync","k10",6000,8,10.664,10.672
+"hull-sync","k30",2400,8,9.356,9.3575
+"hull-sync","k100",800,8,7.616,7.64550000000001
+"hull-sync","mixed",8000,8,9.68100000000001,9.682
