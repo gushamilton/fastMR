@@ -48,6 +48,17 @@ BEGIN_RCPP
     return rcpp_result_gen;
 END_RCPP
 }
+// fastmr_set_bootstrap_overlap_native
+bool fastmr_set_bootstrap_overlap_native(bool overlap);
+RcppExport SEXP _fastMR_fastmr_set_bootstrap_overlap_native(SEXP overlapSEXP) {
+BEGIN_RCPP
+    Rcpp::RObject rcpp_result_gen;
+    Rcpp::RNGScope rcpp_rngScope_gen;
+    Rcpp::traits::input_parameter< bool >::type overlap(overlapSEXP);
+    rcpp_result_gen = Rcpp::wrap(fastmr_set_bootstrap_overlap_native(overlap));
+    return rcpp_result_gen;
+END_RCPP
+}
 // fastmr_set_mode_direct_max_native
 double fastmr_set_mode_direct_max_native(double ratios);
 RcppExport SEXP _fastMR_fastmr_set_mode_direct_max_native(SEXP ratiosSEXP) {
@@ -253,6 +264,7 @@ static const R_CallMethodDef CallEntries[] = {
     {"_fastMR_fastmr_vcor_read", (DL_FUNC) &_fastMR_fastmr_vcor_read, 2},
     {"_fastMR_fastmr_graph_clump", (DL_FUNC) &_fastMR_fastmr_graph_clump, 5},
     {"_fastMR_fastmr_set_work_scale_native", (DL_FUNC) &_fastMR_fastmr_set_work_scale_native, 1},
+    {"_fastMR_fastmr_set_bootstrap_overlap_native", (DL_FUNC) &_fastMR_fastmr_set_bootstrap_overlap_native, 1},
     {"_fastMR_fastmr_set_mode_direct_max_native", (DL_FUNC) &_fastMR_fastmr_set_mode_direct_max_native, 1},
     {"_fastMR_fastmr_mode_path_counts_native", (DL_FUNC) &_fastMR_fastmr_mode_path_counts_native, 1},
     {"_fastMR_fastmr_set_mode_hull_native", (DL_FUNC) &_fastMR_fastmr_set_mode_hull_native, 2},

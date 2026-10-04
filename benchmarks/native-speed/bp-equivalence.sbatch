@@ -23,5 +23,6 @@ Rscript $S/equiv-run.R lib-main equiv/bp-main.rds
 Rscript $S/equiv-run.R lib-new equiv/bp-new.rds
 FASTMR_HULL="Inf,1" Rscript $S/equiv-run.R lib-new equiv/bp-new-hullInf-rec.rds
 FASTMR_HULL="Inf,0" Rscript $S/equiv-run.R lib-new equiv/bp-new-hullInf-exact.rds
-Rscript $S/equiv-compare.R equiv/bp-main.rds equiv/bp-new.rds equiv/bp-new-hullInf-rec.rds equiv/bp-new-hullInf-exact.rds
+FASTMR_OVERLAP=0 Rscript $S/equiv-run.R lib-new equiv/bp-new-sync.rds
+Rscript $S/equiv-compare.R equiv/bp-main.rds equiv/bp-new.rds equiv/bp-new-hullInf-rec.rds equiv/bp-new-hullInf-exact.rds equiv/bp-new-sync.rds
 Rscript $S/audit.R src-new

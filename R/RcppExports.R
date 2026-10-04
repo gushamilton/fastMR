@@ -13,6 +13,10 @@ fastmr_set_work_scale_native <- function(scale) {
     .Call(`_fastMR_fastmr_set_work_scale_native`, scale)
 }
 
+fastmr_set_bootstrap_overlap_native <- function(overlap) {
+    .Call(`_fastMR_fastmr_set_bootstrap_overlap_native`, overlap)
+}
+
 fastmr_set_mode_direct_max_native <- function(ratios) {
     .Call(`_fastMR_fastmr_set_mode_direct_max_native`, ratios)
 }

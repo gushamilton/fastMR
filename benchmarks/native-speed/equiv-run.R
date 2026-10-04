@@ -8,6 +8,8 @@ args <- commandArgs(TRUE)
 suppressMessages(library(fastMR))
 quick <- length(args) >= 3 && args[3] == "quick"
 has_hull <- exists("fastmr_set_mode_hull_native", asNamespace("fastMR"))
+# FASTMR_OVERLAP=0/1 turns the double-buffered bootstrap batches off/on.
+if (nzchar(Sys.getenv("FASTMR_OVERLAP"))) fastMR:::fastmr_set_bootstrap_overlap_native(Sys.getenv("FASTMR_OVERLAP") == "1")
 # FASTMR_HULL="<max ratios>,<recurrence 0/1>" overrides the hull settings.
 hull_env <- Sys.getenv("FASTMR_HULL")
 if (has_hull && nzchar(hull_env)) {

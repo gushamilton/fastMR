@@ -6,6 +6,9 @@ th <- as.integer(args[3])
 # FASTMR_HULL="<max ratios>,<recurrence 0/1>" overrides the hull settings (new build only).
 hull_env <- Sys.getenv("FASTMR_HULL")
 if (nzchar(hull_env)) { h <- as.numeric(strsplit(hull_env, ",")[[1]]); fastMR:::fastmr_set_mode_hull_native(h[1], as.logical(h[2])) }
+# FASTMR_OVERLAP=0/1 turns the double-buffered bootstrap batches off/on (new build only).
+if (nzchar(Sys.getenv("FASTMR_OVERLAP"))) fastMR:::fastmr_set_bootstrap_overlap_native(Sys.getenv("FASTMR_OVERLAP") == "1")
+reps <- as.integer(Sys.getenv("BATCH_REPS", "3"))
 mk <- function(sizes, seed = 1) {
   set.seed(seed); g <- rep(seq_along(sizes), sizes); n <- length(g)
   bx <- rnorm(n, 0.1, 0.03) * sample(c(-1, 1), n, TRUE)
@@ -22,7 +25,7 @@ work <- list(k3 = rep(3, 12000), k10 = rep(10, 6000), k30 = rep(30, 2400), k100 
 out <- NULL
 for (w in names(work)) {
   d <- mk(work[[w]])
-  ts <- replicate(3, system.time(fast_mr(d, methods = five, nboot = 1000, seed = 1, threads = th))[["elapsed"]])
+  ts <- replicate(reps, system.time(fast_mr(d, methods = five, nboot = 1000, seed = 1, threads = th))[["elapsed"]])
   out <- rbind(out, data.frame(label = args[2], workload = w, pairs = length(work[[w]]), threads = th,
                                wall_s = min(ts), wall_s_median = median(ts)))
   print(tail(out, 1))

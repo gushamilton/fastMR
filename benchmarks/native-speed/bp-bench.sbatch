@@ -22,14 +22,18 @@ CPUSET=$(for c in 0 1 2 3; do cat /sys/devices/system/cpu/cpu$c/topology/thread_
 echo "pinned to CPUs: $CPUSET"
 run() { taskset -c "$CPUSET" "$@"; }
 mkdir -p results/$tag
-# Interleave the two builds so node drift hits both equally.
+# Interleave every configuration so node drift hits all of them equally.
+export BATCH_REPS=2
 for rep in 1 2; do
   for v in main new; do
     run Rscript $S/per-method.R lib-$v $v results/$tag/per-method-$v-$rep.csv > /dev/null
-    run Rscript $S/batch.R lib-$v $v 8 results/$tag/batch8-$v-$rep.csv > /dev/null
   done
+  run Rscript $S/batch.R lib-main main 8 results/$tag/batch8-main-$rep.csv > /dev/null
+  run Rscript $S/batch.R lib-new new 8 results/$tag/batch8-new-$rep.csv > /dev/null
+  # Attribution: hull path off, with and without the batch overlap.
+  FASTMR_HULL=0,1 FASTMR_OVERLAP=0 run Rscript $S/batch.R lib-new nohull-sync 8 results/$tag/batch8-nohull-sync-$rep.csv > /dev/null
+  FASTMR_HULL=0,1 FASTMR_OVERLAP=1 run Rscript $S/batch.R lib-new nohull-overlap 8 results/$tag/batch8-nohull-overlap-$rep.csv > /dev/null
+  FASTMR_OVERLAP=0 run Rscript $S/batch.R lib-new hull-sync 8 results/$tag/batch8-hull-sync-$rep.csv > /dev/null
 done
-# Attribution: the new build with the hull path off (RNG overlap only).
-FASTMR_HULL="0,1" run Rscript $S/batch.R lib-new new-nohull 8 results/$tag/batch8-new-nohull.csv > /dev/null
 MODE_KS=3,10,30,100,300,1000 run Rscript $S/mode_paths.R src-new > results/$tag/mode-paths.txt 2>&1
 echo done

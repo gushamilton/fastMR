@@ -2880,6 +2880,13 @@ constexpr double kMinRowsPerWorkerHeavy = 512.0;
 constexpr double kMinRowsPerWorkerCheap = 100000.0;
 constexpr double kMinDrawsPerWorker = 65536.0;
 
+// Bootstrap batches are double-buffered (draw batch b + 1 while batch b
+// computes) unless this is false. Results are identical either way. Measured
+// on 8 Slurm CPUs (4 cores x 2 hyperthreads), five methods, nboot = 1000: 3-19%
+// less wall time than synchronous batches; giving the drawing thread a CPU of
+// its own (7 compute workers) was slower except at 100 SNPs per pair.
+std::atomic<bool> bootstrap_overlap(true);
+
 // Test hook: scales the minimum work per worker (0 forces the parallel paths
 // on tiny inputs so the thread-equivalence tests still exercise them).
 std::atomic<double> min_work_scale(1.0);
@@ -2909,6 +2916,13 @@ double min_rows_per_worker(const BootstrapNeeds& needs) {
 double fastmr_set_work_scale_native(double scale) {
   if (!std::isfinite(scale) || scale < 0.0) Rcpp::stop("scale must be non-negative and finite");
   return min_work_scale.exchange(scale);
+}
+
+// Internal test hook: turn the double-buffered bootstrap batches on or off
+// and return the previous setting. Results are identical either way.
+// [[Rcpp::export]]
+bool fastmr_set_bootstrap_overlap_native(bool overlap) {
+  return bootstrap_overlap.exchange(overlap);
 }
 
 // Internal test hooks for the mode-density paths. Set the largest ratio count
@@ -3642,7 +3656,8 @@ Rcpp::List fastmr_run_groups_boot_native(Rcpp::IntegerVector offsets,
   double total_draws = 0.0;
   for (std::size_t g = 0; g < groups; ++g) total_draws += counts[g];
   const double mean_draws = groups > 0 ? total_draws / static_cast<double>(groups) : 0.0;
-  const double budget = threads > 1
+  const bool overlap = bootstrap_overlap.load(std::memory_order_relaxed);
+  const double budget = threads > 1 && overlap
     ? std::min(batch_draws, std::max({total_draws / 8.0, 1048576.0,
                                       32.0 * static_cast<double>(threads) * mean_draws}))
     : batch_draws;
@@ -3690,6 +3705,26 @@ Rcpp::List fastmr_run_groups_boot_native(Rcpp::IntegerVector offsets,
           for (std::size_t j = 0; j < k; ++j) out[j] = R::rnorm(0.0, 1.0);
         }
         pos += k;
+      }
+      if (!overlap) {
+        // Synchronous batches (the pre-overlap code path, kept as a switch).
+        if (inversion) inversion_normals_finish(buffer.draws.data(), pos, workers);
+        const double* draw_data = buffer.draws.data();
+        {
+          DeferRMath deferred;
+          run_parallel(batch_groups, workers, [&](std::size_t index) {
+            const std::size_t g = first + index;
+            std::vector<Result> results = compute_pair(
+              group_prepared(in, static_cast<R_xlen_t>(g)), parsed_methods, nboot,
+              R_NilValue, true, phi, penk, draw_data + buffer.start[index]);
+            store(g, results);
+          });
+        }
+        for (std::size_t k = first * method_count; k < last * method_count; ++k) {
+          populate_result_pvalues(all[k]);
+        }
+        first = last;
+        continue;
       }
       // At most one batch computes at a time: the previous one must finish
       // before this one starts (its buffer is reused by the next batch).

@@ -137,6 +137,9 @@ test_that("double-buffered batches keep the serial draws, results and RNG state"
     for (budget in c(150, 2000)) {
       old <- options(fastMR.bootstrap_batch_draws = budget)
       expect_boot_identical(d, threads = c(1L, 2L, 4L, 8L), methods = boot_method_sets[[1]], nboot = 12)
+      previous <- fastMR:::fastmr_set_bootstrap_overlap_native(FALSE)
+      expect_boot_identical(d, threads = c(2L, 8L), methods = boot_method_sets[[1]], nboot = 12)
+      fastMR:::fastmr_set_bootstrap_overlap_native(previous)
       options(old)
     }
   }
