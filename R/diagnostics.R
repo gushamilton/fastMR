@@ -289,8 +289,11 @@ fastmr_leaveoneout_closed_form <- function(prepared, rows, group, offsets, metho
   } else if (method == "ivw_mre") {
     se[valid] <- residual_se[valid]
   } else {
+    # TwoSampleMR mr_ivw: se / min(1, sigma); an exact fit (sigma == 0) takes
+    # the limit, the fixed-effect se, as the native IVW does.
     correction <- pmin(1, sigma)
-    se[valid] <- residual_se[valid] / correction[valid]
+    se[valid] <- ifelse(sigma[valid] > 0, residual_se[valid] / correction[valid],
+                        base_se[valid])
   }
   valid_p <- valid & is.finite(beta) & is.finite(se) & se > 0
   p[valid_p] <- 2 * stats::pnorm(abs(beta[valid_p] / se[valid_p]), lower.tail = FALSE)

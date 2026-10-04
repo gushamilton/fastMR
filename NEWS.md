@@ -1,3 +1,21 @@
+# fastMR (development)
+
+- `fast_clump_compressed()` (`candidate_source = "pvalue_flag"`) checks the
+  batched `read_candidates_batch(strategy = "pvalue_flag")` result against each
+  store's flagged-row count (from the store manifest, or the flag stream when
+  the manifest lacks it) and falls back to the per-store reader, with a
+  warning, on any mismatch or error. CompreSSoR 0.7.0 could silently drop
+  flagged rows in batches that mixed variant sets, which lost every instrument
+  for some exposures. The full-store batch path, which has no count to check
+  against, is used only with a CompreSSoR that reports the
+  `"candidates_batch_rows_checked"` capability (>= 0.7.1).
+- IVW on an exact fit (residual standard error 0, e.g. a self-pair with
+  outcome = exposure) returns the fixed-effect standard error, as TwoSampleMR
+  and fastMR <= 0.1.9's sparse kernel did, instead of se 0 and p NA (`"ivw"`)
+  or se NA (`"ivw_fe"`). This applies to `fast_mr()`, the shared-grid and
+  sparse IVW kernels (and so `fast_mr_compressed()`) and leave-one-out IVW.
+  The sparse kernel had adopted the 0-se formula in d53afb8 (0.1.10).
+
 # fastMR 0.2.0
 
 - `fast_mr_compressed()`'s pairwise path (every non-IVW method set, or

@@ -755,6 +755,22 @@ void prepare_ratios(Prepared& p) {
   }
 }
 
+// IVW standard errors as TwoSampleMR: multiplicative random effects
+// se / min(1, sigma) (mr_ivw) and fixed effects se / sigma (mr_ivw_fe), where
+// se = base_se * sigma is the residual-scaled lm() standard error.  Both
+// reduce to the fixed-effect base_se when the residual variance is under-
+// dispersed; for an exact fit (sigma == 0, e.g. a self-pair with outcome ==
+// exposure) the ratio is 0/0, and its limit, base_se, is returned rather than 0.
+inline double ivw_mre_se(double base_se, double residual_se, double sigma) {
+  if (!std::isfinite(sigma)) return residual_se;
+  return sigma > 0.0 ? residual_se / std::min(1.0, sigma) : base_se;
+}
+
+inline double ivw_fe_se(double base_se, double residual_se, double sigma) {
+  if (!std::isfinite(sigma)) return NA_VALUE;
+  return sigma > 0.0 ? residual_se / sigma : base_se;
+}
+
 Result compute_ivw(const Prepared& p, const std::string& method) {
   const int n = static_cast<int>(p.x.size());
   if (n < 2) return empty_result(method, n);
@@ -779,11 +795,9 @@ Result compute_ivw(const Prepared& p, const std::string& method) {
   const double residual_se = base_se * sigma;
   double se = residual_se;
   if (method == "ivw") {
-    se = sigma > 0.0 && std::isfinite(sigma)
-      ? residual_se / std::min(1.0, sigma)
-      : residual_se;
+    se = ivw_mre_se(base_se, residual_se, sigma);
   } else if (method == "ivw_fe") {
-    se = sigma > 0.0 && std::isfinite(sigma) ? residual_se / sigma : NA_VALUE;
+    se = ivw_fe_se(base_se, residual_se, sigma);
   }
   Result result = empty_result(method, n);
   result.beta = beta;
@@ -1664,10 +1678,9 @@ std::vector<Result> compute_ivw_grid_blas(
         Result result = empty_result(method, snp_count);
         result.beta = beta_value;
         if (method == "ivw") {
-          result.se = sigma > 0.0 && std::isfinite(sigma)
-            ? residual_se / std::min(1.0, sigma) : residual_se;
+          result.se = ivw_mre_se(base_se, residual_se, sigma);
         } else if (method == "ivw_fe") {
-          result.se = sigma > 0.0 && std::isfinite(sigma) ? residual_se / sigma : NA_VALUE;
+          result.se = ivw_fe_se(base_se, residual_se, sigma);
         } else {
           result.se = residual_se;
         }
@@ -1787,11 +1800,9 @@ Rcpp::List compute_ivw_grid_compact(const GridData& grid,
           const std::string& method = methods[static_cast<std::size_t>(method_index)];
           double method_se = residual_se;
           if (method == "ivw") {
-            method_se = sigma_value > 0.0 && std::isfinite(sigma_value)
-              ? residual_se / std::min(1.0, sigma_value) : residual_se;
+            method_se = ivw_mre_se(base_se, residual_se, sigma_value);
           } else if (method == "ivw_fe") {
-            method_se = sigma_value > 0.0 && std::isfinite(sigma_value)
-              ? residual_se / sigma_value : NA_VALUE;
+            method_se = ivw_fe_se(base_se, residual_se, sigma_value);
           }
           beta(method_index, pair) = beta_value;
           se(method_index, pair) = method_se;
@@ -2155,8 +2166,7 @@ Rcpp::List compute_sparse_ivw_grid(
       const double residual_se = base_se * sigma_value;
       result_beta[ result_index ] = beta_value;
       result_sigma[ result_index ] = sigma_value;
-      result_se[ result_index ] = sigma_value > 0.0
-        ? residual_se / std::min(1.0, sigma_value) : residual_se;
+      result_se[ result_index ] = ivw_mre_se(base_se, residual_se, sigma_value);
       result_q[ result_index ] = q_value;
     }
   }
