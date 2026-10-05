@@ -46,8 +46,9 @@ take `STORAGE_FORMATS` / `MULTI_FORMATS` to re-time a single format.
 
 - v7: fastMR `fb62057` + CompreSSoR `f91bb8d` (lib6), the previous published numbers.
 - v8: fastMR `543cae2` + CompreSSoR `d158622` (lib7), merged main.
-- v9: fastMR `671c85f` (PR #37, branch `fix/clump-flag-preread`) + CompreSSoR `d158622` (lib8). It is v8 plus the
-  fix for the clump-stage regression v8 introduced.
+- v9: fastMR `671c85f` (PR #37) + CompreSSoR `d158622` (lib8). It is v8 plus the fix for the clump-stage
+  regression v8 introduced. #37 is merged, so v9 is main as of merge `0f31eef`, whose tree is identical to
+  `671c85f`.
 
 All cells ran on Intel Xeon Gold 6226R with 8 Slurm CPUs (4 physical cores with hyperthreading). Values are medians
 of 3 replicates in fresh processes; min-max are in `results_v8/` and `results_v9/` (`e2e/compare_v8.R`,
