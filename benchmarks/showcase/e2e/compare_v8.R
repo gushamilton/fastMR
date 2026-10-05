@@ -1,8 +1,9 @@
 # Old (v7: fastMR fb62057 + CompreSSoR f91bb8d, lib6) vs new (v8: fastMR 543cae2 + CompreSSoR d158622, lib7) tables.
 # Reads the assembled replicate dirs (final10*, final25*), the 50x50 fastMR dirs, the storage and multi-trait CSVs.
-# Writes CSVs to showcase/summary_v8/ and prints them. Rscript compare_v8.R
+# Writes CSVs to showcase/summary_<NEW_TAG>/ and prints them. Rscript compare_v8.R
+# Env NEW_TAG (default v8; v9 = the fix/clump-flag-preread build) and AB_DIR (default results_ab).
 suppressMessages(library(data.table))
-SH <- "/user/work/fh6520/showcase"; E <- file.path(SH, "e2e"); OUT <- file.path(SH, "summary_v8"); dir.create(OUT, FALSE)
+SH <- "/user/work/fh6520/showcase"; E <- file.path(SH, "e2e"); NT <- Sys.getenv("NEW_TAG", "v8"); OUT <- file.path(SH, paste0("summary_", NT)); dir.create(OUT, FALSE)
 wall_of <- function(tf) { x <- sub(".*: ", "", grep("Elapsed \\(wall", readLines(tf), value = TRUE)); p <- as.numeric(strsplit(x, ":")[[1]])
   sum(p * 60^(rev(seq_along(p)) - 1)) }
 cells <- function(root) rbindlist(lapply(list.dirs(root, recursive = TRUE), function(d) {
@@ -13,7 +14,7 @@ cells <- function(root) rbindlist(lapply(list.dirs(root, recursive = TRUE), func
              rss_mb = as.numeric(sub(".*: ", "", grep("Maximum resident", readLines(file.path(d, "time.txt")), value = TRUE))) / 1024,
              host = m$host, cpu = m$cpu, fastmr = m$fastmr, compressor = m$compressor, stages = list(st)) }), fill = TRUE)
 old <- rbind(cells(file.path(E, "final10")), cells(file.path(E, "final25")), cells(file.path(E, "results_v7_traits50_v7"))[size == "50x50"])
-new <- rbind(cells(file.path(E, "final10_v8")), cells(file.path(E, "final25_v8")), cells(file.path(E, "results_v8_traits50_v8"))[size == "50x50"])
+new <- rbind(cells(file.path(E, paste0("final10_", NT))), cells(file.path(E, paste0("final25_", NT))), cells(file.path(E, sprintf("results_%s_traits50_v8", NT)))[size == "50x50"])
 new <- new[arm %in% c("C1", "C8")]
 cat("== CPU models seen\n"); print(rbind(old[, .(set = "old", arm, cpu)], new[, .(set = "new", arm, cpu)])[, .N, by = .(set, cpu)])
 smr <- function(d) d[, .(n = .N, median = median(wall), min = min(wall), max = max(wall), rss_mb = median(rss_mb)), by = .(size, arm)]
@@ -33,7 +34,7 @@ S[, change_pct := 100 * (new - old) / old]; fwrite(S, file.path(OUT, "e2e_stages
 # agreement
 ag <- function(root, s, what) rbindlist(lapply(1:3, function(r) { f <- file.path(root, sprintf("rep%d/agreement_%s_%s.csv", r, s, what))
   if (file.exists(f)) fread(f)[, rep := r] }), fill = TRUE)
-A <- rbindlist(lapply(list(c("old", "final10", "10x10"), c("old", "final25", "25x25"), c("new", "final10_v8", "10x10"), c("new", "final25_v8", "25x25"), c("old", "final10", "1x1"), c("new", "final10_v8", "1x1")),
+A <- rbindlist(lapply(list(c("old", "final10", "10x10"), c("old", "final25", "25x25"), c("new", paste0("final10_", NT), "10x10"), c("new", paste0("final25_", NT), "25x25"), c("old", "final10", "1x1"), c("new", paste0("final10_", NT), "1x1")),
   function(z) { root <- file.path(E, z[2]); i <- ag(root, z[3], "instr"); e <- ag(root, z[3], "est")
     if (!nrow(i)) return(NULL)
     i1 <- i[rep == 1 & arm %in% c("C1", "C8"), .(instr_ref = sum(n_ref), instr_arm = sum(n_arm), all_jaccard_1 = all(jaccard == 1)), by = arm]
@@ -42,13 +43,13 @@ A <- rbindlist(lapply(list(c("old", "final10", "10x10"), c("old", "final25", "25
                                      wald_rows = sum(pairs[method == "Wald ratio"]) / uniqueN(rep)), by = arm]
     merge(i1, e1, by = "arm")[, `:=`(build = z[1], size = z[3])] }))
 setcolorder(A, c("build", "size")); fwrite(A, file.path(OUT, "agreement_old_vs_new.csv")); cat("\n== agreement (C arms vs TSMR arm A)\n"); print(A, digits = 4)
-dz <- c(final10_v8 = "10x10", final25_v8 = "25x25")
+dz <- setNames(c("10x10", "25x25"), paste0(c("final10_", "final25_"), NT))
 W <- rbindlist(lapply(names(dz), function(z) ag(file.path(E, z), dz[[z]], "wald")), fill = TRUE)
-if (nrow(W)) { fwrite(W, file.path(OUT, "agreement_wald_v8.csv")); cat("\n== single-SNP Wald ratio check (v8)\n"); print(W, digits = 4) }
+if (nrow(W)) { fwrite(W, file.path(OUT, paste0("agreement_wald_", NT, ".csv"))); cat("\n== single-SNP Wald ratio check (", NT, ")\n"); print(W, digits = 4) }
 X <- rbindlist(lapply(names(dz), function(z) ag(file.path(E, z), dz[[z]], "exact")[, size := dz[[z]]]), fill = TRUE)
-if (nrow(X)) { X <- X[rep == 1]; fwrite(X, file.path(OUT, "agreement_exact_v8.csv")); cat("\n== exactness fast_mr vs TSMR on the same harmonised data (v8, rep1)\n"); print(X, digits = 3) }
+if (nrow(X)) { X <- X[rep == 1]; fwrite(X, file.path(OUT, paste0("agreement_exact_", NT, ".csv"))); cat("\n== exactness fast_mr vs TSMR on the same harmonised data (", NT, ", rep1)\n"); print(X, digits = 3) }
 # scaling
-for (t in c("v7", "v8")) { f <- file.path(E, sprintf("scaling_check_%s.csv", t)); if (file.exists(f)) { cat("\n== scaling check", t, "\n"); print(fread(f), digits = 4) } }
+for (t in c("v7", NT)) { f <- file.path(E, sprintf("scaling_check_%s.csv", t)); if (file.exists(f)) { cat("\n== scaling check", t, "\n"); print(fread(f), digits = 4) } }
 # storage (single FinnGen GWAS, cpr)
 SR <- file.path(SH, "storage/results")
 so <- function(tag) rbindlist(lapply(1:3, function(r) { f <- file.path(SR, sprintf("%s%d_ops.csv", tag, r)); if (file.exists(f)) fread(f, colClasses = list(character = "note")) }), fill = TRUE)[format == "cpr"]
@@ -70,12 +71,12 @@ M[, `:=`(speedup_vs_tsv_new = tsv_wall / wall_new, rows_match_tsv = n_rows_new =
 fwrite(M, file.path(OUT, "multi_cpr_old_vs_new.csv")); cat("\n== multi-trait (cpr vs tsv.gz)\n"); print(M[, !c("n_old", "n_new")], digits = 4)
 fp <- file.path(MR, c("repv7_multi_footprint.csv", "repv8_multi_footprint.csv")); if (all(file.exists(fp))) { cat("\n== multi footprint\n"); print(merge(fread(fp[1]), fread(fp[2]), by = c("format", "ntraits"), suffixes = c("_v7", "_v8"))) }
 # same-node A/B control (e2e_ab.sbatch): C8 on both builds, interleaved in one job per replicate
-AB <- file.path(E, "results_ab")
+AB <- file.path(E, Sys.getenv("AB_DIR", "results_ab"))
 if (dir.exists(AB)) {
   ab <- rbindlist(lapply(list.dirs(AB, recursive = TRUE), function(d) { b <- basename(d)
-    if (!grepl("^[0-9]+x[0-9]+_C8_v[78]_r[0-9]$", b) || !file.exists(file.path(d, "stages.csv"))) return(NULL)
+    if (!grepl("^[0-9]+x[0-9]+_C8_v[0-9]+_r[0-9]$", b) || !file.exists(file.path(d, "stages.csv"))) return(NULL)
     s <- fread(file.path(d, "stages.csv"))
-    data.table(size = sub("_.*", "", b), build = sub(".*_(v[78])_.*", "\\1", b), rep = basename(dirname(d)), wall = wall_of(file.path(d, "time.txt")),
+    data.table(size = sub("_.*", "", b), build = sub(".*_(v[0-9]+)_.*", "\\1", b), rep = basename(dirname(d)), wall = wall_of(file.path(d, "time.txt")),
                clump = s[stage == "clump", wall_s], clump_cpu = s[stage == "clump", cpu_s], extract = s[stage == "extract", wall_s], mr = s[stage == "mr", wall_s]) }))
   ABs <- ab[, .(cells = .N, wall_median = median(wall), wall_min = min(wall), wall_max = max(wall), clump = median(clump), clump_cpu = median(clump_cpu),
                 extract = median(extract), mr = median(mr)), by = .(size, build)]
