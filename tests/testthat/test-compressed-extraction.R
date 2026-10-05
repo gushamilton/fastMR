@@ -157,7 +157,7 @@ test_that("a build without identity codes falls back to the string path once", {
   state$coded_reads <- NULL
   calls <- 0L
   real <- CompreSSoR::read_sumstats_batch
-  refusing <- function(stores, variants = NULL, columns, threads = 1L, region = NULL) {
+  refusing <- function(stores, variants = NULL, columns, threads = 1L, region = NULL, ...) {
     calls <<- calls + 1L
     if (any(c("global_position", "substitution") %in% columns)) {
       stop("requested columns are not present: global_position, substitution")
@@ -165,13 +165,14 @@ test_that("a build without identity codes falls back to the string path once", {
     real(stores, variants, columns = columns, threads = threads)
   }
   testthat::local_mocked_bindings(read_sumstats_batch = refusing, .package = "CompreSSoR")
+  # The manifest-decoding path (this test predates CompreSSoR's request index).
   got <- fastMR:::fastmr_io_map(stores, list(keys, keys), c("beta", "standard_error"), 1L,
-                                codecs = codecs)
+                                codecs = codecs, use_request_index = FALSE)
   expect_identical(got, strings)
   expect_identical(calls, 2L)
   expect_false(fastMR:::fastmr_coded_reads_supported())
   got <- fastMR:::fastmr_io_map(stores, list(keys, keys), c("beta", "standard_error"), 1L,
-                                codecs = codecs)
+                                codecs = codecs, use_request_index = FALSE)
   expect_identical(got, strings)
   expect_identical(calls, 3L)
 })
