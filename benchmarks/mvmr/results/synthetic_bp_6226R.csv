@@ -1,0 +1,13 @@
+"case","weights","threads","E","K","p","seconds","pairs_per_second","shared_fits","cpu","extrapolated_full_seconds"
+"kernel_with_QA","exact",1,1000,3000,3,37.552,79889.2202812101,0,"Intel(R) Xeon(R) Gold 6226R CPU @ 2.90GHz",37.552
+"kernel_with_QA","shared",1,1000,3000,3,31.58,94996.8334388854,3e+06,"Intel(R) Xeon(R) Gold 6226R CPU @ 2.90GHz",31.58
+"kernel_with_QA","exact",2,1000,3000,3,20.264,148045.795499408,0,"Intel(R) Xeon(R) Gold 6226R CPU @ 2.90GHz",20.264
+"kernel_with_QA","shared",2,1000,3000,3,17.624,170222.423967317,3e+06,"Intel(R) Xeon(R) Gold 6226R CPU @ 2.90GHz",17.624
+"kernel_with_QA","exact",4,1000,3000,3,12.416,241623.711340206,0,"Intel(R) Xeon(R) Gold 6226R CPU @ 2.90GHz",12.416
+"kernel_with_QA","shared",4,1000,3000,3,11.098,270318.976392143,3e+06,"Intel(R) Xeon(R) Gold 6226R CPU @ 2.90GHz",11.098
+"kernel_with_QA","exact",8,1000,3000,3,12.14,247116.968698518,0,"Intel(R) Xeon(R) Gold 6226R CPU @ 2.90GHz",12.14
+"kernel_with_QA","shared",8,1000,3000,3,10.405,288322.921672273,3e+06,"Intel(R) Xeon(R) Gold 6226R CPU @ 2.90GHz",10.405
+"kernel_no_diagnostics","exact",1,1000,3000,3,21.204,141482.739105829,0,"Intel(R) Xeon(R) Gold 6226R CPU @ 2.90GHz",21.204
+"kernel_no_diagnostics","exact",8,1000,3000,3,7.68300000000002,390472.471690745,0,"Intel(R) Xeon(R) Gold 6226R CPU @ 2.90GHz",7.68300000000002
+"fast_mr_multivariable_loop","exact",1,3,3000,3,22.58,398.582816651905,0,"Intel(R) Xeon(R) Gold 6226R CPU @ 2.90GHz",7526.66666666666
+"R_loop_vectorised_outcomes","exact",1,50,3000,3,4.43300000000002,33837.130611324,0,"Intel(R) Xeon(R) Gold 6226R CPU @ 2.90GHz",88.6600000000004

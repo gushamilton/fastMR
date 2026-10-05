@@ -259,6 +259,42 @@ BEGIN_RCPP
     return rcpp_result_gen;
 END_RCPP
 }
+// fastmr_mvmr_batch_native
+Rcpp::List fastmr_mvmr_batch_native(Rcpp::IntegerVector row_ptr, Rcpp::IntegerVector rows, Rcpp::NumericMatrix design, Rcpp::NumericMatrix outcome_beta, Rcpp::NumericMatrix outcome_se, int se_model, int threads, Rcpp::Nullable<Rcpp::NumericMatrix> design_se, Rcpp::Nullable<Rcpp::NumericVector> design_cor, Rcpp::Nullable<Rcpp::NumericVector> shared_row_se, Rcpp::Nullable<Rcpp::NumericVector> shared_outcome_scale, Rcpp::Nullable<Rcpp::LogicalVector> shared_outcome, bool return_vcov);
+RcppExport SEXP _fastMR_fastmr_mvmr_batch_native(SEXP row_ptrSEXP, SEXP rowsSEXP, SEXP designSEXP, SEXP outcome_betaSEXP, SEXP outcome_seSEXP, SEXP se_modelSEXP, SEXP threadsSEXP, SEXP design_seSEXP, SEXP design_corSEXP, SEXP shared_row_seSEXP, SEXP shared_outcome_scaleSEXP, SEXP shared_outcomeSEXP, SEXP return_vcovSEXP) {
+BEGIN_RCPP
+    Rcpp::RObject rcpp_result_gen;
+    Rcpp::RNGScope rcpp_rngScope_gen;
+    Rcpp::traits::input_parameter< Rcpp::IntegerVector >::type row_ptr(row_ptrSEXP);
+    Rcpp::traits::input_parameter< Rcpp::IntegerVector >::type rows(rowsSEXP);
+    Rcpp::traits::input_parameter< Rcpp::NumericMatrix >::type design(designSEXP);
+    Rcpp::traits::input_parameter< Rcpp::NumericMatrix >::type outcome_beta(outcome_betaSEXP);
+    Rcpp::traits::input_parameter< Rcpp::NumericMatrix >::type outcome_se(outcome_seSEXP);
+    Rcpp::traits::input_parameter< int >::type se_model(se_modelSEXP);
+    Rcpp::traits::input_parameter< int >::type threads(threadsSEXP);
+    Rcpp::traits::input_parameter< Rcpp::Nullable<Rcpp::NumericMatrix> >::type design_se(design_seSEXP);
+    Rcpp::traits::input_parameter< Rcpp::Nullable<Rcpp::NumericVector> >::type design_cor(design_corSEXP);
+    Rcpp::traits::input_parameter< Rcpp::Nullable<Rcpp::NumericVector> >::type shared_row_se(shared_row_seSEXP);
+    Rcpp::traits::input_parameter< Rcpp::Nullable<Rcpp::NumericVector> >::type shared_outcome_scale(shared_outcome_scaleSEXP);
+    Rcpp::traits::input_parameter< Rcpp::Nullable<Rcpp::LogicalVector> >::type shared_outcome(shared_outcomeSEXP);
+    Rcpp::traits::input_parameter< bool >::type return_vcov(return_vcovSEXP);
+    rcpp_result_gen = Rcpp::wrap(fastmr_mvmr_batch_native(row_ptr, rows, design, outcome_beta, outcome_se, se_model, threads, design_se, design_cor, shared_row_se, shared_outcome_scale, shared_outcome, return_vcov));
+    return rcpp_result_gen;
+END_RCPP
+}
+// fastmr_mvmr_se_factors_native
+Rcpp::List fastmr_mvmr_se_factors_native(Rcpp::NumericMatrix outcome_beta, Rcpp::NumericMatrix outcome_se, int threads);
+RcppExport SEXP _fastMR_fastmr_mvmr_se_factors_native(SEXP outcome_betaSEXP, SEXP outcome_seSEXP, SEXP threadsSEXP) {
+BEGIN_RCPP
+    Rcpp::RObject rcpp_result_gen;
+    Rcpp::RNGScope rcpp_rngScope_gen;
+    Rcpp::traits::input_parameter< Rcpp::NumericMatrix >::type outcome_beta(outcome_betaSEXP);
+    Rcpp::traits::input_parameter< Rcpp::NumericMatrix >::type outcome_se(outcome_seSEXP);
+    Rcpp::traits::input_parameter< int >::type threads(threadsSEXP);
+    rcpp_result_gen = Rcpp::wrap(fastmr_mvmr_se_factors_native(outcome_beta, outcome_se, threads));
+    return rcpp_result_gen;
+END_RCPP
+}
 
 static const R_CallMethodDef CallEntries[] = {
     {"_fastMR_fastmr_vcor_read", (DL_FUNC) &_fastMR_fastmr_vcor_read, 2},
@@ -277,6 +313,8 @@ static const R_CallMethodDef CallEntries[] = {
     {"_fastMR_fastmr_group_sum_native", (DL_FUNC) &_fastMR_fastmr_group_sum_native, 3},
     {"_fastMR_fastmr_group_mean_native", (DL_FUNC) &_fastMR_fastmr_group_mean_native, 2},
     {"_fastMR_fastmr_run_groups_boot_native", (DL_FUNC) &_fastMR_fastmr_run_groups_boot_native, 12},
+    {"_fastMR_fastmr_mvmr_batch_native", (DL_FUNC) &_fastMR_fastmr_mvmr_batch_native, 13},
+    {"_fastMR_fastmr_mvmr_se_factors_native", (DL_FUNC) &_fastMR_fastmr_mvmr_se_factors_native, 3},
     {NULL, NULL, 0}
 };
 

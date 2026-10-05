@@ -1,0 +1,2 @@
+"case","exposures","outcomes","fits","seconds","per_fit_ms","extrapolated_2610_seconds","cpu"
+"fast_mr_multivariable_loop",5,2940,14700,31.691,2.15585034013605,16542.702,"Intel(R) Xeon(R) Gold 6226R CPU @ 2.90GHz"

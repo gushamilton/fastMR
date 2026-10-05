@@ -65,3 +65,11 @@ fastmr_run_groups_boot_native <- function(offsets, exposure_beta, outcome_beta, 
     .Call(`_fastMR_fastmr_run_groups_boot_native`, offsets, exposure_beta, outcome_beta, exposure_se, outcome_se, methods, nboot, threads, phi, penk, reseed, batch_draws)
 }
 
+fastmr_mvmr_batch_native <- function(row_ptr, rows, design, outcome_beta, outcome_se, se_model, threads, design_se = NULL, design_cor = NULL, shared_row_se = NULL, shared_outcome_scale = NULL, shared_outcome = NULL, return_vcov = FALSE) {
+    .Call(`_fastMR_fastmr_mvmr_batch_native`, row_ptr, rows, design, outcome_beta, outcome_se, se_model, threads, design_se, design_cor, shared_row_se, shared_outcome_scale, shared_outcome, return_vcov)
+}
+
+fastmr_mvmr_se_factors_native <- function(outcome_beta, outcome_se, threads) {
+    .Call(`_fastMR_fastmr_mvmr_se_factors_native`, outcome_beta, outcome_se, threads)
+}
+

@@ -1,5 +1,21 @@
 # fastMR (development)
 
+- New batched multivariable MR. `fast_mvmr_ivw()` and `fast_mvmr_ivw_batch()`
+  fit TwoSampleMR `mv_ivw()` / `mv_multiple()` multivariable IVW for many
+  outcomes (and many designs) in one OpenMP / std::thread native call, with
+  exact outcome-specific weights by default and an optional shared-weight
+  path for proportional outcome standard errors. Standard errors follow
+  TwoSampleMR's multivariable convention (residual standard error, not
+  floored); `se_model = "multiplicative_floored"` and `"fixed"` are
+  available. Diagnostics: Sanderson-Windmeijer conditional F (as
+  `MVMR::strength_mvmr()`, divided by L - (p - 1)) with a weak-instrument
+  warning, and Sanderson's `Q_A`. `fast_mvmr_compressed()` runs classical or
+  residualised covariate adjustment for every exposure-outcome pair directly
+  from CompreSSoR stores, with covariates from stores or external summary
+  statistics, optional LD resolution of instrument unions, per-outcome SNP
+  exclusion windows and `fast_mr_compressed()`-style strict handling and
+  timing metadata.
+
 - `fast_clump_compressed(candidate_source = "pvalue_flag")`: with a CompreSSoR
   that reports `"candidates_batch_rows_checked"`, the batched candidate read
   is no longer preceded by a separate, store-by-store decode of every store's
