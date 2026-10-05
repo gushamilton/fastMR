@@ -131,14 +131,14 @@ fastmr_mvmr_engine <- function(row_ptr, rows, design, outcome_beta, outcome_se,
   shared <- NULL
   if (identical(weights, "shared")) {
     shared <- fastmr_mvmr_se_factors(outcome_se)
+    # The shared path only checks outcome betas, so an outcome with a beta
+    # whose standard error is invalid stays on the exact path.
+    invalid_se <- colSums(is.finite(outcome_beta) &
+                            !(is.finite(outcome_se) & outcome_se > 0)) > 0
     shared$use <- !is.na(shared$deviation) & shared$deviation <= shared_tolerance &
-      is.finite(shared$scale)
+      is.finite(shared$scale) & !invalid_se
     row_se <- shared$row_se
     row_se[!is.finite(row_se)] <- NA_real_
-    # The shared path only checks outcome betas, so a cell without a valid
-    # standard error must not carry a beta.
-    bad <- !(is.finite(outcome_se) & outcome_se > 0)
-    if (any(bad & is.finite(outcome_beta))) outcome_beta[bad] <- NA_real_
   }
   native <- fastmr_mvmr_batch_native(
     as.integer(row_ptr), as.integer(rows) - 1L, design, outcome_beta, outcome_se,

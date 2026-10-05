@@ -75,8 +75,11 @@ void mv_parallel(std::size_t jobs, int threads, Job job) {
 // In-place Cholesky of the lower triangle of the p x p row-major matrix `a`,
 // then its inverse into `inv` (full, symmetric).  False when a pivot is not
 // positive or falls below kPivotTolerance of its original diagonal.
-bool spd_inverse(std::vector<double>& a, std::vector<double>& inv, int p) {
-  std::vector<double> diag(static_cast<std::size_t>(p));
+// `scratch` must hold p * p + p doubles; no allocation per call.
+bool spd_inverse(std::vector<double>& a, std::vector<double>& inv, int p,
+                 std::vector<double>& scratch) {
+  double* diag = scratch.data();
+  double* linv = scratch.data() + p;
   for (int j = 0; j < p; ++j) diag[j] = a[j * p + j];
   for (int j = 0; j < p; ++j) {
     if (!(diag[j] > 0.0) || !std::isfinite(diag[j])) return false;
@@ -92,7 +95,7 @@ bool spd_inverse(std::vector<double>& a, std::vector<double>& inv, int p) {
     }
   }
   // L^{-1} (lower) into `linv`, then inv = L^{-T} L^{-1}.
-  std::vector<double> linv(static_cast<std::size_t>(p) * p, 0.0);
+  std::fill(linv, linv + static_cast<std::size_t>(p) * p, 0.0);
   for (int j = 0; j < p; ++j) {
     linv[j * p + j] = 1.0 / a[j * p + j];
     for (int i = j + 1; i < p; ++i) {
@@ -194,6 +197,7 @@ Rcpp::List fastmr_mvmr_batch_native(
   std::vector<double> row_se;
   std::vector<double> scale;
   std::vector<int> shared_ok;
+  std::vector<double> shared_weight;
   if (has_shared) {
     Rcpp::NumericVector r = Rcpp::as<Rcpp::NumericVector>(shared_row_se);
     Rcpp::NumericVector s = Rcpp::as<Rcpp::NumericVector>(shared_outcome_scale);
@@ -204,6 +208,10 @@ Rcpp::List fastmr_mvmr_batch_native(
     row_se.assign(r.begin(), r.end());
     scale.assign(s.begin(), s.end());
     shared_ok.assign(o.begin(), o.end());
+    shared_weight.resize(row_se.size());
+    for (std::size_t i = 0; i < row_se.size(); ++i) {
+      shared_weight[i] = row_se[i] > 0.0 ? 1.0 / (row_se[i] * row_se[i]) : MV_NA;
+    }
     for (int k = 0; k < outcome_count; ++k) {
       if (shared_ok[k] == NA_LOGICAL) shared_ok[k] = 0;
       if (shared_ok[k] && !(std::isfinite(scale[k]) && scale[k] > 0.0)) shared_ok[k] = 0;
@@ -252,18 +260,20 @@ Rcpp::List fastmr_mvmr_batch_native(
         }
       }
       std::vector<double> inv(static_cast<std::size_t>(p) * p);
-      if (spd_inverse(a, inv, p)) shared_inverse[e].swap(inv);
+      std::vector<double> scratch(static_cast<std::size_t>(p) * p + p);
+      if (spd_inverse(a, inv, p, scratch)) shared_inverse[e].swap(inv);
     });
   }
 
-  // Jobs: (design, block of outcomes); outcomes are the fast index so a block
-  // reuses the design rows from cache.
+  // Jobs: (block of outcomes, design), designs the fast index, so concurrent
+  // workers read the same outcome columns (rows shared between designs, such
+  // as covariate instruments, stay in cache).
   const int block = 32;
   const int blocks = (outcome_count + block - 1) / block;
   const std::size_t jobs = static_cast<std::size_t>(design_count) * blocks;
   mv_parallel(jobs, threads, [&](std::size_t job) {
-    const int e = static_cast<int>(job / blocks);
-    const int k_first = static_cast<int>(job % blocks) * block;
+    const int e = static_cast<int>(job % design_count);
+    const int k_first = static_cast<int>(job / design_count) * block;
     const int k_last = std::min(outcome_count, k_first + block);
     const int first = ptr_data[e];
     const int last = ptr_data[e + 1];
@@ -272,6 +282,7 @@ Rcpp::List fastmr_mvmr_batch_native(
     std::vector<double> inv(static_cast<std::size_t>(p) * p);
     std::vector<double> c(static_cast<std::size_t>(p));
     std::vector<double> b(static_cast<std::size_t>(p));
+    std::vector<double> scratch(static_cast<std::size_t>(p) * p + p);
     const double* cor_e = has_qa ? &cor[static_cast<std::size_t>(e) * p * p] : nullptr;
     for (int k = k_first; k < k_last; ++k) {
       const std::size_t cell = static_cast<std::size_t>(e) +
@@ -279,24 +290,23 @@ Rcpp::List fastmr_mvmr_batch_native(
       const double* yk = yb + static_cast<std::size_t>(panel_rows) * k;
       const double* sk = ys + static_cast<std::size_t>(panel_rows) * k;
       bool use_shared = has_shared && shared_ok[k] && !shared_inverse[e].empty();
-      if (use_shared) {
-        for (int idx = first; idx < last; ++idx) {
-          if (!std::isfinite(yk[row_data[idx]])) { use_shared = false; break; }
-        }
-      }
       double n = 0.0;
       double scale2 = 1.0;  // outcome_scale^2 on the shared path
       std::fill(c.begin(), c.end(), 0.0);
       bool solved = false;
       if (use_shared) {
+        // One pass; any missing outcome value sends the pair to the exact path.
         for (int idx = first; idx < last; ++idx) {
           const int i = row_data[idx];
-          const double r = row_se[i];
-          const double w = 1.0 / (r * r);
-          const double wy = w * yk[i];
+          const double y = yk[i];
+          if (!std::isfinite(y)) { use_shared = false; break; }
+          const double wy = shared_weight[i] * y;
           const double* xi = &x[static_cast<std::size_t>(idx) * p];
           for (int u = 0; u < p; ++u) c[u] += xi[u] * wy;
         }
+        if (!use_shared) std::fill(c.begin(), c.end(), 0.0);
+      }
+      if (use_shared) {
         n = static_cast<double>(n_rows);
         scale2 = scale[k] * scale[k];
         const std::vector<double>& si = shared_inverse[e];
@@ -325,7 +335,7 @@ Rcpp::List fastmr_mvmr_batch_native(
           }
           n += 1.0;
         }
-        if (n >= p && spd_inverse(a, inv, p)) {
+        if (n >= p && spd_inverse(a, inv, p, scratch)) {
           for (int u = 0; u < p; ++u) {
             double s = 0.0;
             for (int v = 0; v < p; ++v) s += inv[u * p + v] * c[v];
