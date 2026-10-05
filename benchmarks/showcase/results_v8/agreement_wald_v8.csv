@@ -1,0 +1,5 @@
+arm,size,tsmr_wald_rows,arm_nsnp1_ivw_rows,matched,max_abs_db,max_abs_dse,max_abs_dp,med_db_se,max_db_se,other_methods_rows,other_methods_all_na,tsmr_other_method_rows,rep
+fast_mr (same harmonised rows),10x10,100,100,100,0,0,0,0,0,400,TRUE,0,1
+fast_mr_compressed (.cpr stores),10x10,100,100,100,0.000511556669342522,0.000306609790975326,0.0025337932094327,2.63566939651095e-06,0.00703155263461193,400,TRUE,0,1
+fast_mr (same harmonised rows),25x25,625,625,625,0,0,0,0,0,2500,TRUE,0,1
+fast_mr_compressed (.cpr stores),25x25,625,625,625,0.000890984039828735,0.000333251948356456,0.00271209988707555,2.44151499104227e-06,0.00910834524402544,2500,TRUE,0,1

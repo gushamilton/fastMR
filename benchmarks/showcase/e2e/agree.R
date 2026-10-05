@@ -19,8 +19,11 @@ for (x in setdiff(names(L), ref)) {
                               jaccard = mapply(function(p) jac(L[[ref]]$harm[[p]], L[[x]]$harm[[p]]), pk))
 }
 # estimates: A vs others in SE units, per method
+# fastMR reports a single-instrument pair's Wald ratio under its IVW row (nsnp = 1); TwoSampleMR's mr() labels it
+# "Wald ratio", so the fastMR row is relabelled before matching. (No TSMR IVW row exists for nsnp = 1.)
 key <- function(m) {
-  m <- as.data.table(m); m[, k := paste(id.exposure, id.outcome, method, sep = "|")]; m[, .(k, method, b, se, pval, nsnp)] }
+  m <- as.data.table(m); m[nsnp == 1 & method == "Inverse variance weighted", method := "Wald ratio"]
+  m[, k := paste(id.exposure, id.outcome, method, sep = "|")]; m[, .(k, method, b, se, pval, nsnp)] }
 ma <- key(L[[ref]]$mr)
 for (x in setdiff(names(L), ref)) {
   mx <- key(L[[x]]$mr); j <- merge(ma, mx, by = c("k", "method"), suffixes = c(".A", ".x"))
