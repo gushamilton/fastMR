@@ -1,0 +1,12 @@
+file,bytes_v7,bytes_v8,content
+eaf.pco,8407000,8407000,identical
+exceptions.bin,644542,644542,identical
+manifest.json,98466,98547,differs
+manifest.sha256,65,65,differs
+native.index.json,173864,172803,differs
+position.pco,11260091,11260091,identical
+pvalue_flag.pco,3213,3213,identical
+pvalue_order.pco,405289,405289,identical
+se.pco,6037727,6037727,identical
+substitution.pco,3988809,3988809,identical
+z.pco,11635292,11635292,identical

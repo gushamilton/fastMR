@@ -20,7 +20,8 @@ meta <- data.table(arm = ARM, E = E, O = O, threads = TH, host = Sys.info()[["no
                    slurm_cpus = Sys.getenv("SLURM_CPUS_PER_TASK"), r = R.version.string,
                    fastmr = tryCatch(as.character(packageVersion("fastMR")), error = function(e) NA),
                    compressor = tryCatch(as.character(packageVersion("CompreSSoR")), error = function(e) NA),
-                   tsmr = tryCatch(as.character(packageVersion("TwoSampleMR")), error = function(e) NA))
+                   tsmr = tryCatch(as.character(packageVersion("TwoSampleMR")), error = function(e) NA),
+                   fastmr_sha = Sys.getenv("FASTMR_SHA", NA), compressor_sha = Sys.getenv("CS_SHA", NA))
 fwrite(meta, file.path(OUT, "meta.csv"))
 if (nzchar(Sys.getenv("SLURM_CPUS_PER_TASK")) && as.integer(Sys.getenv("SLURM_CPUS_PER_TASK")) < TH) stop("threads exceed allocation")
 stages <- file.path(OUT, "stages.csv"); if (file.exists(stages)) file.remove(stages)

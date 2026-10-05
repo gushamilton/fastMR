@@ -16,5 +16,6 @@ export STORAGE_ROOT=/user/work/fh6520/showcase/storage STORAGE_SCRIPTS=/user/wor
 export MULTI_ROOT=$STORAGE_ROOT/multi MULTI_SCRIPTS=$STORAGE_ROOT/multi/scripts
 export LIB_CS=${LIB_CS:-/user/work/fh6520/showcase/final/lib}
 export REP=${REP:-$SLURM_ARRAY_TASK_ID}
+if [ -n "${REQUIRE_CPU:-}" ] && ! lscpu | grep 'Model name' | grep -q "$REQUIRE_CPU"; then echo "wrong CPU: $(lscpu | grep 'Model name')"; exit 3; fi
 hostname; lscpu | grep 'Model name'; echo "nproc=$(nproc) SLURM_CPUS_PER_TASK=$SLURM_CPUS_PER_TASK LIB_CS=$LIB_CS"
 Rscript $MULTI_SCRIPTS/make_keys.R && Rscript $MULTI_SCRIPTS/run_multi.R
