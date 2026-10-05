@@ -113,7 +113,13 @@ test_that("a batched flag read with the right count but wrong rows or keys is re
   real <- CompreSSoR::read_candidates_batch
   flagged_b <- fastMR:::fastmr_store_flag_rows(CompreSSoR::open_compressor(paths[["b"]]))
   local({
-    # same count, but one row id is not a flagged row of store b
+    # same count, but one row id is not a flagged row of store b. fastMR checks
+    # row ids itself only on a CompreSSoR build without
+    # "candidates_batch_rows_checked" (a build with it compares every store's
+    # decoded rows with its own flag selection and stops on a mismatch), so
+    # this case is exercised with the capability switched off.
+    testthat::local_mocked_bindings(fastmr_have_checked_candidates_batch = function() FALSE,
+                                    .package = "fastMR")
     testthat::local_mocked_bindings(fastmr_read_candidates_batch = function(...) {
       got <- real(...)
       got[[2L]]$row[1L] <- setdiff(0:799, flagged_b)[1L]
@@ -148,4 +154,40 @@ test_that("the per-store flagged-row reader stops on a short read", {
   expect_error(fastMR:::fastmr_compressed_candidate_data(paths, names(paths), 5e-8, "pvalue_flag",
                                                         "reconstructed", 1L),
                "flagged-row read returned 14 of 15 rows")
+})
+
+test_that("with a rows-checked CompreSSoR the flag stream is not decoded a second time", {
+  skip_if_compressor_unavailable()
+  skip_on_os("windows")
+  skip_if_not(fastMR:::fastmr_have_flag_candidates_batch(), "batched pvalue_flag reader unavailable")
+  skip_if_not(fastMR:::fastmr_have_checked_candidates_batch(), "CompreSSoR without candidates_batch_rows_checked")
+  paths <- guard_stores()
+  labels <- names(paths)
+  cand <- function() fastMR:::fastmr_compressed_candidate_data(paths, labels, 5e-8, "pvalue_flag",
+                                                              "reconstructed", 1L)
+  reference <- local({
+    testthat::local_mocked_bindings(fastmr_have_flag_candidates_batch = function() FALSE,
+                                    .package = "fastMR")
+    cand()
+  })
+  unchecked <- local({
+    testthat::local_mocked_bindings(fastmr_have_checked_candidates_batch = function() FALSE,
+                                    .package = "fastMR")
+    cand()
+  })
+  testthat::local_mocked_bindings(fastmr_store_flag_rows = function(...) stop("flag rows pre-read"),
+                                  .package = "fastMR")
+  expect_no_warning(fast <- cand())
+  expect_identical(fast$data, reference$data)
+  expect_identical(fast$data, unchecked$data)
+  # the count check (manifest flagged-row count) still guards the batch
+  real <- CompreSSoR::read_candidates_batch
+  testthat::local_mocked_bindings(
+    fastmr_read_candidates_batch = function(...) {
+      got <- real(...)
+      got[[2L]] <- got[[2L]][-1L, , drop = FALSE]
+      got
+    }, .package = "fastMR")
+  expect_warning(dropped <- cand(), "store 'b' returned 8 of 9 flagged rows")
+  expect_identical(dropped$data, reference$data)
 })

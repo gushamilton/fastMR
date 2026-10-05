@@ -810,8 +810,16 @@ fastmr_compressed_candidate_data <- function(paths, labels, pvalue_threshold,
     flag_rows <- NULL
     if (fastmr_have_flag_candidates_batch()) {
       # The flagged row ids are the request: the batch must return exactly
-      # these rows.  They are reused by the per-store fallback below.
-      flag_rows <- lapply(stores, fastmr_store_flag_rows, io_threads = io_threads)
+      # these rows.  A CompreSSoR build with "candidates_batch_rows_checked"
+      # verifies that itself (every store's decoded rows must be identical to
+      # the rows its own flag read selected, and their number must equal the
+      # manifest's flagged-row count, or the batch stops), so the flag stream
+      # is not decoded a second time here; the count, duplicate-row and
+      # key/position checks below still run.  Older builds get the flagged row
+      # ids read up front, and they are reused by the per-store fallback.
+      if (!fastmr_have_checked_candidates_batch()) {
+        flag_rows <- lapply(stores, fastmr_store_flag_rows, io_threads = io_threads)
+      }
       got <- tryCatch(
         fastmr_read_candidates_batch(
           as.list(stats::setNames(paths, labels)), pvalue_threshold = unname(flag_thresholds),
@@ -820,7 +828,8 @@ fastmr_compressed_candidate_data <- function(paths, labels, pvalue_threshold,
           strategy = "pvalue_flag"),
         error = function(e) e)
       # Trust the batch only if every store returned exactly its flagged
-      # rows (CompreSSoR 0.7.0 could silently drop rows in mixed batches).
+      # rows (CompreSSoR 0.7.0 could silently drop rows in mixed batches):
+      # the manifest count (or, without the capability, the flagged row ids).
       problem <- if (inherits(got, "error")) {
         paste("read_candidates_batch() failed:", conditionMessage(got))
       } else {

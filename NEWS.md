@@ -1,5 +1,13 @@
 # fastMR (development)
 
+- `fast_clump_compressed(candidate_source = "pvalue_flag")`: with a CompreSSoR
+  that reports `"candidates_batch_rows_checked"`, the batched candidate read
+  is no longer preceded by a separate, store-by-store decode of every store's
+  flagged row ids. That build already stops unless each store's decoded rows
+  are exactly its own flag selection and match the manifest's flagged-row
+  count; fastMR still checks the count, duplicate rows and key/position
+  consistency. About 7 s of the 25x25 showcase clump stage. Older builds keep
+  the up-front row-id check. Results are unchanged.
 - With a CompreSSoR that reports the `"request_index"` capability,
   `fast_mr_compressed()` extraction asks `read_sumstats_batch()` for each
   row's request index and takes the requested key directly, reading no
