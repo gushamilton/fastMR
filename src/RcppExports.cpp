@@ -282,6 +282,19 @@ BEGIN_RCPP
     return rcpp_result_gen;
 END_RCPP
 }
+// fastmr_mvmr_se_factors_native
+Rcpp::List fastmr_mvmr_se_factors_native(Rcpp::NumericMatrix outcome_beta, Rcpp::NumericMatrix outcome_se, int threads);
+RcppExport SEXP _fastMR_fastmr_mvmr_se_factors_native(SEXP outcome_betaSEXP, SEXP outcome_seSEXP, SEXP threadsSEXP) {
+BEGIN_RCPP
+    Rcpp::RObject rcpp_result_gen;
+    Rcpp::RNGScope rcpp_rngScope_gen;
+    Rcpp::traits::input_parameter< Rcpp::NumericMatrix >::type outcome_beta(outcome_betaSEXP);
+    Rcpp::traits::input_parameter< Rcpp::NumericMatrix >::type outcome_se(outcome_seSEXP);
+    Rcpp::traits::input_parameter< int >::type threads(threadsSEXP);
+    rcpp_result_gen = Rcpp::wrap(fastmr_mvmr_se_factors_native(outcome_beta, outcome_se, threads));
+    return rcpp_result_gen;
+END_RCPP
+}
 
 static const R_CallMethodDef CallEntries[] = {
     {"_fastMR_fastmr_vcor_read", (DL_FUNC) &_fastMR_fastmr_vcor_read, 2},
@@ -301,6 +314,7 @@ static const R_CallMethodDef CallEntries[] = {
     {"_fastMR_fastmr_group_mean_native", (DL_FUNC) &_fastMR_fastmr_group_mean_native, 2},
     {"_fastMR_fastmr_run_groups_boot_native", (DL_FUNC) &_fastMR_fastmr_run_groups_boot_native, 12},
     {"_fastMR_fastmr_mvmr_batch_native", (DL_FUNC) &_fastMR_fastmr_mvmr_batch_native, 13},
+    {"_fastMR_fastmr_mvmr_se_factors_native", (DL_FUNC) &_fastMR_fastmr_mvmr_se_factors_native, 3},
     {NULL, NULL, 0}
 };
 

@@ -69,3 +69,7 @@ fastmr_mvmr_batch_native <- function(row_ptr, rows, design, outcome_beta, outcom
     .Call(`_fastMR_fastmr_mvmr_batch_native`, row_ptr, rows, design, outcome_beta, outcome_se, se_model, threads, design_se, design_cor, shared_row_se, shared_outcome_scale, shared_outcome, return_vcov)
 }
 
+fastmr_mvmr_se_factors_native <- function(outcome_beta, outcome_se, threads) {
+    .Call(`_fastMR_fastmr_mvmr_se_factors_native`, outcome_beta, outcome_se, threads)
+}
+

@@ -418,3 +418,72 @@ Rcpp::List fastmr_mvmr_batch_native(
   if (return_vcov) out["vcov"] = out_vcov;
   return out;
 }
+
+// Factors of the outcome standard errors for the shared-weight path:
+// log se[i, k] ~= log row_se[i] + log scale[k], fitted additively over finite
+// positive cells (row means, then column means of the row-centred values),
+// with each outcome's largest absolute log deviation and whether it has a
+// finite beta whose standard error is invalid.  Parallel over outcomes.
+// [[Rcpp::export]]
+Rcpp::List fastmr_mvmr_se_factors_native(Rcpp::NumericMatrix outcome_beta,
+                                         Rcpp::NumericMatrix outcome_se, int threads) {
+  const int rows = outcome_se.nrow();
+  const int cols = outcome_se.ncol();
+  if (outcome_beta.nrow() != rows || outcome_beta.ncol() != cols) {
+    Rcpp::stop("outcome_beta and outcome_se must have the same dimensions");
+  }
+  const double* se = outcome_se.begin();
+  const double* beta = outcome_beta.begin();
+  const int chunks = std::max(1, std::min(threads, cols));
+  std::vector<std::vector<double>> part_sum(chunks, std::vector<double>(rows, 0.0));
+  std::vector<std::vector<double>> part_n(chunks, std::vector<double>(rows, 0.0));
+  std::vector<int> invalid(cols, 0);
+  mv_parallel(static_cast<std::size_t>(chunks), threads, [&](std::size_t chunk) {
+    const int k0 = static_cast<int>(static_cast<long long>(cols) * chunk / chunks);
+    const int k1 = static_cast<int>(static_cast<long long>(cols) * (chunk + 1) / chunks);
+    double* sum = part_sum[chunk].data();
+    double* n = part_n[chunk].data();
+    for (int k = k0; k < k1; ++k) {
+      const double* s = se + static_cast<std::size_t>(rows) * k;
+      const double* b = beta + static_cast<std::size_t>(rows) * k;
+      for (int i = 0; i < rows; ++i) {
+        const bool ok = std::isfinite(s[i]) && s[i] > 0.0;
+        if (ok) { sum[i] += std::log(s[i]); n[i] += 1.0; }
+        else if (std::isfinite(b[i])) invalid[k] = 1;
+      }
+    }
+  });
+  Rcpp::NumericVector row_log(rows);
+  for (int i = 0; i < rows; ++i) {
+    double s = 0.0, n = 0.0;
+    for (int c = 0; c < chunks; ++c) { s += part_sum[c][i]; n += part_n[c][i]; }
+    row_log[i] = n > 0.0 ? s / n : NA_REAL;
+  }
+  Rcpp::NumericVector scale_log(cols, NA_REAL);
+  Rcpp::NumericVector deviation(cols, NA_REAL);
+  const double* rl = row_log.begin();
+  double* sl = scale_log.begin();
+  double* dev = deviation.begin();
+  mv_parallel(static_cast<std::size_t>(cols), threads, [&](std::size_t kk) {
+    const int k = static_cast<int>(kk);
+    const double* s = se + static_cast<std::size_t>(rows) * k;
+    double sum = 0.0, n = 0.0;
+    for (int i = 0; i < rows; ++i) {
+      if (std::isfinite(s[i]) && s[i] > 0.0 && std::isfinite(rl[i])) { sum += std::log(s[i]) - rl[i]; n += 1.0; }
+    }
+    if (!(n > 0.0)) return;
+    const double c = sum / n;
+    double worst = 0.0;
+    for (int i = 0; i < rows; ++i) {
+      if (std::isfinite(s[i]) && s[i] > 0.0 && std::isfinite(rl[i])) {
+        worst = std::max(worst, std::fabs(std::log(s[i]) - rl[i] - c));
+      }
+    }
+    sl[k] = c;
+    dev[k] = worst;
+  });
+  Rcpp::LogicalVector bad(cols);
+  for (int k = 0; k < cols; ++k) bad[k] = invalid[k] != 0;
+  return Rcpp::List::create(Rcpp::_["row_log"] = row_log, Rcpp::_["scale_log"] = scale_log,
+                            Rcpp::_["deviation"] = deviation, Rcpp::_["invalid_se"] = bad);
+}

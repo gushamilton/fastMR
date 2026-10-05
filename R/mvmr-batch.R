@@ -19,16 +19,10 @@ fastmr_mvmr_check_flag <- function(value, argument) {
 # se[i, k] ~= row_se[i] * scale[k], from an additive fit on the log scale
 # over finite positive cells, with each outcome's largest absolute log
 # deviation (NA for an outcome without finite cells).
-fastmr_mvmr_se_factors <- function(outcome_se) {
-  log_se <- log(outcome_se)
-  log_se[!is.finite(log_se)] <- NA_real_
-  row_log <- rowMeans(log_se, na.rm = TRUE)
-  centred <- log_se - row_log
-  scale_log <- colMeans(centred, na.rm = TRUE)
-  deviation <- abs(sweep(centred, 2L, scale_log))
-  max_dev <- suppressWarnings(apply(deviation, 2L, max, na.rm = TRUE))
-  max_dev[!is.finite(max_dev)] <- NA_real_
-  list(row_se = exp(row_log), scale = exp(scale_log), deviation = max_dev)
+fastmr_mvmr_se_factors <- function(outcome_beta, outcome_se, threads = 1L) {
+  f <- fastmr_mvmr_se_factors_native(outcome_beta, outcome_se, as.integer(threads))
+  list(row_se = exp(f$row_log), scale = exp(f$scale_log), deviation = f$deviation,
+       invalid_se = f$invalid_se)
 }
 
 # Correlation input -> p x p x E array.  `cor` is NULL (zero off-diagonal),
@@ -130,13 +124,11 @@ fastmr_mvmr_engine <- function(row_ptr, rows, design, outcome_beta, outcome_se,
                                shared_tolerance = 1e-8, return_vcov = FALSE) {
   shared <- NULL
   if (identical(weights, "shared")) {
-    shared <- fastmr_mvmr_se_factors(outcome_se)
+    shared <- fastmr_mvmr_se_factors(outcome_beta, outcome_se, threads)
     # The shared path only checks outcome betas, so an outcome with a beta
     # whose standard error is invalid stays on the exact path.
-    invalid_se <- colSums(is.finite(outcome_beta) &
-                            !(is.finite(outcome_se) & outcome_se > 0)) > 0
     shared$use <- !is.na(shared$deviation) & shared$deviation <= shared_tolerance &
-      is.finite(shared$scale) & !invalid_se
+      is.finite(shared$scale) & !shared$invalid_se
     row_se <- shared$row_se
     row_se[!is.finite(row_se)] <- NA_real_
   }
