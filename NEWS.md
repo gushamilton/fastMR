@@ -1,5 +1,12 @@
 # fastMR (development)
 
+- Compressed extraction groups the requested key sets in linear time.
+  `fastmr_request_index_usable()` (every block, request-index path) and the
+  identity-code cache of the manifest-decoding path compared each request
+  with every distinct one so far using `identical()`: quadratic in the
+  number of distinct key sets (2,083 per 300-outcome block of the UKB-PPP
+  cis-MR run). Results are unchanged.
+
 - New batched multivariable MR. `fast_mvmr_ivw()` and `fast_mvmr_ivw_batch()`
   fit TwoSampleMR `mv_ivw()` / `mv_multiple()` multivariable IVW for many
   outcomes (and many designs) in one OpenMP / std::thread native call, with
