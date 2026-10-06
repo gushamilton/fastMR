@@ -18,7 +18,8 @@ fast_clump_data_lead_rows(
   max_rounds = 10000L,
   on_limit = c("error", "fallback"),
   workdir = NULL,
-  reference_manifest = NULL
+  reference_manifest = NULL,
+  absent = c("keep", "drop")
 )
 }
 \arguments{
@@ -50,6 +51,11 @@ fast_clump_data_lead_rows(
 
 \item{reference_manifest}{Optional reference-panel manifest whose MD5 is
 recorded in diagnostics.}
+
+\item{absent}{What to do with eligible candidates absent from the LD
+reference: \code{"keep"} (default) retains them unclumped, \code{"drop"} removes
+them as \code{\link[=fast_clump_data]{fast_clump_data()}} and TwoSampleMR do.  Either way a warning
+gives the count, and the call errors if every candidate is absent.}
 }
 \value{
 A list with \code{data}, named \code{instruments}, and \code{diagnostics}.

@@ -93,6 +93,36 @@ fastmr_clump_check_absent <- function(n_absent, n_rows, absent_variants, absent)
   invisible(NULL)
 }
 
+# Applies `absent` to the eligible rows of the batched/lead-row clumpers with
+# one PLINK2 --write-snplist query, as fast_clump_data_graph() does.  The
+# internal value ".checked" skips the query when a caller (the chromosome
+# partition) has already applied it to the whole input.
+fastmr_clump_states_absent <- function(states, snp, absent, reference_args, plink2_bin,
+                                       threads, workdir) {
+  elig <- unlist(lapply(states, `[[`, "index"), use.names = FALSE)
+  if (identical(absent, ".checked") || !length(elig)) return(list(states = states, n = 0L))
+  snp <- as.character(snp)
+  present <- fastmr_clump_reference_ids(unique(snp[elig]), reference_args, plink2_bin,
+                                        threads, file.path(workdir, "reference_ids"))
+  is_absent <- !snp[elig] %in% present
+  fastmr_clump_check_absent(sum(is_absent), length(elig),
+                            length(unique(snp[elig][is_absent])), absent)
+  if (identical(absent, "drop") && any(is_absent)) {
+    drop <- elig[is_absent]
+    states <- lapply(states, function(state) {
+      state$index <- state$index[!state$index %in% drop]
+      state$dead <- rep(FALSE, length(state$index))
+      state
+    })
+  }
+  list(states = states, n = sum(is_absent))
+}
+
+fastmr_clump_match_absent <- function(absent) {
+  if (identical(absent, ".checked")) return(absent)
+  match.arg(absent, c("keep", "drop"))
+}
+
 fastmr_clump_pair_key <- function(a, b) {
   ifelse(a < b, paste0(a, "\r", b), paste0(b, "\r", a))
 }
@@ -185,6 +215,10 @@ fastmr_clump_run_frontier <- function(leads, targets, reference_args, plink2_bin
 #' @param workdir Optional directory for temporary frontier files.
 #' @param reference_manifest Optional reference-panel manifest whose MD5 is
 #'   recorded in diagnostics.
+#' @param absent What to do with eligible candidates absent from the LD
+#'   reference: `"keep"` (default) retains them unclumped, `"drop"` removes
+#'   them as [fast_clump_data()] and TwoSampleMR do.  Either way a warning
+#'   gives the count, and the call errors if every candidate is absent.
 #' @return A list with `data`, `instruments`, and `diagnostics`.
 #' @export
 fast_clump_data_batched <- function(
@@ -192,7 +226,7 @@ fast_clump_data_batched <- function(
     bfile = NULL, pfile = NULL, plink2_bin = NULL, threads = 1L,
     max_pair_requests = 2e8, max_target_variants = 2e6, max_rounds = 10000L,
     on_limit = c("error", "fallback"), workdir = NULL,
-    reference_manifest = NULL) {
+    reference_manifest = NULL, absent = c("keep", "drop")) {
   if (!is.data.frame(dat) || !"SNP" %in% names(dat)) stop("dat must contain SNP", call. = FALSE)
   clump_kb <- fastmr_clump_number(clump_kb, "clump_kb", 0)
   clump_r2 <- fastmr_clump_number(clump_r2, "clump_r2", 0, 1)
@@ -202,6 +236,7 @@ fast_clump_data_batched <- function(
   max_target_variants <- as.integer(fastmr_clump_number(max_target_variants, "max_target_variants", 1))
   max_rounds <- as.integer(fastmr_clump_number(max_rounds, "max_rounds", 1))
   on_limit <- match.arg(on_limit)
+  absent <- fastmr_clump_match_absent(absent)
   if (is.null(plink2_bin)) plink2_bin <- Sys.which("plink2")
   if (!nzchar(plink2_bin)) stop("PLINK2 executable not found; provide plink2_bin", call. = FALSE)
   reference_args <- fastmr_clump_reference_args(bfile, pfile)
@@ -243,6 +278,9 @@ fast_clump_data_batched <- function(
   workdir_owned <- is.null(workdir)
   if (workdir_owned) workdir <- tempfile("fastMR_batched_")
   dir.create(workdir, recursive = TRUE, showWarnings = FALSE)
+  checked <- fastmr_clump_states_absent(states, dat$SNP, absent, reference_args, plink2_bin,
+                                       threads, workdir)
+  states <- checked$states
   cleanup <- if (workdir_owned) on.exit(unlink(workdir, recursive = TRUE, force = TRUE), add = TRUE) else NULL
   current_live <- function(state) {
     if (!length(state$index)) return(NA_integer_)
@@ -332,7 +370,8 @@ fast_clump_data_batched <- function(
                           retained = nrow(dat[retained, , drop = FALSE]), rounds = n_rounds,
                           plink_calls = n_calls, logical_pairs = n_pairs,
                           positive_pairs = length(ls(pair_positive)), exact = TRUE,
-                          fallback = FALSE, reference_manifest_md5 = reference_md5))
+                          fallback = FALSE, absent_from_reference = checked$n, absent = absent,
+                          reference_manifest_md5 = reference_md5))
 }
 
 #' Exact lead-row LD clumping with a shared pair cache
@@ -359,6 +398,10 @@ fast_clump_data_batched <- function(
 #' @param workdir Optional directory for query files.
 #' @param reference_manifest Optional reference-panel manifest whose MD5 is
 #'   recorded in diagnostics.
+#' @param absent What to do with eligible candidates absent from the LD
+#'   reference: `"keep"` (default) retains them unclumped, `"drop"` removes
+#'   them as [fast_clump_data()] and TwoSampleMR do.  Either way a warning
+#'   gives the count, and the call errors if every candidate is absent.
 #' @return A list with `data`, named `instruments`, and `diagnostics`.
 #' @export
 fast_clump_data_lead_rows <- function(
@@ -366,7 +409,7 @@ fast_clump_data_lead_rows <- function(
     bfile = NULL, pfile = NULL, plink2_bin = NULL, threads = 1L,
     max_pair_requests = 2e8, max_target_variants = 2e6, max_rounds = 10000L,
     on_limit = c("error", "fallback"), workdir = NULL,
-    reference_manifest = NULL) {
+    reference_manifest = NULL, absent = c("keep", "drop")) {
   if (!is.data.frame(dat) || !"SNP" %in% names(dat)) stop("dat must contain SNP", call. = FALSE)
   clump_kb <- fastmr_clump_number(clump_kb, "clump_kb", 0)
   clump_r2 <- fastmr_clump_number(clump_r2, "clump_r2", 0, 1)
@@ -376,6 +419,7 @@ fast_clump_data_lead_rows <- function(
   max_target_variants <- as.integer(fastmr_clump_number(max_target_variants, "max_target_variants", 1))
   max_rounds <- as.integer(fastmr_clump_number(max_rounds, "max_rounds", 1))
   on_limit <- match.arg(on_limit)
+  absent <- fastmr_clump_match_absent(absent)
   if (is.null(plink2_bin)) plink2_bin <- Sys.which("plink2")
   if (!nzchar(plink2_bin)) stop("PLINK2 executable not found; provide plink2_bin", call. = FALSE)
   reference_args <- fastmr_clump_reference_args(bfile, pfile)
@@ -418,6 +462,9 @@ fast_clump_data_lead_rows <- function(
   workdir_owned <- is.null(workdir)
   if (workdir_owned) workdir <- tempfile("fastMR_lead_rows_")
   dir.create(workdir, recursive = TRUE, showWarnings = FALSE)
+  checked <- fastmr_clump_states_absent(states, dat$SNP, absent, reference_args, plink2_bin,
+                                       threads, workdir)
+  states <- checked$states
   if (workdir_owned) on.exit(unlink(workdir, recursive = TRUE, force = TRUE), add = TRUE)
   current_live <- function(state) {
     if (!length(state$index)) return(NA_integer_)
@@ -522,6 +569,7 @@ fast_clump_data_lead_rows <- function(
                           plink_calls = n_calls, logical_pairs = n_pairs,
                           positive_pairs = length(ls(pair_positive)), unique_leads = n_unique_leads,
                           exact = TRUE, fallback = FALSE, strategy = "lead_row",
+                          absent_from_reference = checked$n, absent = absent,
                           reference_manifest_md5 = reference_md5))
 }
 
@@ -534,7 +582,8 @@ fast_clump_data_lead_rows <- function(
 #'
 #' @param dat Data frame containing `SNP`, `id.exposure`, p-values,
 #'   `chr_name`, and `chrom_start`.
-#' @param ... Arguments forwarded to [fast_clump_data_batched()].
+#' @param ... Arguments forwarded to [fast_clump_data_batched()].  `absent`
+#'   is applied once to the whole input before partitioning.
 #' @return A list with `data`, named `instruments`, and aggregated diagnostics.
 #' @export
 fast_clump_data_batched_chromosomal <- function(dat, ...) {
@@ -552,6 +601,33 @@ fast_clump_data_batched_chromosomal <- function(dat, ...) {
   if (workdir_owned) workdir <- tempfile("fastMR_chromosomal_")
   dir.create(workdir, recursive = TRUE, showWarnings = FALSE)
   if (workdir_owned) on.exit(unlink(workdir, recursive = TRUE, force = TRUE), add = TRUE)
+  # Apply `absent` once to the whole input: per chromosome, an all-absent
+  # partition would wrongly error and the warning would repeat.
+  absent <- fastmr_clump_match_absent(if (is.null(dots$absent)) "keep" else dots$absent)
+  if (!identical(absent, ".checked")) {
+    pcol <- intersect(c("pval.exposure", "pval.outcome"), names(dat))[1L]
+    p <- if (is.na(pcol)) rep(0.99, nrow(dat)) else suppressWarnings(as.numeric(as.character(dat[[pcol]])))
+    clump_p1 <- if (is.null(dots$clump_p1)) 1 else dots$clump_p1
+    snp <- as.character(dat$SNP)
+    elig <- which(is.finite(p) & p <= clump_p1)
+    if (length(elig)) {
+      plink2_bin <- if (is.null(dots$plink2_bin)) Sys.which("plink2") else dots$plink2_bin
+      if (!nzchar(plink2_bin)) stop("PLINK2 executable not found; provide plink2_bin", call. = FALSE)
+      present <- fastmr_clump_reference_ids(
+        unique(snp[elig]), fastmr_clump_reference_args(dots$bfile, dots$pfile), plink2_bin,
+        if (is.null(dots$threads)) 1L else as.integer(dots$threads),
+        file.path(workdir, "reference_ids"))
+      is_absent <- !snp[elig] %in% present
+      fastmr_clump_check_absent(sum(is_absent), length(elig),
+                                length(unique(snp[elig][is_absent])), absent)
+      if (identical(absent, "drop") && any(is_absent)) {
+        keep_rows <- !snp %in% snp[elig][is_absent]
+        dat <- dat[keep_rows, , drop = FALSE]
+        chr <- chr[keep_rows]
+      }
+    }
+    dots$absent <- ".checked"
+  }
   chromosomes <- unique(chr)
   pieces <- lapply(seq_along(chromosomes), function(k) {
     cc <- chromosomes[[k]]

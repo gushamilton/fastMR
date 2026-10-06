@@ -201,7 +201,8 @@ test_that("candidates absent from the reference are retained, duplicates and ine
   common <- pe_common(6, 0.3, p1 = 1e-6)
   expect_warning(g <- do.call(fast_clump_data_graph, c(list(dat), common)),
                  "absent from the LD reference and were kept unclumped")
-  lr <- do.call(fast_clump_data_lead_rows, c(list(dat), common))
+  expect_warning(lr <- do.call(fast_clump_data_lead_rows, c(list(dat), common)),
+                 "absent from the LD reference and were kept unclumped")
   for (sub in c("always", "never")) {
     expect_warning(pe <- do.call(fast_clump_data_per_exposure, c(list(dat), common, list(subset = sub))),
                    "absent from the LD reference and were kept unclumped")
