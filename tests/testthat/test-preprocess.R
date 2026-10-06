@@ -197,3 +197,21 @@ test_that("PLINK failures include a useful status", {
   expect_error(fast_clump_data(dat, bfile = "panel", plink_bin = plink),
                "exit status 17.*synthetic PLINK failure")
 })
+
+test_that("PLINK 1.9 clumping handles no passing SNPs and boundary thresholds", {
+  skip_on_os("windows")
+  plink <- tempfile("fastMR_plink_unreachable_")
+  writeLines(c("#!/bin/sh", "exit 99"), plink)
+  Sys.chmod(plink, "0755")
+  dat <- data.frame(SNP = c("rs1", "rs2", "rs3"), id.exposure = c("E1", "E1", "E2"),
+                    pval.exposure = c(1e-6, 1e-5, 0.2))
+  empty <- fast_clump_data(dat, clump_p1 = 1e-300, bfile = "panel", plink_bin = plink)
+  expect_equal(nrow(empty), 0L)
+  expect_equal(names(empty), names(dat))
+  expect_error(fast_clump_data(dat, clump_p1 = 0, bfile = "panel", plink_bin = plink),
+               "clump_p1 > 0")
+  expect_error(fast_clump_data(dat, clump_r2 = 1, bfile = "panel", plink_bin = plink),
+               "clump_r2 < 1")
+  expect_error(fast_clump_data(dat, clump_kb = 0, bfile = "panel", plink_bin = plink),
+               "clump_kb > 0")
+})

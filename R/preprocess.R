@@ -389,7 +389,16 @@ fast_clump_data <- function(dat, clump_kb = 10000, clump_r2 = 0.001,
   if (!is.null(bfile)) {
     if (is.null(plink_bin)) plink_bin <- Sys.which("plink")
     if (!nzchar(plink_bin)) stop("PLINK executable not found; provide plink_bin", call. = FALSE)
+    # PLINK 1.9 rejects these boundary values with an opaque message.
+    if (clump_p1 <= 0 || clump_r2 >= 1 || clump_kb <= 0) {
+      stop("PLINK 1.9 clumping needs clump_p1 > 0, clump_r2 < 1 and clump_kb > 0; ",
+           "use ld_matrix or the PLINK2 clumping functions for boundary thresholds",
+           call. = FALSE)
+    }
+    pval_numeric <- suppressWarnings(as.numeric(as.character(dat[[pval_column]])))
     pieces <- lapply(split(seq_len(nrow(dat)), dat$id.exposure, drop = TRUE), function(index) {
+      # No index SNP can pass: PLINK writes no .clumped file, so skip it.
+      if (!any(is.finite(pval_numeric[index]) & pval_numeric[index] <= clump_p1)) return(integer())
       stem <- tempfile("fastMR_clump_")
       input <- paste0(stem, ".txt")
       write.table(data.frame(SNP = dat$SNP[index], P = dat[[pval_column]][index]), input,
