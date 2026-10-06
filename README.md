@@ -87,6 +87,8 @@ The method registry includes:
 - simple and weighted mode
 - unweighted regression, sign concordance, and Wald ratio
 - basic multivariable IVW
+- cis-MR with correlated instruments: LD-aware GLS IVW / MR-Egger and
+  principal-components IVW (`fast_mr_correlated()`, `fast_mr_ld_neff()`)
 - heterogeneity and MR-Egger pleiotropy diagnostics
 - single-SNP and leave-one-out MR summaries
 - Steiger directionality testing and per-SNP Steiger filtering

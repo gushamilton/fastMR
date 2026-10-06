@@ -1,3 +1,17 @@
+# fastMR 0.3.0
+
+- New `fast_mr_correlated()` for cis-MR with correlated (LD) instruments:
+  generalised-least-squares IVW (`ivw_gls`) and MR-Egger (`egger_gls`) with a
+  signed, exposure-allele-aligned correlation matrix (Burgess, Dudbridge &
+  Thompson 2016), and principal-components IVW (`pc_ivw`, Burgess et al. 2017)
+  retaining the components that reach `pc_threshold` (default 0.99) of the
+  variance. Multiplicative random-effects (floored at 1) or fixed-effect
+  standard errors, LD-aware Cochran's Q, near-singular LD shrinkage with the
+  value recorded (`ld_shrinkage`), and clear dimension/dimnames/non-correlation
+  errors. Matches `MendelianRandomization::mr_ivw/mr_egger(correl = TRUE)` to
+  ~1e-15 and the `mr_pcgmm` component count (`pc_center = TRUE`).
+- New `fast_mr_ld_neff()` for the effective number of independent signals.
+- `MendelianRandomization` added to Suggests (used by the validation tests).
 # fastMR (development)
 
 - Compressed extraction groups the requested key sets in linear time.
