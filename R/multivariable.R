@@ -32,9 +32,11 @@ fast_mr_multivariable_ivw <- function(exposure_beta, outcome_beta, outcome_se,
     if (!all(dim(P) == dim(X))) stop("exposure_pval must match exposure_beta", call. = FALSE)
   }
   p <- ncol(X)
+  labels <- fastmr_mv_labels(X)
   base_keep <- is.finite(y) & is.finite(sy) & sy > 0 &
     apply(X, 1L, function(row) all(is.finite(row)))
   result <- vector("list", p)
+  singular <- FALSE
   for (j in seq_len(p)) {
     keep <- base_keep
     if (!is.null(P)) keep <- keep & is.finite(P[, j]) & P[, j] < pval_threshold
@@ -47,6 +49,7 @@ fast_mr_multivariable_ivw <- function(exposure_beta, outcome_beta, outcome_se,
       w <- 1 / sy[keep]^2
       xtwx <- crossprod(Xj, Xj * w)
       inv <- tryCatch(solve(xtwx), error = function(e) NULL)
+      if (is.null(inv)) singular <- TRUE
       if (!is.null(inv)) {
         beta <- drop(inv %*% crossprod(Xj, w * yj))
         residual <- yj - drop(Xj %*% beta)
@@ -56,7 +59,7 @@ fast_mr_multivariable_ivw <- function(exposure_beta, outcome_beta, outcome_se,
     }
     stat <- beta[j] / se[j]
     result[[j]] <- data.frame(
-      id.exposure = if (!is.null(colnames(X))) colnames(X)[j] else as.character(j),
+      id.exposure = labels[j],
       method = "Multivariable IVW",
       method_code = "mv_ivw",
       nsnp = n,
@@ -66,7 +69,23 @@ fast_mr_multivariable_ivw <- function(exposure_beta, outcome_beta, outcome_se,
       stringsAsFactors = FALSE
     )
   }
+  if (singular) fastmr_mv_singular_warning()
   do.call(rbind, result)
+}
+
+fastmr_mv_labels <- function(X) {
+  labels <- colnames(X)
+  if (is.null(labels)) labels <- rep("", ncol(X))
+  labels[is.na(labels)] <- ""
+  blank <- !nzchar(labels)
+  labels[blank] <- as.character(seq_len(ncol(X)))[blank]
+  labels
+}
+
+fastmr_mv_singular_warning <- function() {
+  warning("the weighted exposure design is singular (collinear or all-zero ",
+          "exposure columns); the affected estimates are NA. Drop or combine ",
+          "the aliased exposures.", call. = FALSE)
 }
 
 fastmr_mv_fit <- function(X, y, sy, keep, intercept = FALSE) {
@@ -80,7 +99,7 @@ fastmr_mv_fit <- function(X, y, sy, keep, intercept = FALSE) {
   w <- 1 / sy[keep]^2
   xtwx <- crossprod(design, design * w)
   inv <- tryCatch(solve(xtwx), error = function(e) NULL)
-  if (is.null(inv)) return(list(beta = beta, se = se))
+  if (is.null(inv)) return(list(beta = beta, se = se, singular = TRUE))
   coefficients <- drop(inv %*% crossprod(design, w * y[keep]))
   residual <- y[keep] - drop(design %*% coefficients)
   sigma <- sqrt(sum(w * residual^2) /
@@ -88,7 +107,7 @@ fastmr_mv_fit <- function(X, y, sy, keep, intercept = FALSE) {
   offset <- as.integer(intercept)
   beta <- coefficients[seq_len(p) + offset]
   se <- sqrt(diag(inv))[seq_len(p) + offset] * sigma
-  list(beta = beta, se = se)
+  list(beta = beta, se = se, singular = FALSE)
 }
 
 #' Multivariable IVW with shared or exposure-specific instrument sets
@@ -135,19 +154,22 @@ fast_mr_multivariable <- function(exposure_beta, outcome_beta, outcome_se,
                                      call. = FALSE)
   }
   p <- ncol(X)
+  labels <- fastmr_mv_labels(X)
   base_keep <- is.finite(y) & is.finite(sy) & sy > 0 &
     apply(X, 1L, function(row) all(is.finite(row)))
   result <- vector("list", p)
+  singular <- FALSE
   for (j in seq_len(p)) {
     passing <- if (is.null(P)) base_keep else
       base_keep & is.finite(P[, j]) & P[, j] < pval_threshold
     fit_keep <- if (instrument_specific) passing else base_keep
     fit <- fastmr_mv_fit(X, y, sy, fit_keep, intercept = intercept)
+    if (isTRUE(fit$singular)) singular <- TRUE
     beta <- fit$beta[j]
     se <- fit$se[j]
     stat <- beta / se
     result[[j]] <- data.frame(
-      id.exposure = if (!is.null(colnames(X))) colnames(X)[j] else as.character(j),
+      id.exposure = labels[j],
       method = "Multivariable IVW",
       method_code = "mv_multiple",
       nsnp = sum(passing),
@@ -157,5 +179,6 @@ fast_mr_multivariable <- function(exposure_beta, outcome_beta, outcome_se,
       stringsAsFactors = FALSE
     )
   }
+  if (singular) fastmr_mv_singular_warning()
   do.call(rbind, result)
 }

@@ -172,6 +172,8 @@ Rscript -e 'remotes::install_github("gushamilton/fastMR")'
 The native reader has no Python runtime or `COMPRESSOR_PYTHON` setting. Then:
 
 ```r
+# Store paths and instrument keys are placeholders: use your own stores and
+# canonical chrom:pos:REF:ALT keys present in them.
 instruments <- list(
   bmi = c("1:12345:A:G", "2:67890:C:T"),
   crp = c("1:54321:G:A", "6:112233:C:G")
@@ -293,7 +295,7 @@ beta/SE stops the analysis. `strict = FALSE` reports requested, found, invalid,
 and matched counts in the `compressed_input` attribute before omitting rows.
 
 The native integration tests generate a small deterministic prepared GRCh38
-fixture with explicit REF/ALT identity. CompreSSoR 0.5 writes that identity into
+fixture with explicit REF/ALT identity. CompreSSoR (>= 0.6.0) writes that identity into
 the self-contained store, so CI does not need `COMPRESSOR_CANONICAL_REFERENCE`
 or any private EBI/dbSNP path. Reference-backed preparation remains an external
 workflow, as described above.

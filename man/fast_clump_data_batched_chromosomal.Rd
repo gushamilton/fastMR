@@ -10,7 +10,8 @@ fast_clump_data_batched_chromosomal(dat, ...)
 \item{dat}{Data frame containing \code{SNP}, \code{id.exposure}, p-values,
 \code{chr_name}, and \code{chrom_start}.}
 
-\item{...}{Arguments forwarded to \code{\link[=fast_clump_data_batched]{fast_clump_data_batched()}}.}
+\item{...}{Arguments forwarded to \code{\link[=fast_clump_data_batched]{fast_clump_data_batched()}}.  \code{absent}
+is applied once to the whole input before partitioning.}
 }
 \value{
 A list with \code{data}, named \code{instruments}, and aggregated diagnostics.

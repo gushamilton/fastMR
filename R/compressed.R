@@ -5,6 +5,14 @@ fastmr_require_compressor <- function() {
       call. = FALSE
     )
   }
+  installed <- utils::packageVersion("CompreSSoR")
+  if (installed < "0.6.0") {
+    stop(
+      "compressed GWAS input requires CompreSSoR >= 0.6.0 (installed: ", installed,
+      "); update it from github.com/gushamilton/CompreSSoR",
+      call. = FALSE
+    )
+  }
   invisible(TRUE)
 }
 

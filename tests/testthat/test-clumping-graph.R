@@ -515,3 +515,33 @@ test_that("impossible r2 > 1 from PLINK2 (2.00a6.8 --r2-phased bug) is detected 
   ok <- fastMR:::.fastmr_vcor_read(write_vcor(c("#ID_A\tID_B\tUNPHASED_R2", "rs74865827\trs3\t1.0000001")), ids)
   expect_identical(ok$invalid_r2, 0)
 })
+
+test_that("every clumping strategy treats SNPs absent from the reference alike", {
+  skip_on_os("windows")
+  ref <- graph_ld_reference()
+  dat <- graph_make_dat(6L, seed = 7L, ref)
+  missing <- unique(dat$SNP)[1:3]
+  with_ld_oracle(ref)
+  testthat::local_mocked_bindings(
+    fastmr_clump_reference_ids = function(snps, ...) setdiff(intersect(snps, ref$SNP), missing),
+    .package = "fastMR"
+  )
+  keyset <- function(x) sort(paste(x$data$id.exposure, x$data$SNP))
+  for (absent in c("keep", "drop")) {
+    common <- list(clump_kb = 5, clump_r2 = 0.5, bfile = "mock", plink2_bin = "/bin/true",
+                   absent = absent)
+    out <- list(
+      graph = expect_warning(do.call(fast_clump_data_graph, c(list(dat), common)), "absent"),
+      global = expect_warning(do.call(fast_clump_data_batched, c(list(dat), common)), "absent"),
+      lead_row = expect_warning(do.call(fast_clump_data_lead_rows, c(list(dat), common)), "absent"),
+      chromosome = expect_warning(do.call(fast_clump_data_batched_chromosomal,
+                                          c(list(dat), common)), "absent")
+    )
+    for (name in names(out)[-1L]) expect_identical(keyset(out[[name]]), keyset(out$graph), info = paste(absent, name))
+    if (identical(absent, "drop")) expect_false(any(out$global$data$SNP %in% missing))
+  }
+  all_absent <- dat
+  all_absent$SNP <- paste0("nope", seq_len(nrow(dat)))
+  expect_error(fast_clump_data_batched(all_absent, bfile = "mock", plink2_bin = "/bin/true"),
+               "none of the")
+})
