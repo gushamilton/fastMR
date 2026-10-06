@@ -230,16 +230,16 @@ fastmr_finalize_compressed_read <- function(out, columns) {
 # every outcome store, for example) under each distinct codec are computed
 # once.
 fastmr_finalize_coded_reads <- function(result, keys, codecs, columns) {
-  cache <- list()
+  key_group <- fastmr_request_groups(keys)
+  codec_group <- fastmr_request_groups(codecs)
+  cache <- new.env(hash = TRUE, parent = emptyenv())
   request_codes <- function(i) {
-    codec <- codecs[[i]]
-    for (entry in cache) {
-      if (identical(entry$keys, keys[[i]]) && identical(entry$codec, codec)) {
-        return(entry$codes)
-      }
+    slot <- paste(key_group[i], codec_group[i])
+    codes <- cache[[slot]]
+    if (is.null(codes)) {
+      codes <- fastmr_compressed_key_codes(as.character(keys[[i]]), codecs[[i]])
+      cache[[slot]] <- codes
     }
-    codes <- fastmr_compressed_key_codes(as.character(keys[[i]]), codec)
-    cache[[length(cache) + 1L]] <<- list(keys = keys[[i]], codec = codec, codes = codes)
     codes
   }
   lapply(seq_along(result), function(i) {
@@ -305,12 +305,12 @@ fastmr_request_index_usable <- function(paths, keys, codecs) {
     return(FALSE)
   }
   pattern <- "^([1-9]|1[0-9]|2[0-2]|X|Y):[1-9][0-9]*:[ACGT]:[ACGT]$"
-  checked <- list()
-  for (request in keys) {
+  # Check each distinct request once (the shared outcome request is one).
+  group <- fastmr_request_groups(keys)
+  for (i in which(group == seq_along(group))) {
+    request <- keys[[i]]
     if (!is.character(request)) return(FALSE)
-    if (any(vapply(checked, identical, logical(1), request))) next
     if (!all(grepl(pattern, request, perl = TRUE))) return(FALSE)
-    checked[[length(checked) + 1L]] <- request
   }
   TRUE
 }
