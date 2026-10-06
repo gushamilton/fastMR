@@ -23,11 +23,74 @@ fastmr_clump_position <- function(dat) {
   list(chr = chr, bp = bp)
 }
 
-# Greedy order within one exposure: exact CompreSSoR rank when the optional
-# `pvalue_rank` column is present, otherwise (p, SNP) with C-locale ties.
-fastmr_clump_order <- function(p, snp, rank = NULL) {
-  if (!is.null(rank)) return(order(rank, p, snp, method = "radix"))
-  order(p, snp, method = "radix")
+# Greedy order: exact CompreSSoR rank when the optional `pvalue_rank` column
+# is present, then p, then the tie-break (-|z|, see fastmr_clump_tiebreak())
+# when available, then SNP with C-locale ties.  `group`, when given, is the
+# leading sort key (exposure).  Without ties in p the order is (p, SNP).
+fastmr_clump_order <- function(p, snp, rank = NULL, tiebreak = NULL, group = NULL) {
+  keys <- c(if (!is.null(group)) list(group), if (!is.null(rank)) list(rank), list(p),
+            if (!is.null(tiebreak)) list(tiebreak), list(snp))
+  do.call(order, c(keys, list(method = "radix")))
+}
+
+# Tie-break for equal p: -|z| (strongest first; NA, sorted last, when
+# unknown).  p underflows to 0 for |z| above ~38 (CompreSSoR reconstructed p
+# and many cis-pQTL files), and (p, SNP) would then lead with the
+# lexicographically first SNP.  |z| comes from the internal `.fastmr_abs_z`
+# column (compressed candidates), else beta/se on the p-value's side.
+# NULL when unavailable, which keeps the (p, SNP) order.
+fastmr_clump_tiebreak <- function(dat, pcol) {
+  num <- function(x) if (is.numeric(x)) x else suppressWarnings(as.numeric(as.character(x)))
+  if (".fastmr_abs_z" %in% names(dat)) {
+    z <- num(dat[[".fastmr_abs_z"]])
+  } else {
+    side <- if (identical(pcol, "pval.outcome")) "outcome" else "exposure"
+    b <- paste0("beta.", side)
+    s <- paste0("se.", side)
+    if (!all(c(b, s) %in% names(dat))) return(NULL)
+    z <- num(dat[[b]]) / num(dat[[s]])
+  }
+  z <- -abs(z)
+  z[!is.finite(z)] <- NA_real_
+  z
+}
+
+# Rows kept when an (id.exposure, SNP) pair repeats: the one with the
+# smallest p (the first such row on ties; rows without a usable p last).
+# Logical over the rows of `dat`; all TRUE when nothing repeats.
+fastmr_clump_dedup <- function(dat, pcol) {
+  key <- paste(as.character(dat$id.exposure), as.character(dat$SNP), sep = "\r")
+  keep <- !duplicated(key)
+  if (all(keep)) return(keep)
+  p <- suppressWarnings(as.numeric(as.character(dat[[pcol]])))
+  p[!is.finite(p)] <- NA_real_
+  code <- match(key, key)
+  o <- order(code, p, seq_along(key), method = "radix")
+  keep <- logical(length(key))
+  keep[o[!duplicated(code[o])]] <- TRUE
+  keep
+}
+
+# Candidates absent from the LD reference have no LD edges: kept unclumped
+# (absent = "keep", the historical behaviour) or dropped (absent = "drop", as
+# TwoSampleMR / ieugwasr local clumping does).  Errors when every eligible
+# candidate is absent (almost always a SNP-ID scheme mismatch), otherwise
+# warns with the count.
+fastmr_clump_check_absent <- function(n_absent, n_rows, absent_variants, absent) {
+  if (!n_rows || !n_absent) return(invisible(NULL))
+  hint <- paste0("check that SNP IDs follow the reference's ID scheme ",
+                 "(rsID vs chr:pos:ref:alt, allele order, 'chr' prefix)")
+  if (n_absent == n_rows) {
+    stop("none of the ", n_rows, " eligible candidate rows (", absent_variants,
+         " variants) is in the LD reference; ", hint, call. = FALSE)
+  }
+  warning(sprintf(paste0("%d of %d eligible candidate rows (%d variants) are absent from the LD ",
+                         "reference and were %s; %s"),
+                  as.integer(n_absent), as.integer(n_rows), as.integer(absent_variants),
+                  if (identical(absent, "drop")) "dropped (absent = \"drop\")"
+                  else "kept unclumped (absent = \"keep\"; use absent = \"drop\" to drop them)",
+                  hint), call. = FALSE)
+  invisible(NULL)
 }
 
 fastmr_clump_pair_key <- function(a, b) {
@@ -158,15 +221,16 @@ fast_clump_data_batched <- function(
     stop("SNP and id.exposure must be non-missing and non-empty", call. = FALSE)
   }
   original <- dat
-  dedup <- !duplicated(paste(as.character(dat$id.exposure), as.character(dat$SNP), sep = "\r"))
-  dat <- dat[dedup, , drop = FALSE]
+  dat <- dat[fastmr_clump_dedup(dat, pcol), , drop = FALSE]
   p <- suppressWarnings(as.numeric(as.character(dat[[pcol]])))
+  tiebreak <- fastmr_clump_tiebreak(dat, pcol)
   position <- fastmr_clump_position(dat)
   exposure_ids <- unique(as.character(dat$id.exposure))
   states <- lapply(exposure_ids, function(id) {
     ii <- which(as.character(dat$id.exposure) == id)
     ii <- ii[is.finite(p[ii]) & p[ii] <= clump_p1]
-    ii <- ii[fastmr_clump_order(p[ii], as.character(dat$SNP[ii]), dat[["pvalue_rank"]][ii])]
+    ii <- ii[fastmr_clump_order(p[ii], as.character(dat$SNP[ii]), dat[["pvalue_rank"]][ii],
+                                tiebreak[ii])]
     list(index = ii, dead = rep(FALSE, length(ii)))
   })
   names(states) <- exposure_ids
@@ -331,15 +395,16 @@ fast_clump_data_lead_rows <- function(
     stop("SNP and id.exposure must be non-missing and non-empty", call. = FALSE)
   }
   original <- dat
-  dedup <- !duplicated(paste(as.character(dat$id.exposure), as.character(dat$SNP), sep = "\r"))
-  dat <- dat[dedup, , drop = FALSE]
+  dat <- dat[fastmr_clump_dedup(dat, pcol), , drop = FALSE]
   p <- suppressWarnings(as.numeric(as.character(dat[[pcol]])))
+  tiebreak <- fastmr_clump_tiebreak(dat, pcol)
   position <- fastmr_clump_position(dat)
   exposure_ids <- unique(as.character(dat$id.exposure))
   states <- lapply(exposure_ids, function(id) {
     ii <- which(as.character(dat$id.exposure) == id)
     ii <- ii[is.finite(p[ii]) & p[ii] <= clump_p1]
-    ii <- ii[fastmr_clump_order(p[ii], as.character(dat$SNP[ii]), dat[["pvalue_rank"]][ii])]
+    ii <- ii[fastmr_clump_order(p[ii], as.character(dat$SNP[ii]), dat[["pvalue_rank"]][ii],
+                                tiebreak[ii])]
     list(index = ii, dead = rep(FALSE, length(ii)))
   })
   names(states) <- exposure_ids
@@ -552,6 +617,116 @@ fastmr_have_flag_candidates_batch <- function() {
     "pvalue_flag" %in% eval(formals(CompreSSoR::read_candidates_batch)$strategy)
 }
 
+# Indirection over CompreSSoR::read_candidates_batch() (lets tests substitute a
+# faulty batch reader).
+fastmr_read_candidates_batch <- function(...) CompreSSoR::read_candidates_batch(...)
+
+# CompreSSoR whose read_candidates_batch() is known to return the per-store
+# result for every batch composition and to stop rather than drop rows.  The
+# full-store batch path has no manifest count to check against, so it is used
+# only with such a build; otherwise the per-store reader runs.
+fastmr_have_checked_candidates_batch <- function() {
+  fastmr_have_compressor_fn("compressor_capabilities") &&
+    "candidates_batch_rows_checked" %in% CompreSSoR::compressor_capabilities()
+}
+
+# Number of rows flagged in a store's p-value flag domain: the manifest's
+# recorded count, or (when the manifest lacks it) the flag stream itself.
+fastmr_store_flag_count <- function(store, io_threads = 1L) {
+  domain <- fastmr_clump_default(store$manifest$domains, list())$pvalue_flag
+  n <- suppressWarnings(as.numeric(domain$hit_rows))
+  if (length(n) == 1L && is.finite(n) && n >= 0) return(n)
+  length(CompreSSoR::read_pvalue_flag(store, as = "row_ids", threads = io_threads))
+}
+
+# Zero-based row ids of a store's p-value flag domain.
+fastmr_store_flag_rows <- function(store, io_threads = 1L) {
+  as.integer(CompreSSoR::read_pvalue_flag(store, as = "row_ids", threads = io_threads))
+}
+
+# NULL when every key's position field (canonical keys are
+# chromosome:position:ref:alt) equals the row's base_pair_location column;
+# otherwise a short description.  Catches identity decoded against the wrong
+# variant panel.
+fastmr_batch_key_problem <- function(x, label) {
+  if (!nrow(x)) return(NULL)
+  if (!all(c("key", "base_pair_location") %in% names(x))) {
+    return(paste0("store '", label, "' returned no key/base_pair_location columns"))
+  }
+  parts <- strsplit(as.character(x[["key"]]), ":", fixed = TRUE)
+  key_pos <- suppressWarnings(as.numeric(vapply(parts, function(f) if (length(f) >= 2L) f[[2L]] else NA_character_,
+                                                character(1))))
+  col_pos <- suppressWarnings(as.numeric(x[["base_pair_location"]]))
+  bad <- is.na(key_pos) | is.na(col_pos) | key_pos != col_pos
+  if (any(bad)) {
+    return(paste0("store '", label, "' returned ", sum(bad),
+                  " key(s) whose position does not match base_pair_location"))
+  }
+  NULL
+}
+
+# NULL when a read_candidates_batch(strategy = "pvalue_flag") result has, for
+# every store, exactly the store's flagged rows (read at the flag's own
+# threshold, so before the user threshold is applied) with keys consistent
+# with their positions; otherwise a short description of the first mismatch.
+# `flag_rows`, when given, holds each store's flagged row ids
+# (fastmr_store_flag_rows()); the returned row ids must equal them as a set.
+fastmr_flag_batch_problem <- function(got, stores, labels, io_threads = 1L, flag_rows = NULL) {
+  if (!is.list(got) || length(got) != length(stores)) {
+    return(paste0("returned ", if (is.list(got)) length(got) else 0L,
+                  " tables for ", length(stores), " stores"))
+  }
+  if (!is.null(names(got)) && !identical(names(got), labels)) {
+    return("store names out of order")
+  }
+  for (i in seq_along(stores)) {
+    x <- got[[i]]
+    if (!is.data.frame(x)) return(paste0("store '", labels[[i]], "' returned no table"))
+    expected <- if (is.null(flag_rows)) fastmr_store_flag_count(stores[[i]], io_threads) else
+      length(flag_rows[[i]])
+    if (nrow(x) != expected || ("row" %in% names(x) && anyDuplicated(x[["row"]]))) {
+      return(paste0("store '", labels[[i]], "' returned ", nrow(x), " of ", expected,
+                    " flagged rows"))
+    }
+    if (!is.null(flag_rows)) {
+      if (!"row" %in% names(x)) return(paste0("store '", labels[[i]], "' returned no row ids"))
+      if (!identical(sort(as.integer(x[["row"]])), sort(as.integer(flag_rows[[i]])))) {
+        return(paste0("store '", labels[[i]], "' returned row ids that are not its flagged rows"))
+      }
+    }
+    problem <- fastmr_batch_key_problem(x, labels[[i]])
+    if (!is.null(problem)) return(problem)
+  }
+  NULL
+}
+
+# NULL when a full-store read_candidates_batch() result is internally
+# consistent (one table per store, unique row ids, keys matching positions).
+fastmr_full_batch_problem <- function(got, labels) {
+  if (!is.list(got) || length(got) != length(labels)) {
+    return(paste0("returned ", if (is.list(got)) length(got) else 0L,
+                  " tables for ", length(labels), " stores"))
+  }
+  for (i in seq_along(got)) {
+    x <- got[[i]]
+    if (!is.data.frame(x)) return(paste0("store '", labels[[i]], "' returned no table"))
+    if (!"row" %in% names(x) || anyDuplicated(x[["row"]])) {
+      return(paste0("store '", labels[[i]], "' returned missing or duplicated row ids"))
+    }
+    problem <- fastmr_batch_key_problem(x, labels[[i]])
+    if (!is.null(problem)) return(problem)
+  }
+  NULL
+}
+
+# |z| of the kept candidate rows: the clumpers' tie-break for equal p
+# (reconstructed p underflows to 0 above |z| ~ 38).  Internal column
+# `.fastmr_abs_z`, removed again by fast_clump_compressed().
+fastmr_candidate_abs_z <- function(x, keep) {
+  if (!"z" %in% names(x)) return(rep(NA_real_, sum(keep)))
+  abs(suppressWarnings(as.numeric(x[["z"]][keep])))
+}
+
 # Candidate table from a read_candidates_batch() result: native row order,
 # p <= pvalue_threshold, and the exact rank when requested.
 fastmr_candidates_from_batch <- function(got, labels, pvalue_threshold, exact_order) {
@@ -564,7 +739,8 @@ fastmr_candidates_from_batch <- function(got, labels, pvalue_threshold, exact_or
                       pval.exposure = p[keep],
                       chr_name = as.character(x[["chromosome"]][keep]),
                       chrom_start = as.numeric(x[["base_pair_location"]][keep]),
-                      stringsAsFactors = FALSE)
+                      .fastmr_abs_z = fastmr_candidate_abs_z(x, keep),
+                      stringsAsFactors = FALSE, check.names = FALSE)
     if (exact_order) {
       rank <- x[["exact_rank"]][keep]
       if (anyNA(rank) || any(rank <= 0L)) {
@@ -631,24 +807,49 @@ fastmr_compressed_candidate_data <- function(paths, labels, pvalue_threshold,
     # the whole rank vector (~9M entries per store) to look up a few thousand.
     # The batch reader needs the flag's own threshold; the user threshold is
     # applied afterwards, as in the fallback, so membership stays the flag's.
+    flag_rows <- NULL
     if (fastmr_have_flag_candidates_batch()) {
+      # The flagged row ids are the request: the batch must return exactly
+      # these rows.  A CompreSSoR build with "candidates_batch_rows_checked"
+      # verifies that itself (every store's decoded rows must be identical to
+      # the rows its own flag read selected, and their number must equal the
+      # manifest's flagged-row count, or the batch stops), so the flag stream
+      # is not decoded a second time here; the count, duplicate-row and
+      # key/position checks below still run.  Older builds get the flagged row
+      # ids read up front, and they are reused by the per-store fallback.
+      if (!fastmr_have_checked_candidates_batch()) {
+        flag_rows <- lapply(stores, fastmr_store_flag_rows, io_threads = io_threads)
+      }
       got <- tryCatch(
-        CompreSSoR::read_candidates_batch(
+        fastmr_read_candidates_batch(
           as.list(stats::setNames(paths, labels)), pvalue_threshold = unname(flag_thresholds),
-          columns = c("key", "p_value", "chromosome", "base_pair_location"),
+          columns = c("key", "p_value", "chromosome", "base_pair_location", "z"),
           order = if (exact_order) "exact" else "none", threads = io_threads,
           strategy = "pvalue_flag"),
-        error = function(e) NULL)
-      if (is.list(got) && length(got) == length(paths)) {
+        error = function(e) e)
+      # Trust the batch only if every store returned exactly its flagged
+      # rows (CompreSSoR 0.7.0 could silently drop rows in mixed batches):
+      # the manifest count (or, without the capability, the flagged row ids).
+      problem <- if (inherits(got, "error")) {
+        paste("read_candidates_batch() failed:", conditionMessage(got))
+      } else {
+        fastmr_flag_batch_problem(got, stores, labels, io_threads, flag_rows = flag_rows)
+      }
+      if (is.null(problem)) {
         data <- fastmr_candidates_from_batch(got, labels, pvalue_threshold, exact_order)
+      } else {
+        warning("batched p-value flag candidate read rejected (", problem,
+                "); falling back to the per-store reader", call. = FALSE)
       }
     }
     if (is.null(data)) {
-      flag_reader <- getExportedValue("CompreSSoR", "read_pvalue_flag")
-      rows <- lapply(stores, function(store) flag_reader(store, threads = io_threads))
+      rows <- if (!is.null(flag_rows)) flag_rows else {
+        flag_reader <- getExportedValue("CompreSSoR", "read_pvalue_flag")
+        lapply(stores, function(store) flag_reader(store, threads = io_threads))
+      }
     }
   }
-  columns <- c("chromosome", "base_pair_location", "effect_allele", "other_allele", "p_value")
+  columns <- c("chromosome", "base_pair_location", "effect_allele", "other_allele", "p_value", "z")
   # The aligned flag returns immutable zero-based row IDs.  The current
   # CompreSSoR batch reader accepts canonical keys, not row IDs, so use the
   # native single-store reader here; independent stores can still be decoded
@@ -659,8 +860,12 @@ fastmr_compressed_candidate_data <- function(paths, labels, pvalue_threshold,
   reader <- function(i) {
     tryCatch({
       if (!is.null(rows)) {
-        x <- CompreSSoR::read_sumstats(paths[[i]], variants = rows[[i]], columns = columns,
-                                       threads = reader_threads)
+        x <- CompreSSoR::read_sumstats(paths[[i]], variants = if (length(rows[[i]])) rows[[i]] else 0L,
+                                       columns = columns, threads = reader_threads)
+        if (!length(rows[[i]])) x <- x[0L, , drop = FALSE]
+        if (nrow(x) != length(rows[[i]])) {
+          stop("flagged-row read returned ", nrow(x), " of ", length(rows[[i]]), " rows")
+        }
         attr(x, "fastmr_row") <- as.integer(rows[[i]])
         return(x)
       }
@@ -696,19 +901,26 @@ fastmr_compressed_candidate_data <- function(paths, labels, pvalue_threshold,
     }, error = function(e) stop("failed to read candidates from ", paths[[i]], ": ",
                                conditionMessage(e), call. = FALSE))
   }
-  if (is.null(data) && is.null(flag_thresholds) && fastmr_have_one_pass_candidates()) {
+  if (is.null(data) && is.null(flag_thresholds) && fastmr_have_one_pass_candidates() &&
+      fastmr_have_checked_candidates_batch()) {
     # One read_candidates_batch() per exposure batch: candidate rows, key, p and
     # (for exact ordering) the exact rank in one block-selective pass per store,
     # with same-panel identity decoded once.  No p slack is needed because p is
     # bit-identical to the full read.
     got <- tryCatch(
-      CompreSSoR::read_candidates_batch(
+      fastmr_read_candidates_batch(
         as.list(stats::setNames(paths, labels)), pvalue_threshold = pvalue_threshold,
-        columns = c("key", "p_value", "chromosome", "base_pair_location"),
+        columns = c("key", "p_value", "chromosome", "base_pair_location", "z"),
         order = if (exact_order) "exact" else "none", threads = io_threads),
       error = function(e) NULL)
-    if (is.list(got) && length(got) == length(paths)) {
-      data <- fastmr_candidates_from_batch(got, labels, pvalue_threshold, exact_order)
+    if (!is.null(got)) {
+      problem <- fastmr_full_batch_problem(got, labels)
+      if (is.null(problem)) {
+        data <- fastmr_candidates_from_batch(got, labels, pvalue_threshold, exact_order)
+      } else {
+        warning("batched candidate read rejected (", problem,
+                "); falling back to the per-store reader", call. = FALSE)
+      }
     }
   }
   if (is.null(data)) {
@@ -724,7 +936,8 @@ fastmr_compressed_candidate_data <- function(paths, labels, pvalue_threshold,
     if (!is.data.frame(x)) stop("compressed reader returned an invalid candidate table", call. = FALSE)
     if (!nrow(x)) return(data.frame(SNP = character(), id.exposure = character(),
                                     pval.exposure = numeric(), chr_name = character(),
-                                    chrom_start = numeric(), stringsAsFactors = FALSE))
+                                    chrom_start = numeric(), .fastmr_abs_z = numeric(),
+                                    stringsAsFactors = FALSE, check.names = FALSE))
     key <- CompreSSoR::compressor_variant_key(
       x[["chromosome"]], x[["base_pair_location"]],
       x[["other_allele"]], x[["effect_allele"]]
@@ -734,7 +947,8 @@ fastmr_compressed_candidate_data <- function(paths, labels, pvalue_threshold,
     out <- data.frame(SNP = key[keep], id.exposure = labels[[i]], pval.exposure = p[keep],
                       chr_name = as.character(x[["chromosome"]][keep]),
                       chrom_start = as.numeric(x[["base_pair_location"]][keep]),
-                      stringsAsFactors = FALSE)
+                      .fastmr_abs_z = fastmr_candidate_abs_z(x, keep),
+                      stringsAsFactors = FALSE, check.names = FALSE)
     if (exact_order) {
       ranks <- CompreSSoR::read_pvalue_order(paths[[i]], as = "ranks", fallback = "error",
                                              threads = reader_threads)
@@ -819,6 +1033,7 @@ fast_clump_compressed <- function(
                       lead_row = fast_clump_data_lead_rows,
                       graph = fast_clump_data_graph)
   clumped <- do.call(clump_fun, c(list(dat = candidates$data), dots))
+  clumped$data[[".fastmr_abs_z"]] <- NULL
   if (!is.null(output)) fast_write_parquet(clumped$data, output)
   clumped$diagnostics$compressed_input <- list(
     stores = unname(paths), pvalue_threshold = pvalue_threshold,

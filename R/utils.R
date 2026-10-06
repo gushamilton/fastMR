@@ -94,6 +94,9 @@ fastmr_validate_controls <- function(nboot, seed, threads) {
     if (length(seed) != 1L || is.na(seed) || !is.finite(seed) || seed != floor(seed)) {
       stop("seed must be NULL or one finite integer", call. = FALSE)
     }
+    if (abs(seed) > .Machine$integer.max) {
+      stop("seed must lie in [-", .Machine$integer.max, ", ", .Machine$integer.max, "]", call. = FALSE)
+    }
   }
   invisible(list(nboot = as.integer(nboot), seed = if (is.null(seed)) NULL else as.numeric(seed),
                  threads = as.integer(threads)))
@@ -434,4 +437,43 @@ print.fastmr_compact_grid <- function(x, ...) {
               paste(as.character(x$native$methods), collapse = ", ")))
   cat("Use as.data.frame() for the tidy table or fastmr_grid_chunk() for a pair range.\n")
   invisible(x)
+}
+
+# Group index of each element of a list of requests: element i gets the
+# position of the first element identical() to it. Elements are bucketed by a
+# cheap fingerprint (type, length and first, middle and last values), which
+# identical() elements always share, and identical() runs only within a
+# bucket, so k requests cost O(k) comparisons rather than O(k^2) (2,382
+# stores with 2,083 distinct key sets: millions of identical() calls before).
+# A request shared by many stores as one object is one pointer check each.
+fastmr_request_groups <- function(requests) {
+  k <- length(requests)
+  group <- integer(k)
+  if (!k) return(group)
+  buckets <- new.env(hash = TRUE, parent = emptyenv(), size = max(29L, k))
+  for (i in seq_len(k)) {
+    x <- requests[[i]]
+    fingerprint <- fastmr_request_fingerprint(x)
+    candidates <- buckets[[fingerprint]]
+    j <- 0L
+    for (u in candidates) {
+      if (identical(requests[[u]], x)) {
+        j <- u
+        break
+      }
+    }
+    if (!j) {
+      j <- i
+      buckets[[fingerprint]] <- c(candidates, i)
+    }
+    group[i] <- j
+  }
+  group
+}
+
+fastmr_request_fingerprint <- function(x) {
+  n <- length(x)
+  if (!n || !is.atomic(x)) return(paste(typeof(x), n))
+  probe <- x[unique(c(1L, (n + 1L) %/% 2L, n))]
+  paste(c(typeof(x), n, as.character(probe)), collapse = "\r")
 }

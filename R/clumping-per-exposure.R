@@ -18,7 +18,7 @@
 #   --ld-window-kb plus |dbp| <= clump_kb * 1000), see
 #   fastmr_clump_per_exposure_args().
 # * Candidates absent from the reference are retained (they have no LD edges
-#   in the graph either).
+#   in the graph either), or dropped with absent = "drop".
 # * Candidate positions must equal the reference positions (the graph windows
 #   on the data positions, --clump on the reference); otherwise, or when the
 #   reference has duplicate candidate IDs, the call is delegated to the graph.
@@ -186,6 +186,28 @@ fastmr_clump_run_lead_graph <- function(leads, snps, reference_args, plink2_bin,
   .fastmr_vcor_read(path, as.character(snps))
 }
 
+# Warns about a position or chromosome-label mismatch between the candidates
+# and the reference (typically a different genome build): the per-exposure
+# call is then delegated to the graph partition, which windows on the data
+# positions, so the mismatch would otherwise go unreported.
+fastmr_clump_warn_reference_mismatch <- function(reason, pvar, snp, chr, bp) {
+  at <- match(snp, pvar$id)
+  hit <- !is.na(at)
+  if (identical(reason, "reference_position_mismatch")) {
+    u <- !duplicated(snp) & hit
+    n_bad <- sum(pvar$pos[at[u]] != bp[u])
+    warning(sprintf(paste0("%d of %d candidate variants found in the LD reference have a different ",
+                           "position there (different genome build?); per-exposure clumping was ",
+                           "delegated to the graph partition, which windows on the data positions"),
+                    as.integer(n_bad), as.integer(sum(u))), call. = FALSE)
+  } else if (identical(reason, "reference_chromosome_mismatch")) {
+    warning(paste0("candidate chromosome labels do not map one-to-one onto the LD reference's ",
+                   "(different genome build or chromosome naming?); per-exposure clumping was ",
+                   "delegated to the graph partition, which uses the data chromosomes"), call. = FALSE)
+  }
+  invisible(NULL)
+}
+
 # Checks that the reference describes the candidates exactly as the data does:
 # unique IDs, equal positions and a one-to-one chromosome-label mapping.
 # Returns NULL when consistent, else a reason string.
@@ -210,7 +232,7 @@ fastmr_clump_reference_mismatch <- function(pvar, snp, chr, bp) {
 #' present, then p, then SNP ID), and the `--clump-kb`/`--clump-r2` arguments
 #' are translated so that PLINK2's window and r2 comparisons match the graph
 #' partition's inclusive ones.  Candidates absent from the reference are
-#' retained.  The leads are then certified with one `--r2-phased
+#' handled as `absent` says (retained by default, with a warning).  The leads are then certified with one `--r2-phased
 #' --ld-snp-list` query (the graph partition's own LD statistic and flags,
 #' restricted to pairs involving a lead): the greedy pass over that
 #' lead-incident graph must keep exactly the `--clump` leads, which proves the
@@ -222,7 +244,10 @@ fastmr_clump_reference_mismatch <- function(pvar, snp, chr, bp) {
 #' The call is delegated to [fast_clump_data_graph()] (reason in
 #' `diagnostics$delegated`) when the certificate fails, when candidate
 #' positions are incomplete or differ from the reference, when the reference
-#' has duplicate candidate IDs, or when `clump_r2 <= 0`.
+#' has duplicate candidate IDs, or when `clump_r2 <= 0`.  A position or
+#' chromosome-label mismatch with the reference (for example a different
+#' genome build) is also reported with a warning, since the graph partition
+#' then windows on the data positions.
 #'
 #' @inheritParams fast_clump_data_graph
 #' @param subset `"auto"` or `"always"` (default behaviour: extract the
@@ -236,8 +261,9 @@ fast_clump_data_per_exposure <- function(
     dat, clump_kb = 10000, clump_r2 = 0.001, clump_p1 = 1,
     bfile = NULL, pfile = NULL, plink2_bin = NULL, threads = 1L,
     subset = c("auto", "always", "never"), workdir = NULL,
-    reference_manifest = NULL, ...) {
+    reference_manifest = NULL, absent = c("keep", "drop"), ...) {
   if (!is.data.frame(dat) || !"SNP" %in% names(dat)) stop("dat must contain SNP", call. = FALSE)
+  absent <- match.arg(absent)
   clump_kb <- fastmr_clump_number(clump_kb, "clump_kb", 0)
   clump_r2 <- fastmr_clump_number(clump_r2, "clump_r2", 0, 1)
   clump_p1 <- fastmr_clump_number(clump_p1, "clump_p1", 0, 1)
@@ -256,7 +282,7 @@ fast_clump_data_per_exposure <- function(
     ans <- fast_clump_data_graph(original_input, clump_kb = clump_kb, clump_r2 = clump_r2,
                                  clump_p1 = clump_p1, bfile = bfile, pfile = pfile,
                                  plink2_bin = plink2_bin, threads = threads, workdir = workdir,
-                                 reference_manifest = reference_manifest, ...)
+                                 reference_manifest = reference_manifest, absent = absent, ...)
     ans$diagnostics$delegated <- reason
     ans$diagnostics$partition_requested <- "per_exposure"
     ans
@@ -272,9 +298,9 @@ fast_clump_data_per_exposure <- function(
     stop("SNP and id.exposure must be non-missing and non-empty", call. = FALSE)
   }
   original <- dat
-  dedup <- !duplicated(paste(as.character(dat$id.exposure), as.character(dat$SNP), sep = "\r"))
-  dat <- dat[dedup, , drop = FALSE]
+  dat <- dat[fastmr_clump_dedup(dat, pcol), , drop = FALSE]
   p <- suppressWarnings(as.numeric(as.character(dat[[pcol]])))
+  tiebreak <- fastmr_clump_tiebreak(dat, pcol)
   snp <- as.character(dat$SNP)
   expo <- as.character(dat$id.exposure)
   rank <- dat[["pvalue_rank"]]
@@ -307,7 +333,8 @@ fast_clump_data_per_exposure <- function(
   plink_calls <- 0L
   subset_variants <- NA_integer_
   retained_key <- character()
-  absent <- 0L
+  n_absent <- 0L
+  absent_snps <- character()
   certificate <- list(leads = 0L, lead_edges = 0L, verified = TRUE)
   if (length(elig)) {
     usnp <- unique(snp[elig])
@@ -322,14 +349,17 @@ fast_clump_data_per_exposure <- function(
         subset_variants <- 0L
       } else {
         bad <- fastmr_clump_reference_mismatch(sub$pvar, snp[elig], position$chr[elig], position$bp[elig])
-        if (!is.null(bad)) return(delegate(bad))
+        if (!is.null(bad)) {
+          fastmr_clump_warn_reference_mismatch(bad, sub$pvar, snp[elig], position$chr[elig], position$bp[elig])
+          return(delegate(bad))
+        }
         present <- sub$pvar$id
         subset_variants <- nrow(sub$pvar)
         clump_reference <- sub$reference_args
       }
     }
-    ord <- if (is.null(rank)) order(match(expo[elig], e_ids), p[elig], snp[elig], method = "radix")
-           else order(match(expo[elig], e_ids), rank[elig], p[elig], snp[elig], method = "radix")
+    ord <- fastmr_clump_order(p[elig], snp[elig], rank[elig], tiebreak[elig],
+                              group = match(expo[elig], e_ids))
     rows <- elig[ord]
     groups <- split(rows, factor(expo[rows], levels = e_ids))
     # Reference membership once per row (not once per exposure against the
@@ -375,19 +405,24 @@ fast_clump_data_per_exposure <- function(
         pv <- out[[k]]$pvar
         if (!is.null(pv) && nrow(pv)) {
           bad <- fastmr_clump_reference_mismatch(pv, s, position$chr[r], position$bp[r])
-          if (!is.null(bad)) return(delegate(bad))
+          if (!is.null(bad)) {
+            fastmr_clump_warn_reference_mismatch(bad, pv, s, position$chr[r], position$bp[r])
+            return(delegate(bad))
+          }
         }
         if (is.null(pv)) rep(FALSE, length(s)) else s %in% pv$id
       }
       unknown <- setdiff(out[[k]]$ids, s[in_ref])
       if (length(unknown)) stop("PLINK2 --clump reported an index variant that was not a candidate: ",
                                 unknown[[1L]], call. = FALSE)
-      absent <- absent + sum(!in_ref)
-      keep <- !in_ref | s %in% out[[k]]$ids
+      n_absent <- n_absent + sum(!in_ref)
+      absent_snps <- c(absent_snps, s[!in_ref])
+      keep <- (if (identical(absent, "drop")) FALSE else !in_ref) | s %in% out[[k]]$ids
       kept[[k]] <- paste(e_ids[[k]], s[keep], sep = "\r")
       ordered_present[[k]] <- s[in_ref]
     }
     retained_key <- unlist(kept, use.names = FALSE)
+    fastmr_clump_check_absent(n_absent, length(elig), length(unique(absent_snps)), absent)
     # Certificate: the graph partition's own LD statistic (--r2-phased with
     # the graph's flags) for every pair involving a --clump lead.  The greedy
     # pass only ever consults edges to kept SNPs, so if the C++ greedy over
@@ -442,7 +477,7 @@ fast_clump_data_per_exposure <- function(
          exposures = length(unique(as.character(original$id.exposure))),
          candidate_rows = nrow(dat), retained = length(retained_key),
          rounds = 0L, plink_calls = plink_calls, subset = use_subset,
-         subset_variants = subset_variants, absent_from_reference = absent,
+         subset_variants = subset_variants, absent_from_reference = n_absent, absent = absent,
          certificate = certificate,
          workers = if (length(elig)) min(threads, max(1L, length(e_ids))) else 0L,
          exact = TRUE, fallback = FALSE, fallbacks = list(),

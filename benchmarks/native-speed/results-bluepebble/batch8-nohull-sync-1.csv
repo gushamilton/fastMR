@@ -1,0 +1,6 @@
+"label","workload","pairs","threads","wall_s","wall_s_median"
+"nohull-sync","k3",12000,8,23.452,23.4645
+"nohull-sync","k10",6000,8,15.826,15.8405
+"nohull-sync","k30",2400,8,10.784,10.805
+"nohull-sync","k100",800,8,7.839,7.878
+"nohull-sync","mixed",8000,8,14.824,14.8255

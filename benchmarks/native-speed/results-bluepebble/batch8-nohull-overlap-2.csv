@@ -1,0 +1,6 @@
+"label","workload","pairs","threads","wall_s","wall_s_median"
+"nohull-overlap","k3",12000,8,22.81,22.8275
+"nohull-overlap","k10",6000,8,14.812,14.837
+"nohull-overlap","k30",2400,8,9.529,9.5425
+"nohull-overlap","k100",800,8,6.45399999999999,6.4625
+"nohull-overlap","mixed",8000,8,13.781,13.7875

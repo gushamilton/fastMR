@@ -12,8 +12,153 @@
   ~1e-15 and the `mr_pcgmm` component count (`pc_center = TRUE`).
 - New `fast_mr_ld_neff()` for the effective number of independent signals.
 - `MendelianRandomization` added to Suggests (used by the validation tests).
+# fastMR (development)
+
+- Compressed extraction groups the requested key sets in linear time.
+  `fastmr_request_index_usable()` (every block, request-index path) and the
+  identity-code cache of the manifest-decoding path compared each request
+  with every distinct one so far using `identical()`: quadratic in the
+  number of distinct key sets (2,083 per 300-outcome block of the UKB-PPP
+  cis-MR run). Results are unchanged.
+
+- New batched multivariable MR. `fast_mvmr_ivw()` and `fast_mvmr_ivw_batch()`
+  fit TwoSampleMR `mv_ivw()` / `mv_multiple()` multivariable IVW for many
+  outcomes (and many designs) in one OpenMP / std::thread native call, with
+  exact outcome-specific weights by default and an optional shared-weight
+  path for proportional outcome standard errors. Standard errors follow
+  TwoSampleMR's multivariable convention (residual standard error, not
+  floored); `se_model = "multiplicative_floored"` and `"fixed"` are
+  available. Diagnostics: Sanderson-Windmeijer conditional F (as
+  `MVMR::strength_mvmr()`, divided by L - (p - 1)) with a weak-instrument
+  warning, and Sanderson's `Q_A`. `fast_mvmr_compressed()` runs classical or
+  residualised covariate adjustment for every exposure-outcome pair directly
+  from CompreSSoR stores, with covariates from stores or external summary
+  statistics, optional LD resolution of instrument unions, per-outcome SNP
+  exclusion windows and `fast_mr_compressed()`-style strict handling and
+  timing metadata.
+
+- `fast_clump_compressed(candidate_source = "pvalue_flag")`: with a CompreSSoR
+  that reports `"candidates_batch_rows_checked"`, the batched candidate read
+  is no longer preceded by a separate, store-by-store decode of every store's
+  flagged row ids. That build already stops unless each store's decoded rows
+  are exactly its own flag selection and match the manifest's flagged-row
+  count; fastMR still checks the count, duplicate rows and key/position
+  consistency. About 7 s of the 25x25 showcase clump stage. Older builds keep
+  the up-front row-id check. Results are unchanged.
+- With a CompreSSoR that reports the `"request_index"` capability,
+  `fast_mr_compressed()` extraction asks `read_sumstats_batch()` for each
+  row's request index and takes the requested key directly, reading no
+  identity columns. Older builds keep the manifest-decoding path (and, before
+  that, the string path). Results are unchanged.
+- `fast_mr_compressed()` extraction: stores are opened and validated
+  `io_threads` at a time instead of one by one, and the batched reader returns
+  each row's numeric identity (global position and substitution code, as
+  declared by the store manifest's `compressor_variant_identity_v1` encoding)
+  instead of decoded chromosome/allele strings. Each row then takes the
+  variant key of the requested key with the same identity code, so no key
+  string is rebuilt per row. Results, counts, errors and warnings are
+  unchanged; stores whose manifest does not declare that encoding use the
+  previous string path.
+- `fast_mr_compressed()`'s pairwise path (every non-IVW method set, or
+  `estimator = "pairwise"`) and its `steiger = TRUE` pass now assemble the
+  harmonised table with one vectorised pair index (one `match()` per store,
+  no per-pair data frames or `do.call(rbind)`), then make the same single
+  batched `fast_mr()` call. Results, counts, Steiger rows, errors and row
+  order are identical to the per-pair loop; the estimator step now scales to
+  millions of pairs. `strict = FALSE` omission warnings (pairwise and sparse
+  IVW paths) list at most `getOption("fastMR.warning_pairs", 20)` entries
+  and then the total count, instead of one string naming every pair; the
+  per-pair detail stays in `attr(result, "compressed_input")$counts`, and
+  `options(fastMR.warning_pairs = Inf)` restores the full listing.
+- Faster mode bootstraps and threaded bootstrap batches, with every result
+  (and the final `.Random.seed`) identical to before:
+  - Mode densities for pairs with up to 1000 ratios first try a "hull" path that
+    convolves and scans only the grid cells spanning the occupied bins, with a
+    Gaussian-recurrence kernel (one exact `exp()` per 16 distances). Its guard
+    carries a written error bound (see `src/fastmr.cpp`); any draw it cannot
+    certify falls back to the existing direct/FFT paths.
+  - Threaded bootstrap batches are double-buffered: the main thread draws the
+    next batch's normals while the workers compute the current batch, and
+    fills the previous batch's p-values meanwhile. R's RNG is still consumed
+    only on the main thread, in the serial order.
+
+- Single-instrument pairs (`nsnp = 1`): the IVW estimators (`"ivw"`,
+  `"ivw_fe"`, `"ivw_mre"`) return the Wald ratio, `b = by / bx` and
+  `se = se_y / |bx|`, exactly as TwoSampleMR's `mr()` reports it through
+  `mr_wald_ratio()`, with `Q` and `sigma` `NA`. This holds for `fast_mr()`,
+  `fast_mr_grid()` (tidy and compact), `fast_mr_sparse_ivw()`,
+  `fast_mr_masked_ivw()` and every `fast_mr_compressed()` path. They used to
+  return no estimate (NA/NaN), which left every single-instrument exposure (a
+  quarter of the UKB-PPP cis exposures) without an IVW result. Other methods stay
+  `NA` at `nsnp = 1`, as in TwoSampleMR. An exact fit with two or more
+  instruments is unaffected (it keeps the fixed-effect se).
+- Missing native results are now R's `NA` rather than `NaN`.
+
+Correctness fixes from an adversarial review:
+
+- `fast_mr()`: a `seed` for which `seed + (number of pairs) - 1` exceeds
+  `.Machine$integer.max` is rejected up front (pair i is seeded with
+  `seed + i - 1`); it used to fail part-way through the run. Every entry point
+  now rejects seeds outside `[-.Machine$integer.max, .Machine$integer.max]`.
+- `fast_clump_compressed()` candidate reads: the batched p-value flag read must
+  return exactly each store's flagged row ids (not just as many rows), and
+  every key's position must equal its `base_pair_location`; the full-store
+  batch path checks unique row ids and keys too. Any mismatch falls back to the
+  per-store reader with a warning. The per-store flagged-row reader now stops
+  when `read_sumstats()` returns fewer rows than requested.
+- Clumping (graph, per-exposure, auto, batched and lead-row partitions):
+  candidates with equal p are now ordered by larger |z| before SNP ID. p
+  underflows to 0 above |z| ~ 38 (CompreSSoR reconstructed p and many cis-pQTL
+  files), and the lead used to be the lexicographically first SNP. |z| comes
+  from `beta.exposure / se.exposure` when present, and from the stores' `z`
+  for `fast_clump_compressed()`. Results are unchanged when p has no ties.
+- Clumping: a repeated (exposure, SNP) pair is ordered by its smallest p
+  (it was the first row's p); every row of a retained pair is still returned.
+  This also applies to `fast_clump_data()`.
+- `fast_clump_data_graph()`, `fast_clump_data_per_exposure()` and
+  `fast_clump_data_auto()` count eligible candidates absent from the LD
+  reference (the graph partition with one PLINK2 `--write-snplist` query),
+  warn with the count, and stop when every candidate is absent (usually a
+  SNP-ID scheme mismatch). New argument `absent = c("keep", "drop")`: `"keep"`
+  (default) preserves the old results, `"drop"` removes them as TwoSampleMR
+  does. `diagnostics$absent_from_reference` reports the count.
+- `fast_clump_data_per_exposure()` warns when candidate positions or
+  chromosome labels disagree with the reference (e.g. a different genome
+  build) instead of delegating to the graph partition silently.
+- `fast_harmonise_data()`: an exposure with identical alleles (e.g. A/A) is
+  marked `remove` when the outcome has two alleles, and its outcome effect is
+  never flipped (the outcome beta used to be negated). This matches
+  TwoSampleMR, which also keeps (unflipped, subject to its ambiguity rules) a
+  row whose outcome has only an effect allele.
+- `fast_mr_compressed()`: an exposure with an empty instrument set is dropped
+  with a warning when `strict = FALSE` (an error with `strict = TRUE`, and
+  when every set is empty); it used to abort in both modes. The sparse IVW
+  memory check now includes the outcome-by-union-instrument matrices and
+  per-pair count matrices it builds, against
+  `getOption("fastMR.sparse_ivw_max_memory_mb", 8192)` MiB (above it the
+  pairwise path runs). The documentation now states that the shared-grid
+  fast path is used even with `estimator = "pairwise"`.
+- `fast_mr_grid()`: the OpenMP pair loop uses a 64-bit index, so grids with
+  more than 2^31 - 1 pairs no longer overflow it.
+
+- `fast_clump_compressed()` (`candidate_source = "pvalue_flag"`) checks the
+  batched `read_candidates_batch(strategy = "pvalue_flag")` result against each
+  store's flagged-row count (from the store manifest, or the flag stream when
+  the manifest lacks it) and falls back to the per-store reader, with a
+  warning, on any mismatch or error. CompreSSoR 0.7.0 could silently drop
+  flagged rows in batches that mixed variant sets, which lost every instrument
+  for some exposures. The full-store batch path, which has no count to check
+  against, is used only with a CompreSSoR that reports the
+  `"candidates_batch_rows_checked"` capability (>= 0.7.1).
+- IVW on an exact fit (residual standard error 0, e.g. a self-pair with
+  outcome = exposure) returns the fixed-effect standard error, as TwoSampleMR
+  and fastMR <= 0.1.9's sparse kernel did, instead of se 0 and p NA (`"ivw"`)
+  or se NA (`"ivw_fe"`). This applies to `fast_mr()`, the shared-grid and
+  sparse IVW kernels (and so `fast_mr_compressed()`) and leave-one-out IVW.
+  The sparse kernel had adopted the 0-se formula in d53afb8 (0.1.10).
 
 # fastMR 0.2.0
+
 
 - `fast_clump_compressed()` now defaults to `partition = "auto"`
   (`fast_clump_data_auto()`), which picks between the all-pairs graph and the

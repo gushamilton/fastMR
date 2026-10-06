@@ -17,6 +17,16 @@
 #'   an overwrite or another compression codec is required.
 #' @param ... Optional `phi` bandwidth multiplier for mode methods and `penk`
 #'   penalty multiplier for penalised weighted median (default 20).
+#' @details With a single instrument (`nsnp = 1`) the IVW estimators (`"ivw"`,
+#'   `"ivw_fe"`, `"ivw_mre"`) return the Wald ratio, as TwoSampleMR's `mr()`
+#'   reports it through `mr_wald_ratio()`: `b = beta.outcome / beta.exposure`
+#'   and `se = se.outcome / |beta.exposure|` (first order); `Q` and `sigma` are
+#'   `NA`. Every other method needs at least two (`"uwr"`), three or six
+#'   (`"sign"`) instruments and returns `NA`, as TwoSampleMR does. The same
+#'   holds for [fast_mr_grid()], [fast_mr_sparse_ivw()],
+#'   [fast_mr_masked_ivw()] and [fast_mr_compressed()]. An exact fit with two
+#'   or more instruments (residual standard error 0) is a different case and
+#'   keeps the fixed-effect standard error. Missing results are `NA`.
 #' @return A tidy data frame using TwoSampleMR-compatible result columns.
 #' @export
 fast_mr <- function(data,
@@ -78,6 +88,7 @@ fast_mr <- function(data,
     threads = controls[["threads"]], phi = phi, penk = penk
   )
   native <- if (fastmr_methods_use_rng(methods, controls[["nboot"]])) {
+    fastmr_check_seed_streams(controls[["seed"]], group_count)
     fastmr_run_bootstrap_groups(args, controls[["seed"]])
   } else {
     fastmr_native_call(fastmr_run_groups_native, args, NULL)
@@ -94,8 +105,24 @@ fast_mr <- function(data,
 # i (the caller's RNG state is then restored). With one worker, draws stream
 # straight into each group's bootstrap layout as before; with several, groups
 # run in batches whose normals (at most getOption("fastMR.bootstrap_batch_draws"),
-# default 2^23 = 64 MB, or a single group streamed serially) are drawn into a
-# reused native buffer. Batching does not change any result.
+# default 2^23 = 64 MB, or a single group streamed serially) are drawn into one
+# of two reused native buffers: the main thread draws the next batch while the
+# workers compute the current one. Batching does not change any result.
+# Group i reseeds with set.seed(seed + i - 1), so the last group's seed must
+# still be a valid R integer. Check before any group runs rather than failing
+# part-way through the native loop.
+fastmr_check_seed_streams <- function(seed, n_groups) {
+  if (is.null(seed) || n_groups < 1) return(invisible(NULL))
+  last <- seed + n_groups - 1
+  if (last > .Machine$integer.max) {
+    stop("seed + (number of exposure/outcome pairs) - 1 = ", format(last, scientific = FALSE),
+         " exceeds the largest R integer (", .Machine$integer.max, "); each pair i is seeded with ",
+         "seed + i - 1, so use seed <= ", format(.Machine$integer.max - n_groups + 1, scientific = FALSE),
+         call. = FALSE)
+  }
+  invisible(NULL)
+}
+
 fastmr_run_bootstrap_groups <- function(args, seed) {
   args$batch_draws <- as.numeric(getOption("fastMR.bootstrap_batch_draws", 2^23))
   if (!is.null(seed)) {

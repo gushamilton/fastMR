@@ -42,13 +42,15 @@ jobs:
           extra-packages: |
             any::rcmdcheck
             any::testthat
-            github::gushamilton/CompreSSoR@a67fee0d9b95aeaba7526ed8ded56561be88bf40
+            github::gushamilton/CompreSSoR@d158622004a6f9812f65cf02cd914f4cda7d24d4
           needs: check
 
-      - name: Verify CompreSSoR 0.6 native fixture dependency
+      - name: Verify the CompreSSoR fast-path capabilities
         run: >-
           Rscript -e
-          'stopifnot(utils::packageVersion("CompreSSoR") >= "0.6.0")'
+          'stopifnot(utils::packageVersion("CompreSSoR") >= "0.6.0",
+          all(c("request_index", "key_reads_identity_columns") %in%
+          CompreSSoR::compressor_capabilities()))'
 
       - uses: r-lib/actions/check-r-package@v2
         env:

@@ -101,6 +101,25 @@ For matrix-form multivariable MR, `fast_mr_multivariable()` adds shared- or
 exposure-specific instrument sets and an optional weighted-regression
 intercept; `fast_mr_multivariable_ivw()` is the compact native `mv_ivw` path.
 
+For many outcomes at once, `fast_mvmr_ivw()` fits one design (SNPs x
+exposures) against every column of an outcome matrix, and
+`fast_mvmr_ivw_batch()` fits many designs (e.g. one per primary exposure, each
+with the same covariate traits) against a shared outcome panel, in one native
+call. Each outcome keeps its own `1 / se^2` weights (exact `mv_ivw` /
+`mv_multiple` results, matched to 1e-12); an optional shared-weight path
+applies when outcome standard errors are proportional across SNPs. With
+exposure standard errors they also report the Sanderson-Windmeijer
+conditional F of each exposure (warning below 10) and Sanderson's `Q_A`.
+`fast_mvmr_compressed()` runs the whole exposure x outcome grid from
+CompreSSoR stores, conditioning on covariate traits given as stores or as
+external summary statistics, either by classical multivariable IVW
+(`method = "mvmr"`) or by a residualised adjustment (`method =
+"residualised"`: `b_y - b_x,trait * Gamma_trait->y` on the exposure's own
+instruments, with the uncertainty in `Gamma` propagated; an approximation
+that assumes a homogeneous trait -> outcome effect). In one-sample designs,
+check the conditional F before reading classical MVMR estimates: weak
+conditional instruments pull them toward the observational associations.
+
 High-use downstream diagnostics are available as tidy local functions:
 
 ```r

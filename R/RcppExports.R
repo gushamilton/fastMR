@@ -13,12 +13,20 @@ fastmr_set_work_scale_native <- function(scale) {
     .Call(`_fastMR_fastmr_set_work_scale_native`, scale)
 }
 
+fastmr_set_bootstrap_overlap_native <- function(overlap) {
+    .Call(`_fastMR_fastmr_set_bootstrap_overlap_native`, overlap)
+}
+
 fastmr_set_mode_direct_max_native <- function(ratios) {
     .Call(`_fastMR_fastmr_set_mode_direct_max_native`, ratios)
 }
 
 fastmr_mode_path_counts_native <- function(reset = FALSE) {
     .Call(`_fastMR_fastmr_mode_path_counts_native`, reset)
+}
+
+fastmr_set_mode_hull_native <- function(ratios, recurrence = TRUE) {
+    .Call(`_fastMR_fastmr_set_mode_hull_native`, ratios, recurrence)
 }
 
 fastmr_run_native <- function(exposure_beta, outcome_beta, exposure_se, outcome_se, methods, nboot = 1000L, seed = NULL, threads = 1L, phi = 1.0, penk = 20.0) {
@@ -55,5 +63,13 @@ fastmr_group_mean_native <- function(offsets, x) {
 
 fastmr_run_groups_boot_native <- function(offsets, exposure_beta, outcome_beta, exposure_se, outcome_se, methods, nboot = 1000L, threads = 1L, phi = 1.0, penk = 20.0, reseed = NULL, batch_draws = 8388608.0) {
     .Call(`_fastMR_fastmr_run_groups_boot_native`, offsets, exposure_beta, outcome_beta, exposure_se, outcome_se, methods, nboot, threads, phi, penk, reseed, batch_draws)
+}
+
+fastmr_mvmr_batch_native <- function(row_ptr, rows, design, outcome_beta, outcome_se, se_model, threads, design_se = NULL, design_cor = NULL, shared_row_se = NULL, shared_outcome_scale = NULL, shared_outcome = NULL, return_vcov = FALSE) {
+    .Call(`_fastMR_fastmr_mvmr_batch_native`, row_ptr, rows, design, outcome_beta, outcome_se, se_model, threads, design_se, design_cor, shared_row_se, shared_outcome_scale, shared_outcome, return_vcov)
+}
+
+fastmr_mvmr_se_factors_native <- function(outcome_beta, outcome_se, threads) {
+    .Call(`_fastMR_fastmr_mvmr_se_factors_native`, outcome_beta, outcome_se, threads)
 }
 

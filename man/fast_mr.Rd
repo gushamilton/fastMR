@@ -45,3 +45,15 @@ A tidy data frame using TwoSampleMR-compatible result columns.
 \description{
 Run exact summary-statistics Mendelian randomization
 }
+\details{
+With a single instrument (\code{nsnp = 1}) the IVW estimators (\code{"ivw"},
+\code{"ivw_fe"}, \code{"ivw_mre"}) return the Wald ratio, as TwoSampleMR's \code{mr()}
+reports it through \code{mr_wald_ratio()}: \code{b = beta.outcome / beta.exposure}
+and \verb{se = se.outcome / |beta.exposure|} (first order); \code{Q} and \code{sigma} are
+\code{NA}. Every other method needs at least two (\code{"uwr"}), three or six
+(\code{"sign"}) instruments and returns \code{NA}, as TwoSampleMR does. The same
+holds for \code{\link[=fast_mr_grid]{fast_mr_grid()}}, \code{\link[=fast_mr_sparse_ivw]{fast_mr_sparse_ivw()}},
+\code{\link[=fast_mr_masked_ivw]{fast_mr_masked_ivw()}} and \code{\link[=fast_mr_compressed]{fast_mr_compressed()}}. An exact fit with two
+or more instruments (residual standard error 0) is a different case and
+keeps the fixed-effect standard error. Missing results are \code{NA}.
+}
