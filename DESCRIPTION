@@ -1,7 +1,7 @@
 Package: fastMR
 Title: Exact and Fast Summary-Statistics Mendelian Randomization
-Version: 0.2.0
-Date: 2026-08-11
+Version: 0.3.0
+Date: 2026-10-06
 Authors@R: person("Fergus", "Hamilton", email = "fergushamilton@users.noreply.github.com", role = c("aut", "cre"))
 Author: Fergus Hamilton [aut, cre]
 Maintainer: Fergus Hamilton <fergushamilton@users.noreply.github.com>
@@ -27,6 +27,7 @@ LinkingTo:
     Rcpp
 Suggests:
     arrow,
+    MendelianRandomization,
     CompreSSoR (>= 0.6.0),
     testthat (>= 3.0.0),
     withr
