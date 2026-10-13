@@ -14,6 +14,14 @@
 - `MendelianRandomization` added to Suggests (used by the validation tests).
 # fastMR (development)
 
+- `fast_clump_data()` now reads PLINK 2 `--clump` output (`.clumps`, `ID`
+  column) as well as PLINK 1.9 `.clumped`. Previously a successful PLINK 2 run
+  was reported as "PLINK clumping failed ... (exit status 0)".
+- `fast_clump_data()` passes `--allow-extra-chr`, so references that contain
+  alt/unplaced contigs no longer abort PLINK 1.9, and gains `plink_memory` and
+  `plink_threads` (`--memory`, `--threads`) so PLINK does not reserve half of
+  the node's RAM inside a scheduler allocation.
+
 - Compressed extraction groups the requested key sets in linear time.
   `fastmr_request_index_usable()` (every block, request-index path) and the
   identity-code cache of the manifest-decoding path compared each request

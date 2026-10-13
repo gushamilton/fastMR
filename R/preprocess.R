@@ -347,12 +347,18 @@ fast_harmonise_data <- function(exposure_dat, outcome_dat, action = 2,
 #' @param ld_matrix Optional dense local correlation matrix.
 #' @param ld_snps Optional SNP names for `ld_matrix`.
 #' @param bfile Optional PLINK binary-prefix for local clumping.
-#' @param plink_bin Optional PLINK 1.9 executable path.
+#' @param plink_bin Optional PLINK executable path. PLINK 1.9 (`.clumped`
+#'   output) and PLINK 2 (`.clumps` output) are both supported.
+#' @param plink_memory Optional PLINK workspace limit in MB (`--memory`).
+#'   PLINK otherwise reserves about half of the machine's RAM, which can exceed
+#'   a scheduler allocation.
+#' @param plink_threads Optional PLINK thread count (`--threads`).
 #' @return `dat` filtered to retained index SNPs.
 #' @export
 fast_clump_data <- function(dat, clump_kb = 10000, clump_r2 = 0.001,
                             clump_p1 = 1, ld_matrix = NULL, ld_snps = NULL,
-                            bfile = NULL, plink_bin = NULL) {
+                            bfile = NULL, plink_bin = NULL,
+                            plink_memory = NULL, plink_threads = NULL) {
   if (!is.data.frame(dat) || !"SNP" %in% names(dat)) stop("dat must contain SNP", call. = FALSE)
   if (length(clump_kb) != 1L || !is.finite(clump_kb) || clump_kb < 0 ||
       length(clump_r2) != 1L || !is.finite(clump_r2) || clump_r2 < 0 || clump_r2 > 1 ||
@@ -395,6 +401,14 @@ fast_clump_data <- function(dat, clump_kb = 10000, clump_r2 = 0.001,
            "use ld_matrix or the PLINK2 clumping functions for boundary thresholds",
            call. = FALSE)
     }
+    positive_whole <- function(x) {
+      is.null(x) || (length(x) == 1L && is.numeric(x) && is.finite(x) && x >= 1 && x == round(x))
+    }
+    if (!positive_whole(plink_memory) || !positive_whole(plink_threads)) {
+      stop("plink_memory and plink_threads must be NULL or single positive whole numbers", call. = FALSE)
+    }
+    resource_args <- c(if (!is.null(plink_memory)) c("--memory", format(plink_memory, scientific = FALSE)),
+                       if (!is.null(plink_threads)) c("--threads", format(plink_threads, scientific = FALSE)))
     pval_numeric <- suppressWarnings(as.numeric(as.character(dat[[pval_column]])))
     pieces <- lapply(split(seq_len(nrow(dat)), dat$id.exposure, drop = TRUE), function(index) {
       # No index SNP can pass: PLINK writes no .clumped file, so skip it.
@@ -403,22 +417,25 @@ fast_clump_data <- function(dat, clump_kb = 10000, clump_r2 = 0.001,
       input <- paste0(stem, ".txt")
       write.table(data.frame(SNP = dat$SNP[index], P = dat[[pval_column]][index]), input,
                   row.names = FALSE, col.names = TRUE, quote = FALSE, sep = "\t")
-      on.exit(unlink(c(input, paste0(stem, ".clumped"), paste0(stem, ".log"), paste0(stem, ".nosex"))), add = TRUE)
+      on.exit(unlink(c(input, paste0(stem, c(".clumped", ".clumps", ".log", ".nosex")))), add = TRUE)
       quote_arg <- function(x) shQuote(as.character(x),
                                        type = if (.Platform$OS.type == "windows") "cmd" else "sh")
       run_error <- NULL
       run_output <- tryCatch(suppressWarnings(system2(plink_bin, c(
         "--bfile", quote_arg(bfile), "--clump", quote_arg(input), "--clump-field", "P",
         "--clump-p1", as.character(clump_p1), "--clump-r2", as.character(clump_r2),
-        "--clump-kb", as.character(clump_kb), "--out", quote_arg(stem)),
+        "--clump-kb", as.character(clump_kb), "--allow-extra-chr", resource_args,
+        "--out", quote_arg(stem)),
         stdout = TRUE, stderr = TRUE)), error = function(e) {
           run_error <<- conditionMessage(e)
           character()
         })
       status <- attr(run_output, "status")
       if (is.null(status)) status <- 0L
-      clumped_file <- paste0(stem, ".clumped")
-      if (!is.null(run_error) || !isTRUE(status == 0L) || !file.exists(clumped_file)) {
+      # PLINK 1.9 writes .clumped (SNP column); PLINK 2 writes .clumps (#CHROM header, ID column).
+      clumped_file <- paste0(stem, c(".clumped", ".clumps"))
+      clumped_file <- clumped_file[file.exists(clumped_file)][1]
+      if (!is.null(run_error) || !isTRUE(status == 0L) || is.na(clumped_file)) {
         detail <- c(run_error, if (length(run_output)) utils::tail(run_output, 8L))
         log_file <- paste0(stem, ".log")
         if (file.exists(log_file)) {
@@ -430,14 +447,15 @@ fast_clump_data <- function(dat, clump_kb = 10000, clump_r2 = 0.001,
              unique(dat$id.exposure[index]), " (exit status ", status, ")", suffix,
              call. = FALSE)
       }
-      clumped <- tryCatch(read.table(clumped_file, header = TRUE,
+      clumped <- tryCatch(read.table(clumped_file, header = TRUE, comment.char = "",
                                      stringsAsFactors = FALSE, check.names = FALSE),
-                          error = function(e) stop("could not read PLINK .clumped output: ",
+                          error = function(e) stop("could not read PLINK clump output: ",
                                                     conditionMessage(e), call. = FALSE))
-      if (!"SNP" %in% names(clumped)) {
-        stop("PLINK .clumped output is missing its SNP column", call. = FALSE)
+      snp_column <- intersect(c("SNP", "ID"), names(clumped))[1]
+      if (is.na(snp_column)) {
+        stop("PLINK clump output is missing its SNP/ID column", call. = FALSE)
       }
-      index[dat$SNP[index] %in% clumped$SNP]
+      index[dat$SNP[index] %in% clumped[[snp_column]]]
     })
     return(restore_rows(dat[sort(unlist(pieces, use.names = FALSE)), , drop = FALSE]))
   }
