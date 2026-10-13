@@ -12,7 +12,9 @@ fast_clump_data(
   ld_matrix = NULL,
   ld_snps = NULL,
   bfile = NULL,
-  plink_bin = NULL
+  plink_bin = NULL,
+  plink_memory = NULL,
+  plink_threads = NULL
 )
 }
 \arguments{
@@ -31,7 +33,14 @@ optionally \code{id.exposure}, \code{chr_name}, and \code{chrom_start}.}
 
 \item{bfile}{Optional PLINK binary-prefix for local clumping.}
 
-\item{plink_bin}{Optional PLINK 1.9 executable path.}
+\item{plink_bin}{Optional PLINK executable path. PLINK 1.9 (\code{.clumped}
+output) and PLINK 2 (\code{.clumps} output) are both supported.}
+
+\item{plink_memory}{Optional PLINK workspace limit in MB (\code{--memory}).
+PLINK otherwise reserves about half of the machine's RAM, which can exceed
+a scheduler allocation.}
+
+\item{plink_threads}{Optional PLINK thread count (\code{--threads}).}
 }
 \value{
 \code{dat} filtered to retained index SNPs.

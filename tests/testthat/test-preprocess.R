@@ -187,6 +187,40 @@ test_that("PLINK clumping passes an explicit clump field and preserves groups", 
   expect_equal(result$SNP, c("rs1", "rs3"))
 })
 
+test_that("PLINK 2 .clumps output is read and resource limits are passed", {
+  skip_on_os("windows")
+  plink2 <- tempfile("fastMR_plink2_clumps_stub_")
+  writeLines(c(
+    "#!/bin/sh",
+    "input=''",
+    "out=''",
+    "extra=0",
+    "memory=''",
+    "threads=''",
+    "while [ \"$#\" -gt 0 ]; do",
+    "  case \"$1\" in",
+    "    --clump) input=\"$2\"; shift 2;;",
+    "    --out) out=\"$2\"; shift 2;;",
+    "    --allow-extra-chr) extra=1; shift;;",
+    "    --memory) memory=\"$2\"; shift 2;;",
+    "    --threads) threads=\"$2\"; shift 2;;",
+    "    *) shift;;",
+    "  esac",
+    "done",
+    "if [ \"$extra\" != 1 ] || [ \"$memory\" != 2000 ] || [ \"$threads\" != 2 ]; then exit 43; fi",
+    "printf '#CHROM\\tPOS\\tID\\tP\\tTOTAL\\n' > \"${out}.clumps\"",
+    "awk 'NR == 2 { print 1 \"\\t\" 100 \"\\t\" $1 \"\\t\" $2 \"\\t\" 0 }' \"$input\" >> \"${out}.clumps\""
+  ), plink2)
+  Sys.chmod(plink2, "0755")
+  dat <- data.frame(SNP = c("rs1", "rs2", "rs3"),
+    id.exposure = c("E1", "E1", "E2"), pval.exposure = c(1e-8, 1e-6, 1e-7))
+  result <- fast_clump_data(dat, bfile = "panel", plink_bin = plink2,
+                            plink_memory = 2000, plink_threads = 2)
+  expect_equal(result$SNP, c("rs1", "rs3"))
+  expect_error(fast_clump_data(dat, bfile = "panel", plink_bin = plink2, plink_memory = 0),
+               "positive whole")
+})
+
 test_that("PLINK failures include a useful status", {
   skip_on_os("windows")
   plink <- tempfile("fastMR_plink_failure_")
